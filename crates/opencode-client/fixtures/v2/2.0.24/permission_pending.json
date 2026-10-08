@@ -1,0 +1,20 @@
+{
+  "location": {
+    "directory": "/tmp/opencode/phase0/scratch"
+  },
+  "data": [
+    {
+      "id": "per_fixture00000000000001",
+      "sessionID": "ses_fixture0000000000000001",
+      "action": "bash",
+      "resources": [
+        "printf 'hello'"
+      ],
+      "save": [
+        "once"
+      ],
+      "message": "Allow bash: printf 'hello'?",
+      "metadata": {}
+    }
+  ]
+}

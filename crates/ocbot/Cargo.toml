@@ -1,0 +1,42 @@
+[package]
+name = "ocbot"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Deterministic Discord controller for a local opencode v2 server."
+publish = false
+
+[lib]
+name = "ocbot"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ocbot"
+path = "src/main.rs"
+
+[dependencies]
+ocbot-core = { path = "../ocbot-core", version = "0.1.0" }
+opencode-v2-client = { path = "../opencode-client", version = "0.1.0" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+rusqlite.workspace = true
+crossbeam-channel.workspace = true
+serenity.workspace = true
+toml.workspace = true
+url.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+wiremock.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

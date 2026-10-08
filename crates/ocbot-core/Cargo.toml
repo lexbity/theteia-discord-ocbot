@@ -1,0 +1,20 @@
+[package]
+name = "ocbot-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Pure policy core for ocbot (state machine, outcome classification, rendering, templates, port contracts). Zero I/O by design (spec NFR-11)."
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+
+[lints]
+workspace = true

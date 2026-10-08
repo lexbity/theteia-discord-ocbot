@@ -1,0 +1,52 @@
+# cargo-deny configuration (spec §C8, §D2).
+[advisories]
+version = 2
+yanked = "warn"
+# rustls-webpki 0.102.8 (the opencode of DMs: the serenity gateway TLS chain,
+# tokio-tungstenite 0.21 <-- rustls 0.22) carries four CRL/name-constraint
+# advisories with no 0.102-line fix. The pinned serenity 0.12.x (S-9) cannot
+# move its tungstenite line, and native-tls is banned (openssl). The bot runs
+# on loopback with the operator bot token; the extra affected surface is the
+# TLS handshake toward Discord itself. Tracked by re-running `cargo-deny`
+# after any serenity bump and re-reviewing the pin (COMPAT.md).
+ignore = [
+    { id = "RUSTSEC-2026-0049", reason = "webpki 0.102 line unfixable; forced by serenity 0.12 S-9 pin; loopback bot" },
+    { id = "RUSTSEC-2026-0098", reason = "webpki 0.102 line unfixable; forced by serenity 0.12 S-9 pin; loopback bot" },
+    { id = "RUSTSEC-2026-0099", reason = "webpki 0.102 line unfixable; forced by serenity 0.12 S-9 pin; loopback bot" },
+    { id = "RUSTSEC-2026-0104", reason = "webpki 0.102 line unfixable; forced by serenity 0.12 S-9 pin; loopback bot" },
+]
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "BSD-2-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    # Community Data License Agreement Permissive 2.0 — the license of
+    # `webpki-roots`, part of the rustls trust-anchor stack (reqwest).
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.93
+# Bootstrap rule: run `cargo deny check` once in Phase 0 against the real
+# dependency graph. Every additional transitive license observed is either
+# added here deliberately (recorded in the PR) or the dependency is replaced.
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# The rustls decision (no OpenSSL) is enforced here.
+deny = [
+    { name = "openssl" },
+    { name = "openssl-sys" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

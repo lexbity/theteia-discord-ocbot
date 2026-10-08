@@ -1,0 +1,37 @@
+{
+  "location": {
+    "directory": "/tmp/opencode/phase0/scratch"
+  },
+  "data": [
+    {
+      "id": "frm_fixture00000000000001",
+      "sessionID": "ses_fixture0000000000000001",
+      "title": "Which approach should the agent take?",
+      "metadata": {},
+      "fields": [
+        {
+          "key": "approach",
+          "type": "string",
+          "title": "Approach",
+          "required": true,
+          "options": [
+            {
+              "value": "a",
+              "label": "Option A"
+            },
+            {
+              "value": "b",
+              "label": "Option B"
+            }
+          ],
+          "custom": true
+        },
+        {
+          "key": "notify",
+          "type": "boolean",
+          "title": "Notify by email?"
+        }
+      ]
+    }
+  ]
+}

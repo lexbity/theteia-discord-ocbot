@@ -1,0 +1,118 @@
+# Workspace root — tooling bootstrap for SPEC-001 Rev B (Phase 0).
+#
+# The lint floor is specified in the spec's Part 2, §D1 and deliberately uses
+# `priority = -1` on groups so that individual members at the default priority 0
+# can override them (e.g. pedantic warns, but a named member is allowlisted).
+[workspace]
+resolver = "2"
+members = ["crates/opencode-client", "crates/ocbot-core", "crates/ocbot"]
+# `fuzz/` is a cargo-fuzz libFuzzer crate; it is a separate workspace and needs
+# the nightly toolchain, so it must not be pulled into `cargo test --workspace`.
+exclude = ["fuzz"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+authors = ["ocbot contributors"]
+
+[workspace.dependencies]
+# --- runtime (client crate) -------------------------------------------------
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+    "json",
+    "stream",
+] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+bytes = "1"
+
+# --- async runtime (examples/tests/bin only for now) ------------------------
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "time",
+    "sync",
+    "process",
+    "signal",
+    "net",
+] }
+
+# --- pure core crate ---------------------------------------------------------
+async-trait = "0.1"
+
+# --- shell crate (Phase 2+) --------------------------------------------------
+rusqlite = { version = "0.32", features = ["bundled"] }
+crossbeam-channel = "0.5"
+serenity = { version = "0.12", default-features = false, features = [
+    "client",
+    "gateway",
+    "builder",
+    "model",
+    "cache",
+    "utils",
+    "rustls_backend",
+] }
+toml = "0.8"
+url = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+anyhow = "1"
+
+# --- dev / test tooling -----------------------------------------------------
+proptest = "1"
+wiremock = "0.6"
+jsonschema = "0.26"
+tempfile = "3"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+rust_2018_idioms = { level = "warn", priority = -1 }
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+# Default groups -> hard errors. These are the "definitely wrong or useless" band.
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+style = { level = "deny", priority = -1 }
+complexity = { level = "deny", priority = -1 }
+perf = { level = "deny", priority = -1 }
+# Opt-in bands: warn (+ CI `-D warnings` makes them deliberate accept/fix).
+pedantic = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+# Restriction set — the teeth (spec §C4).
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+as_conversions = "deny"
+allow_attributes_without_reason = "deny"
+disallowed_methods = "deny"
+disallowed_types = "deny"
+await_holding_lock = "deny"
+future_not_send = "warn"
+# `cargo` group escalations.
+wildcard_dependencies = "deny"
+# Pedantic member downgrades (each accepts a deliberate cost; see §C3).
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+unnecessary_wraps = "allow"
+# `multiple_crate_versions` is warn-by-default in the `cargo` group, but the
+# global `-D warnings` would make a duplicate transitive crate fatal. The spec
+# (C5) explicitly calls this unrealistic to deny; feeding it to `deny.toml`
+# review is its purpose, so it is allowed at the lint layer.
+multiple_crate_versions = "allow"
+# The repository URL is not yet configured (the project has no remote).
+# `cargo_common_metadata` is set once `opencode-v2-client` is published in
+# Phase 8, where the URL becomes a real fact, not a placeholder.
+cargo_common_metadata = "allow"

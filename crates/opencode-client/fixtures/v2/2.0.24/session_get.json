@@ -1,0 +1,24 @@
+{
+  "data": {
+    "id": "ses_ee76d6ecfffezszO4raGr3bcG3",
+    "projectID": "fbee30b704bdd2dec6a3fd50b74ee30c80322163",
+    "cost": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "time": {
+      "created": 1791413621049,
+      "updated": 1791413621049
+    },
+    "title": "ocbot p0 spike",
+    "location": {
+      "directory": "/tmp/opencode/phase0/scratch"
+    }
+  }
+}

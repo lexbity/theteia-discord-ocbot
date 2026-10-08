@@ -1,0 +1,19 @@
+# Configured lints — the structural grep gates of spec §C6.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+
+[[disallowed-methods]]
+path = "std::process::Command::new"
+reason = "process spawning is confined to the git adapter (D-4, NFR-10)"
+
+[[disallowed-methods]]
+path = "tokio::process::Command::new"
+reason = "process spawning is confined to the git adapter (D-4, NFR-10)"
+# `allow-invalid` suppresses the clippy diagnostic that fires in crates where
+# tokio is not (yet) a dependency; the ban itself still applies wherever the
+# method is reachable.
+allow-invalid = true
+
+[[disallowed-methods]]
+path = "std::process::exit"
+reason = "exit codes only from main's doctor path (FR-40)"

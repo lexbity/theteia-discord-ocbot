@@ -1,0 +1,411 @@
+//! The serenity adapter (spec §6.6): the only code that builds Discord
+//! payloads, and therefore the single structural enforcement point for FR-3
+//! (`allowed_mentions { parse: [], users: [OPERATOR] }`). Every payload goes
+//! through [`message_builder`], which always sets it, and the shared `Http` is
+//! seeded with the same restriction as a defense-in-depth default.
+//!
+//! Interactions are normalized into [`InteractionSource`] and routed through
+//! the two-phase flow: the plan phase (`router::guarded_plan`) produces the
+//! immediate ack (modal or deferral) which is sent before any handler work;
+//! the execute pass then runs in a spawned task.
+
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use serenity::all::{
+    ActionRowComponent, ButtonStyle, ChannelId, Client, Context, EventHandler, GatewayIntents,
+    GuildId, Http, InputTextStyle, Interaction, Message, MessageId, ReactionType, Ready,
+    ShardManager, UserId,
+};
+use serenity::builder::{
+    CreateActionRow, CreateAllowedMentions, CreateAttachment, CreateButton, CreateCommand,
+    CreateInputText, CreateInteractionResponse, CreateInteractionResponseFollowup,
+    CreateInteractionResponseMessage, CreateMessage, CreateModal, EditMessage,
+};
+
+use ocbot_core::{ButtonKind, OutgoingMessage};
+
+use crate::app::context::{AppContext, DiscordPort, SendError};
+use crate::app::interaction::{
+    AckPlan, InputStyle, InteractionSource, ModalSpec, SourceKind, TextInput,
+};
+use crate::app::router::{self, PlanOutcome};
+
+/// A shared, structurally-locked `Http`: the default `allowed_mentions` is the
+/// operator-only restriction, so even a future code path that forgets to set
+/// it explicitly cannot mention `@everyone` (FR-3 belt).
+pub fn shared_http(token: &str, operator: u64) -> Arc<Http> {
+    let mut http = Http::new(token);
+    http.default_allowed_mentions = Some(operator_allowed_mentions(operator));
+    Arc::new(http)
+}
+
+/// The single allowed-mentions constructor (FR-3). Nothing else in the
+/// codebase builds one. `parse` defaults to the empty set (nothing pings);
+/// only the operator may be mentioned. Public so the structural guarantee is
+/// asserted by `discord_payload.rs`.
+pub fn operator_allowed_mentions(operator: u64) -> CreateAllowedMentions {
+    CreateAllowedMentions::new()
+        .all_users(false)
+        .all_roles(false)
+        .everyone(false)
+        .users([UserId::new(operator)])
+}
+
+/// The only production [`DiscordPort`]: posts through serenity `Http`.
+#[derive(Clone)]
+pub struct DiscordAdapter {
+    http: Arc<Http>,
+    operator: u64,
+}
+
+impl DiscordAdapter {
+    /// Wrap a shared, structurally-locked http handle.
+    pub fn new(http: Arc<Http>, operator: u64) -> Self {
+        Self { http, operator }
+    }
+}
+
+/// Core spec → `CreateMessage`. Always sets `allowed_mentions`. Public so the
+/// structural guarantee is unit-testable (`discord_payload.rs`); only the
+/// adapter calls it in production.
+pub fn message_builder(spec: &OutgoingMessage, operator: u64) -> CreateMessage {
+    let mut builder = CreateMessage::new()
+        .content(spec.content.clone())
+        .allowed_mentions(operator_allowed_mentions(operator));
+    if let Some(attachment) = &spec.attachment {
+        builder = builder.add_file(CreateAttachment::bytes(
+            attachment.bytes.clone(),
+            attachment.filename.clone(),
+        ));
+    }
+    if !spec.components.is_empty() {
+        let buttons = spec
+            .components
+            .iter()
+            .map(|component| {
+                let style = match component.kind {
+                    ButtonKind::Primary => ButtonStyle::Primary,
+                    ButtonKind::Secondary => ButtonStyle::Secondary,
+                    ButtonKind::Danger => ButtonStyle::Danger,
+                    ButtonKind::Success => ButtonStyle::Success,
+                };
+                CreateButton::new(component.custom_id.clone())
+                    .label(component.label.clone())
+                    .style(style)
+            })
+            .collect();
+        builder = builder.components(vec![CreateActionRow::Buttons(buttons)]);
+    }
+    builder
+}
+
+#[async_trait]
+impl DiscordPort for DiscordAdapter {
+    async fn post(&self, channel: u64, spec: &OutgoingMessage) -> Result<u64, SendError> {
+        let message = ChannelId::new(channel)
+            .send_message(&*self.http, message_builder(spec, self.operator))
+            .await
+            .map_err(|error| SendError(error.to_string()))?;
+        Ok(message.id.get())
+    }
+
+    async fn edit(
+        &self,
+        channel: u64,
+        message: u64,
+        replacement: &OutgoingMessage,
+    ) -> Result<(), SendError> {
+        let builder = EditMessage::new().content(replacement.content.clone());
+        self.http
+            .edit_message(
+                ChannelId::new(channel),
+                MessageId::new(message),
+                &builder,
+                Vec::new(),
+            )
+            .await
+            .map(|_| ())
+            .map_err(|error| SendError(error.to_string()))
+    }
+
+    async fn react(&self, channel: u64, message: u64, emoji: char) -> Result<(), SendError> {
+        let reaction: ReactionType = emoji.into();
+        self.http
+            .create_reaction(ChannelId::new(channel), MessageId::new(message), &reaction)
+            .await
+            .map_err(|error| SendError(error.to_string()))
+    }
+}
+
+/// The gateway event handler.
+pub struct BotEvents {
+    ctx: Arc<AppContext>,
+    http: Arc<Http>,
+}
+
+impl BotEvents {
+    /// Wrap the app context and the shared http.
+    pub fn new(ctx: Arc<AppContext>, http: Arc<Http>) -> Self {
+        Self { ctx, http }
+    }
+
+    /// Send the immediate ack called for by the plan.
+    async fn ack(&self, ctx: &Context, interaction: &Interaction, plan: &AckPlan) {
+        let result: Result<(), serenity::Error> = match (interaction, plan) {
+            (Interaction::Command(command), AckPlan::Modal(spec)) => {
+                command
+                    .create_response(
+                        &ctx.http,
+                        CreateInteractionResponse::Modal(build_modal(spec)),
+                    )
+                    .await
+            }
+            (Interaction::Command(command), AckPlan::DeferPublic) => command.defer(&ctx.http).await,
+            (Interaction::Command(command), AckPlan::DeferEphemeral) => {
+                command.defer_ephemeral(&ctx.http).await
+            }
+            (Interaction::Component(component), AckPlan::Modal(spec)) => {
+                component
+                    .create_response(
+                        &ctx.http,
+                        CreateInteractionResponse::Modal(build_modal(spec)),
+                    )
+                    .await
+            }
+            (Interaction::Component(component), AckPlan::DeferUpdate) => {
+                component.defer(&ctx.http).await
+            }
+            (Interaction::Modal(modal), AckPlan::DeferPublic) => modal.defer(&ctx.http).await,
+            (Interaction::Modal(modal), AckPlan::DeferEphemeral) => {
+                modal.defer_ephemeral(&ctx.http).await
+            }
+            _ => Ok(()),
+        };
+        if let Err(error) = result {
+            tracing::warn!(error = %error, "interaction ack failed");
+        }
+    }
+
+    /// Ack first, then run the execute pass in a spawned task (never blocking
+    /// the gateway on slow work).
+    async fn act(
+        &self,
+        ctx: &Context,
+        interaction: Interaction,
+        source: InteractionSource,
+        plan: AckPlan,
+    ) {
+        self.ack(ctx, &interaction, &plan).await;
+        if matches!(
+            plan,
+            AckPlan::DeferPublic | AckPlan::DeferEphemeral | AckPlan::DeferUpdate
+        ) {
+            let app_ctx = self.ctx.clone();
+            let http = self.http.clone();
+            tokio::spawn(run_execute(app_ctx, http, interaction, source));
+        }
+    }
+}
+
+async fn run_execute(
+    ctx: Arc<AppContext>,
+    http: Arc<Http>,
+    interaction: Interaction,
+    source: InteractionSource,
+) {
+    let outcome = router::execute(&ctx, &source).await;
+    match outcome {
+        Ok(Some(text)) => followup_ephemeral(&http, &interaction, &text).await,
+        Ok(None) => {}
+        Err(error) => {
+            tracing::warn!(error = %error, "interaction execute failed");
+            followup_ephemeral(&http, &interaction, &format!("error: {error}")).await;
+        }
+    }
+}
+
+/// Ephemeral followup on the originating interaction (only valid after the
+/// deferred ack, within 15 minutes).
+async fn followup_ephemeral(http: &Http, interaction: &Interaction, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    let builder = CreateInteractionResponseFollowup::new()
+        .content(text)
+        .ephemeral(true);
+    let result: Result<Message, serenity::Error> = match interaction {
+        Interaction::Command(command) => command.create_followup(http, builder).await,
+        Interaction::Component(component) => component.create_followup(http, builder).await,
+        Interaction::Modal(modal) => modal.create_followup(http, builder).await,
+        _ => return,
+    };
+    if let Err(error) = result {
+        tracing::warn!(error = %error, "followup failed");
+    }
+}
+
+/// Immediate (non-deferred) response with optional ephemeral content — used
+/// for the deny and failed-plan paths.
+async fn respond_now(http: &Http, interaction: &Interaction, text: Option<&str>) {
+    let mut data = CreateInteractionResponseMessage::new();
+    if let Some(text) = text {
+        data = data.content(text).ephemeral(true);
+    }
+    let response = CreateInteractionResponse::Message(data);
+    let result: Result<(), serenity::Error> = match interaction {
+        Interaction::Command(command) => command.create_response(http, response).await,
+        Interaction::Component(component) => component.create_response(http, response).await,
+        Interaction::Modal(modal) => modal.create_response(http, response).await,
+        _ => return,
+    };
+    if let Err(error) = result {
+        tracing::warn!(error = %error, "response ack failed");
+    }
+}
+
+/// Build a `CreateModal` from our spec (≤5 inputs).
+fn build_modal(spec: &ModalSpec) -> CreateModal {
+    let rows = spec
+        .inputs
+        .iter()
+        .map(|input| {
+            let style = match input.style {
+                InputStyle::Short => InputTextStyle::Short,
+                InputStyle::Paragraph => InputTextStyle::Paragraph,
+            };
+            let mut builder = CreateInputText::new(style, input.label.clone(), input.id.clone());
+            if let Some(value) = &input.value {
+                builder = builder.value(value.clone());
+            }
+            builder = builder.required(input.required);
+            CreateActionRow::InputText(builder)
+        })
+        .collect();
+    CreateModal::new(spec.custom_id.clone(), spec.title.clone()).components(rows)
+}
+
+/// Normalize a Discord interaction into our vocabulary; `None` for kinds the
+/// bot never routes (ping, autocomplete).
+fn build_source(interaction: &Interaction) -> Option<InteractionSource> {
+    match interaction {
+        Interaction::Command(command) => Some(located_source(
+            SourceKind::SlashCommand {
+                name: command.data.name.clone(),
+            },
+            command.user.id.get(),
+            command.channel_id.get(),
+            command.guild_id.map(GuildId::get),
+            None,
+            command.guild_id.is_none(),
+        )),
+        Interaction::Modal(modal) => {
+            let values = modal
+                .data
+                .components
+                .iter()
+                .filter_map(|row| {
+                    row.components.iter().find_map(|component| match component {
+                        ActionRowComponent::InputText(input) => Some(TextInput {
+                            id: input.custom_id.clone(),
+                            value: input.value.clone().unwrap_or_default(),
+                        }),
+                        _ => None,
+                    })
+                })
+                .collect();
+            Some(located_source(
+                SourceKind::ModalSubmit {
+                    custom_id: modal.data.custom_id.clone(),
+                    values,
+                },
+                modal.user.id.get(),
+                modal.channel_id.get(),
+                modal.guild_id.map(GuildId::get),
+                None,
+                modal.guild_id.is_none(),
+            ))
+        }
+        Interaction::Component(component) => Some(located_source(
+            SourceKind::Component {
+                custom_id: component.data.custom_id.clone(),
+            },
+            component.user.id.get(),
+            component.channel_id.get(),
+            component.guild_id.map(GuildId::get),
+            Some(component.message.id.get()),
+            component.guild_id.is_none(),
+        )),
+        _ => None,
+    }
+}
+
+fn located_source(
+    kind: SourceKind,
+    user_id: u64,
+    channel_id: u64,
+    guild_id: Option<u64>,
+    message_id: Option<u64>,
+    is_dm: bool,
+) -> InteractionSource {
+    InteractionSource {
+        kind,
+        user_id,
+        channel_id,
+        guild_id,
+        message_id,
+        is_dm,
+    }
+}
+
+#[serenity::async_trait]
+impl EventHandler for BotEvents {
+    async fn ready(&self, ctx: Context, ready: Ready) {
+        tracing::info!(user = %ready.user.name, "connected to discord");
+        for (name, description) in [
+            ("run", "Start a prompt run in a directory"),
+            ("status", "Bot and server status"),
+        ] {
+            let command = CreateCommand::new(name).description(description);
+            if let Err(error) = ctx.http.create_global_command(&command).await {
+                tracing::warn!(command = name, error = %error, "command registration failed");
+            }
+        }
+    }
+
+    async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
+        let Some(source) = build_source(&interaction) else {
+            return;
+        };
+        match router::guarded_plan(&self.ctx, &source).await {
+            PlanOutcome::Deny => {
+                respond_now(&self.http, &interaction, Some("not authorized")).await;
+            }
+            PlanOutcome::Ignore => respond_now(&self.http, &interaction, None).await,
+            PlanOutcome::Failed(error) => {
+                respond_now(&self.http, &interaction, Some(&format!("error: {error}"))).await;
+            }
+            PlanOutcome::Plan(plan) => self.act(&ctx, interaction, source, plan).await,
+        }
+    }
+}
+
+/// Start the gateway with the given token/intents; returns the shard manager
+/// so the drain path can shut it down cleanly.
+pub async fn start_gateway(
+    token: &str,
+    intents: GatewayIntents,
+    ctx: Arc<AppContext>,
+) -> Result<Arc<ShardManager>, Box<serenity::Error>> {
+    let http = shared_http(token, ctx.guard.allowed_user_id);
+    let mut client = Client::builder(token, intents)
+        .event_handler(BotEvents::new(ctx, http))
+        .await?;
+    let shard_manager = client.shard_manager.clone();
+    tokio::spawn(async move {
+        if let Err(error) = client.start().await {
+            tracing::error!(error = %error, "gateway exited with error");
+        }
+    });
+    Ok(shard_manager)
+}

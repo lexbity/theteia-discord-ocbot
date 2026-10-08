@@ -1,0 +1,6 @@
+[toolchain]
+# Pinned at a phase boundary (spec D-R1). Bumps are a deliberate act and are
+# recorded in COMPAT.md; the client crate is born under this exact toolchain.
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

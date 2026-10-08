@@ -1,0 +1,3 @@
+# Stable-rustfmt-only options (no nightly-only keys such as imports_granularity).
+edition = "2024"
+max_width = 100

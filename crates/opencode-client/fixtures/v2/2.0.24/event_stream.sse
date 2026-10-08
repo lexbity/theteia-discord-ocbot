@@ -1,0 +1,26 @@
+data: {"id":"evt_118945cb9001r0TvKtUpy40ri5","type":"server.connected","data":{}}
+
+: heartbeat
+
+data: {"id":"evt_11894648b001w5nPV9EIl2rzD5","created":1791413740683,"type":"session.inbox.enqueued","location":{"directory":"/tmp/opencode/phase0/scratch"},"data":{"inboxID":"msg_11894648a001PrHVaZDBrLEahc","sessionID":"ses_ee76bda2dffexMwBaYTKuT51Me","item":{"type":"user","payload":{"text":"Reply with exactly the word PONG and nothing else. Do not use any tools."},"delivery":"steer"}},"durable":{"aggregateID":"ses_ee76bda2dffexMwBaYTKuT51Me","seq":11,"version":1}}
+
+data: {"id":"evt_11894648c001XsaiXp0XFSfyYO","created":1791413740685,"type":"session.execution.started","data":{"sessionID":"ses_ee76bda2dffexMwBaYTKuT51Me"},"durable":{"aggregateID":"ses_ee76bda2dffexMwBaYTKuT51Me","seq":12,"version":1}}
+
+data: {"id":"evt_118946491001Cj42m5iBCs7TsT","created":1791413740689,"type":"session.inbox.delivered","location":{"directory":"/tmp/opencode/phase0/scratch"},"data":{"sessionID":"ses_ee76bda2dffexMwBaYTKuT51Me","inboxID":"msg_11894648a001PrHVaZDBrLEahc"},"durable":{"aggregateID":"ses_ee76bda2dffexMwBaYTKuT51Me","seq":13,"version":1}}
+
+data: {"id":"evt_1189468e0001llXPiW0viZwkFM","created":1791413741792,"type":"session.step.started","location":{"directory":"/tmp/opencode/phase0/scratch"},"data":{"sessionID":"ses_ee76bda2dffexMwBaYTKuT51Me","agent":"build","model":{"id":"claude-haiku-5-5","providerID":"opencode-go"},"assistantMessageID":"msg_118946494001EZPbCBCFU0c3Ki","snapshot":"853694aae8816094a0d875fee7ea26278dbf5d0f","started":1791413740704},"durable":{"aggregateID":"ses_ee76bda2dffexMwBaYTKuT51Me","seq":14,"version":1}}
+
+data: {"id":"evt_1189468e2001mFD3HpbItBa8eC","created":1791413741794,"type":"session.text.started","location":{"directory":"/tmp/opencode/phase0/scratch"},"data":{"sessionID":"ses_ee76bda2dffexMwBaYTKuT51Me","assistantMessageID":"msg_118946494001EZPbCBCFU0c3Ki","ordinal":0},"durable":{"aggregateID":"ses_ee76bda2dffexMwBaYTKuT51Me","seq":15,"version":1}}
+
+data: {"id":"evt_1189468e3001bszBJNv5vOlQy7","created":1791413741795,"type":"session.text.delta","location":{"directory":"/tmp/opencode/phase0/scratch"},"data":{"sessionID":"ses_ee76bda2dffexMwBaYTKuT51Me","assistantMessageID":"msg_118946494001EZPbCBCFU0c3Ki","ordinal":0,"delta":"PONG"}}
+
+data: {"id":"evt_1189468e3002I1FrjnRdP7uTPj","created":1791413741795,"type":"session.text.ended","location":{"directory":"/tmp/opencode/phase0/scratch"},"data":{"sessionID":"ses_ee76bda2dffexMwBaYTKuT51Me","assistantMessageID":"msg_118946494001EZPbCBCFU0c3Ki","ordinal":0,"text":"PONG"},"durable":{"aggregateID":"ses_ee76bda2dffexMwBaYTKuT51Me","seq":16,"version":1}}
+
+data: {"id":"evt_1189468e5001RbjQHjHMcK06mI","created":1791413741797,"type":"session.step.streamed","location":{"directory":"/tmp/opencode/phase0/scratch"},"data":{"sessionID":"ses_ee76bda2dffexMwBaYTKuT51Me","assistantMessageID":"msg_118946494001EZPbCBCFU0c3Ki"},"durable":{"aggregateID":"ses_ee76bda2dffexMwBaYTKuT51Me","seq":17,"version":1}}
+
+data: {"id":"evt_1189468ea0018HuAUUC6pltctz","created":1791413741802,"type":"session.step.ended","location":{"directory":"/tmp/opencode/phase0/scratch"},"data":{"sessionID":"ses_ee76bda2dffexMwBaYTKuT51Me","assistantMessageID":"msg_118946494001EZPbCBCFU0c3Ki","finish":"stop","rawFinish":"end_turn","cost":0.000081215,"tokens":{"input":4,"output":5,"reasoning":0,"cache":{"read":7419,"write":33}},"snapshot":"853694aae8816094a0d875fee7ea26278dbf5d0f","files":[]},"durable":{"aggregateID":"ses_ee76bda2dffexMwBaYTKuT51Me","seq":18,"version":1}}
+
+data: {"id":"evt_1189468eb001q7kJSNtvr43pBM","created":1791413741803,"type":"session.usage.updated","data":{"sessionID":"ses_ee76bda2dffexMwBaYTKuT51Me","cost":0.00015830500000000002,"tokens":{"input":8,"output":10,"reasoning":0,"cache":{"read":14838,"write":33}}}}
+
+data: {"id":"evt_1189468eb002Fazmuf4kMqOgW2","created":1791413741803,"type":"session.execution.succeeded","data":{"sessionID":"ses_ee76bda2dffexMwBaYTKuT51Me"},"durable":{"aggregateID":"ses_ee76bda2dffexMwBaYTKuT51Me","seq":19,"version":1}}
+

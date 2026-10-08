@@ -1,0 +1,36 @@
+[package]
+# Published crate name is `opencode-v2-client` (spec D-R4). Cargo requires the
+# package name and the crates.io name to match; the workspace *directory* is
+# `crates/opencode-client/` as specified. See docs/compat/SPIKE-0.md §Review.
+name = "opencode-v2-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Thin, tolerant client for the opencode v2 HTTP API (experimental surface)."
+readme = "README.md"
+keywords = ["opencode", "client", "http", "api"]
+categories = ["api-bindings"]
+publish = true
+
+[lib]
+name = "opencode_v2_client"
+path = "src/lib.rs"
+
+[dependencies]
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+futures-util.workspace = true
+bytes.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+proptest.workspace = true
+wiremock.workspace = true
+jsonschema.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,27 @@
+# ocbot configuration (spec §6.8). Unknown keys are a load error.
+# Secrets come from the environment: DISCORD_TOKEN, OPENCODE_PASSWORD,
+# ALLOWED_USER_ID (optional override of allowed_user_id below).
+
+# The opencode v2 server. Loopback only unless ALLOW_NON_LOOPBACK=true (FR-4).
+opencode_url = "http://127.0.0.1:8080"
+
+# Where the SQLite diary lives (P15).
+db_path = "ocbot.db"
+
+# Directory containing fresh.md / resume.md (P13, load-time validated).
+templates_dir = "templates"
+
+# The ops channel. DMs with the operator are always allowed (FR-2).
+ops_channel = 123456789012345678
+
+# The operator Discord user id. Env ALLOWED_USER_ID overrides it.
+allowed_user_id = 123456789012345678
+
+# Watcher poll interval (S-2 locked default).
+poll_interval_ms = 2000
+
+# Loopback metrics endpoint (NFR-9).
+metrics_bind = "127.0.0.1:9464"
+
+# Per-command git timeout (R-9).
+git_timeout_secs = 10

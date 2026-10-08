@@ -1,0 +1,147 @@
+# CI for ocbot — Phase 0 job matrix (spec Part 2 §D4).
+#
+# Coverage and mutant jobs are intentionally absent until Phase 1 (they gate
+# `ocbot-core`), per the spec's "from P1" carve-outs. The nightly job authoring
+# cargo-fuzz serde targets and the live contract suite is configured now so the
+# capability exists from commit one.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Nightly: fuzz + live contract against the pinned opencode version.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo fmt --all -- --check
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - run: cargo nextest run --workspace
+      - run: cargo test --doc --workspace
+
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - run: cargo deny check
+
+  machete:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete
+      - run: cargo machete
+
+  doc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --no-deps
+
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: ./scripts/gates.sh
+
+  coverage-core:
+    # ocbot-core ≥ 90% lines (NFR-8), active from Phase 1.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - run: cargo llvm-cov -p ocbot-core --fail-under-lines 90 --summary-only
+
+  mutants:
+    # Scoped mutation check for the diff (NFR-8); nightly runs the full core.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      - run: cargo mutants --file crates/ocbot-core/src/state.rs --file crates/ocbot-core/src/render.rs
+        continue-on-error: false
+
+  client-publish-dry-run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo publish --dry-run -p opencode-v2-client
+
+  nightly:
+    # Fuzz serde targets + live contract suite against the pinned opencode
+    # version (R-1 detection). Only runs on schedule / manual dispatch.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - job: fuzz
+          - job: contract
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: nightly
+      - if: matrix.job == 'fuzz'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - if: matrix.job == 'fuzz'
+        run: cargo fuzz run serde_fuzz --sanitizer address -- -max_total_time=120
+        working-directory: fuzz
+      - if: matrix.job == 'contract'
+        env:
+          OPENCODE_URL: ${{ vars.OPENCODE_URL }}
+          OPENCODE_PASSWORD: ${{ secrets.OPENCODE_PASSWORD }}
+          SPIKE_DIR: /tmp/opencode/ci-contract
+        run: |
+          if [ -z "$OPENCODE_URL" ] || [ -z "$OPENCODE_PASSWORD" ]; then
+            echo "nightly contract: OPENCODE_URL/OPENCODE_PASSWORD not configured; skipping"
+            exit 0
+          fi
+          cargo run -q -p opencode-v2-client --example spike

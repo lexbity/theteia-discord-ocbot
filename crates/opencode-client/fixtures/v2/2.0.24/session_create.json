@@ -1,0 +1,24 @@
+{
+  "data": {
+    "id": "ses_ee76bda2dffexMwBaYTKuT51Me",
+    "projectID": "fbee30b704bdd2dec6a3fd50b74ee30c80322163",
+    "cost": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "time": {
+      "created": 1791413724633,
+      "updated": 1791413724633
+    },
+    "title": "ocbot p0 spike logcap",
+    "location": {
+      "directory": "/tmp/opencode/phase0/scratch"
+    }
+  }
+}

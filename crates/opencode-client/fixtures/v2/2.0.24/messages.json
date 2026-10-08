@@ -1,0 +1,167 @@
+{
+  "data": [
+    {
+      "id": "msg_aaaaaaaaaaaaaaaaaaaa",
+      "time": {
+        "created": 1791413759690
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "msg_aaaaaaaaaaaaaaaaaaaa",
+      "time": {
+        "created": 1791413758546,
+        "streamed": 1791413759683,
+        "completed": 1791413759688
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "claude-haiku-5-5",
+        "providerID": "opencode-go"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "PONG"
+        }
+      ],
+      "snapshot": {
+        "start": "853694aae8816094a0d875fee7ea26278dbf5d0f",
+        "end": "853694aae8816094a0d875fee7ea26278dbf5d0f",
+        "files": []
+      },
+      "finish": "stop",
+      "rawFinish": "end_turn",
+      "cost": 7.9045e-05,
+      "tokens": {
+        "input": 4,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 7452,
+          "write": 13
+        }
+      }
+    },
+    {
+      "id": "msg_aaaaaaaaaaaaaaaaaaaa",
+      "time": {
+        "created": 1791413758530
+      },
+      "text": "Say PONG.",
+      "type": "user"
+    },
+    {
+      "id": "msg_aaaaaaaaaaaaaaaaaaaa",
+      "time": {
+        "created": 1791413741803
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "msg_aaaaaaaaaaaaaaaaaaaa",
+      "time": {
+        "created": 1791413740704,
+        "streamed": 1791413741797,
+        "completed": 1791413741802
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "claude-haiku-5-5",
+        "providerID": "opencode-go"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "PONG"
+        }
+      ],
+      "snapshot": {
+        "start": "853694aae8816094a0d875fee7ea26278dbf5d0f",
+        "end": "853694aae8816094a0d875fee7ea26278dbf5d0f",
+        "files": []
+      },
+      "finish": "stop",
+      "rawFinish": "end_turn",
+      "cost": 8.1215e-05,
+      "tokens": {
+        "input": 4,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 7419,
+          "write": 33
+        }
+      }
+    },
+    {
+      "id": "msg_aaaaaaaaaaaaaaaaaaaa",
+      "time": {
+        "created": 1791413740689
+      },
+      "text": "Reply with exactly the word PONG and nothing else. Do not use any tools.",
+      "type": "user"
+    },
+    {
+      "id": "msg_aaaaaaaaaaaaaaaaaaaa",
+      "time": {
+        "created": 1791413727824
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "msg_aaaaaaaaaaaaaaaaaaaa",
+      "time": {
+        "created": 1791413726721,
+        "streamed": 1791413727814,
+        "completed": 1791413727819
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "claude-haiku-5-5",
+        "providerID": "opencode-go"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "PONG"
+        }
+      ],
+      "snapshot": {
+        "start": "853694aae8816094a0d875fee7ea26278dbf5d0f",
+        "end": "853694aae8816094a0d875fee7ea26278dbf5d0f",
+        "files": []
+      },
+      "finish": "stop",
+      "rawFinish": "end_turn",
+      "cost": 7.709000000000001e-05,
+      "tokens": {
+        "input": 4,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 7419,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_aaaaaaaaaaaaaaaaaaaa",
+      "time": {
+        "created": 1791413726705
+      },
+      "text": "Reply with exactly the word PONG and nothing else. Do not use any tools.",
+      "type": "user"
+    }
+  ],
+  "cursor": {
+    "previous": null,
+    "next": null
+  }
+}

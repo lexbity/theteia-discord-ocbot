@@ -1,0 +1,14 @@
+{
+  "data": {
+    "id": "msg_118942de90014cW9zYGrXZy15R",
+    "sessionID": "ses_ee76bda2dffexMwBaYTKuT51Me",
+    "time": {
+      "created": 1791413726698
+    },
+    "type": "user",
+    "payload": {
+      "text": "Reply with exactly the word PONG and nothing else. Do not use any tools."
+    },
+    "delivery": "steer"
+  }
+}
