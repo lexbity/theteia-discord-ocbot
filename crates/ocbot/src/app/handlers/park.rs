@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use ocbot_core::{Column, State, WriteValue, slug, staged_preview};
 
+use crate::adapters::now_unix;
 use crate::adapters::store::ActionRow;
 use crate::app::context::AppContext;
 use crate::app::crashpoint::checkpoint;
@@ -184,7 +185,7 @@ pub async fn resume(
             action.id,
             State::Parking,
             State::Parked,
-            &[(Column::EndedAt, WriteValue::Int(support::now_unix()))],
+            &[(Column::EndedAt, WriteValue::Int(now_unix()))],
         )
         .await?;
     if !parked {

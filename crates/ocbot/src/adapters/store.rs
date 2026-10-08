@@ -17,6 +17,8 @@ use tokio::sync::oneshot;
 
 use ocbot_core::{Column, State, WriteValue};
 
+use super::now_unix;
+
 /// Errors surfaced by the store actor.
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -339,7 +341,7 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
         .query_row(
             "SELECT v FROM schema_version ORDER BY v DESC LIMIT 1",
             [],
-            |row| row.get(0),
+            |row| row.get("v"),
         )
         .optional()?;
     let current = current.unwrap_or(0);
@@ -625,10 +627,10 @@ impl StoreHandle {
                     params![id],
                     |row| {
                         Ok(RunRow {
-                            id: row.get(0)?,
-                            dir: row.get(1)?,
-                            plan_path: row.get(2)?,
-                            kind: row.get(3)?,
+                            id: row.get("id")?,
+                            dir: row.get("dir")?,
+                            plan_path: row.get("plan_path")?,
+                            kind: row.get("kind")?,
                         })
                     },
                 )
@@ -1111,7 +1113,7 @@ impl StoreHandle {
                     "SELECT last_seq FROM session_cursor WHERE session_id = ?1",
                     params![session_id],
                     |row| {
-                        row.get::<_, i64>(0).map(|seq| CursorRow {
+                        row.get::<_, i64>("last_seq").map(|seq| CursorRow {
                             last_seq: to_u64(seq),
                         })
                     },
@@ -1130,7 +1132,7 @@ impl StoreHandle {
                  ) DESC LIMIT ?1",
             )?;
             let rows = statement
-                .query_map(params![to_i64(limit)], |row| row.get::<_, String>(0))?
+                .query_map(params![to_i64(limit)], |row| row.get::<_, String>("dir"))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(rows)
         })
@@ -1191,10 +1193,10 @@ impl StoreHandle {
     pub async fn action_counts_by_state(&self) -> Result<Vec<(String, i64)>, StoreError> {
         self.call(|connection| {
             let mut statement =
-                connection.prepare("SELECT state, COUNT(*) FROM action GROUP BY state")?;
+                connection.prepare("SELECT state, COUNT(*) AS n FROM action GROUP BY state")?;
             let rows = statement
                 .query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                    Ok((row.get::<_, String>("state")?, row.get::<_, i64>("n")?))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(rows)
@@ -1303,11 +1305,11 @@ impl StoreHandle {
             let rows = statement
                 .query_map([], |row| {
                     Ok(ResetIntentRow {
-                        id: row.get(0)?,
-                        dir: row.get(1)?,
-                        target_sha: row.get(2)?,
-                        sup_branch: row.get(3)?,
-                        step: row.get(4)?,
+                        id: row.get("id")?,
+                        dir: row.get("dir")?,
+                        target_sha: row.get("target_sha")?,
+                        sup_branch: row.get("sup_branch")?,
+                        step: row.get("step")?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1371,7 +1373,7 @@ impl StoreHandle {
                 .query_row(
                     "SELECT id FROM gate WHERE ext_id = ?1",
                     params![ext],
-                    |row| row.get(0),
+                    |row| row.get("id"),
                 )
                 .optional()?;
             if let Some(id) = existing {
@@ -1471,7 +1473,7 @@ impl StoreHandle {
             let pings: i64 = connection.query_row(
                 "SELECT pings FROM gate WHERE id = ?1",
                 params![id],
-                |row| row.get(0),
+                |row| row.get("pings"),
             )?;
             Ok(pings)
         })
@@ -1590,7 +1592,7 @@ impl StoreHandle {
                 .query_row(
                     "SELECT dir FROM session_seen WHERE session_id = ?1",
                     params![session_id],
-                    |row| row.get(0),
+                    |row| row.get("dir"),
                 )
                 .optional()
         })
@@ -1607,7 +1609,7 @@ impl StoreHandle {
                  SELECT active_session_id FROM project WHERE active_session_id IS NOT NULL",
             )?;
             let rows = statement
-                .query_map([], |row| row.get::<_, String>(0))?
+                .query_map([], |row| row.get::<_, String>("session_id"))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(rows)
         })
@@ -1696,7 +1698,12 @@ impl StoreHandle {
                 .query_row(
                     "SELECT session_id, action_id FROM msg_map WHERE discord_msg_id = ?1",
                     params![discord_msg_id],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?)),
+                    |row| {
+                        Ok((
+                            row.get::<_, String>("session_id")?,
+                            row.get::<_, Option<i64>>("action_id")?,
+                        ))
+                    },
                 )
                 .optional()
         })
@@ -1823,83 +1830,89 @@ fn cas_inner_any(
     Ok(changed == 1)
 }
 
+/// rusqlite's private sentinel for "no meaningful column index". When it is the
+/// first field of `FromSqlConversionFailure`, rusqlite's `Display` prints only
+/// the wrapped error, so a column can be named without leaking a positional
+/// index (FR-9).
+const UNKNOWN_COLUMN: usize = usize::MAX;
+
 fn project_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectRow> {
     Ok(ProjectRow {
-        dir: row.get(0)?,
-        work_branch: row.get(1)?,
-        base_sha: row.get(2)?,
-        active_session_id: row.get(3)?,
-        lock_holder: row.get(4)?,
-        lock_since: row.get(5)?,
+        dir: row.get("dir")?,
+        work_branch: row.get("work_branch")?,
+        base_sha: row.get("base_sha")?,
+        active_session_id: row.get("active_session_id")?,
+        lock_holder: row.get("lock_holder")?,
+        lock_since: row.get("lock_since")?,
+    })
+}
+
+/// Parse `action.state` by name, naming the column (not an index) on failure.
+fn action_state(row: &rusqlite::Row<'_>) -> rusqlite::Result<State> {
+    let raw: String = row.get("state")?;
+    raw.parse().map_err(|error: String| {
+        rusqlite::Error::FromSqlConversionFailure(
+            UNKNOWN_COLUMN,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("action.state = {raw:?}: {error}"),
+            )),
+        )
     })
 }
 
 fn action_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ActionRow> {
-    let state: String = row.get(7)?;
-    let state: State = state.parse().map_err(|error: String| {
-        rusqlite::Error::FromSqlConversionFailure(
-            7,
-            rusqlite::types::Type::Text,
-            Box::new(std::io::Error::other(error)),
-        )
-    })?;
     Ok(ActionRow {
-        id: row.get(0)?,
-        run_id: row.get(1)?,
-        session_id: row.get(2)?,
-        parent_action_id: row.get(3)?,
-        channel_id: row.get(4)?,
-        label: row.get(5)?,
-        prompt_sent: row.get(6)?,
-        state,
-        blocked_gate_id: row.get(8)?,
-        outcome_kind: row.get(9)?,
-        report_full: row.get(10)?,
-        footer_json: row.get(11)?,
-        report_msg_id: row.get(12)?,
-        origin_msg_id: row.get(13)?,
-        start_head: row.get(14)?,
-        dirty_at_start: row.get::<_, i64>(15)? != 0,
-        include_existing: row.get::<_, i64>(16)? != 0,
-        pending_commit_subject: row.get(17)?,
-        pending_commit_body: row.get(18)?,
-        park_branch_name: row.get(19)?,
-        park_step: row.get(20)?,
-        accept_sha: row.get(21)?,
-        attempt: row.get(22)?,
-        followups: row.get(23)?,
-        started_at: row.get(24)?,
-        ended_at: row.get(25)?,
-        last_event_at: row.get(26)?,
-        stall_ping_at: row.get(27)?,
-        template: row.get(28)?,
+        id: row.get("id")?,
+        run_id: row.get("run_id")?,
+        session_id: row.get("session_id")?,
+        parent_action_id: row.get("parent_action_id")?,
+        channel_id: row.get("channel_id")?,
+        label: row.get("label")?,
+        prompt_sent: row.get("prompt_sent")?,
+        state: action_state(row)?,
+        blocked_gate_id: row.get("blocked_gate_id")?,
+        outcome_kind: row.get("outcome_kind")?,
+        report_full: row.get("report_full")?,
+        footer_json: row.get("footer_json")?,
+        report_msg_id: row.get("report_msg_id")?,
+        origin_msg_id: row.get("origin_msg_id")?,
+        start_head: row.get("start_head")?,
+        dirty_at_start: row.get::<_, i64>("dirty_at_start")? != 0,
+        include_existing: row.get::<_, i64>("include_existing")? != 0,
+        pending_commit_subject: row.get("pending_commit_subject")?,
+        pending_commit_body: row.get("pending_commit_body")?,
+        park_branch_name: row.get("park_branch_name")?,
+        park_step: row.get("park_step")?,
+        accept_sha: row.get("accept_sha")?,
+        attempt: row.get("attempt")?,
+        followups: row.get("followups")?,
+        started_at: row.get("started_at")?,
+        ended_at: row.get("ended_at")?,
+        last_event_at: row.get("last_event_at")?,
+        stall_ping_at: row.get("stall_ping_at")?,
+        template: row.get("template")?,
     })
 }
 
 fn gate_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GateRow> {
     Ok(GateRow {
-        id: row.get(0)?,
-        ext_id: row.get(1)?,
-        action_id: row.get(2)?,
-        session_id: row.get(3)?,
-        root_session_id: row.get(4)?,
-        kind: row.get(5)?,
-        payload_json: row.get(6)?,
-        renderable: row.get::<_, i64>(7)? != 0,
-        state: row.get(8)?,
-        answer: row.get(9)?,
-        msg_id: row.get(10)?,
-        pings: row.get(11)?,
-        last_ping_at: row.get(12)?,
-        channel_id: row.get(13)?,
+        id: row.get("id")?,
+        ext_id: row.get("ext_id")?,
+        action_id: row.get("action_id")?,
+        session_id: row.get("session_id")?,
+        root_session_id: row.get("root_session_id")?,
+        kind: row.get("kind")?,
+        payload_json: row.get("payload_json")?,
+        renderable: row.get::<_, i64>("renderable")? != 0,
+        state: row.get("state")?,
+        answer: row.get("answer")?,
+        msg_id: row.get("msg_id")?,
+        pings: row.get("pings")?,
+        last_ping_at: row.get("last_ping_at")?,
+        channel_id: row.get("channel_id")?,
     })
-}
-
-fn now_unix() -> i64 {
-    let seconds = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs());
-    to_i64(seconds)
 }
 
 /// Saturating `u64 → i64` for timestamps and cursor seqs (bounded domains).

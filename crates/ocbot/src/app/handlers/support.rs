@@ -62,15 +62,6 @@ pub(crate) fn channel_for(action: &ActionRow) -> Result<u64, AppError> {
         .ok_or_else(|| AppError::Other("action has no channel (invariant)".to_owned()))
 }
 
-/// Current unix seconds.
-pub(crate) fn now_unix() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| {
-            i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
-        })
-}
-
 /// A plain (component-less) message mentioning only the operator (FR-3).
 pub(crate) fn simple(content: impl Into<String>, operator_id: u64) -> OutgoingMessage {
     OutgoingMessage {

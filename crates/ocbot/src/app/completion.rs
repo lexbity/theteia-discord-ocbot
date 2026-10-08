@@ -11,6 +11,7 @@ use ocbot_core::State;
 use ocbot_core::outcome::{self, AssistantSnapshot, Outcome, classify};
 use ocbot_core::render::{Footer, ReportContext, report};
 
+use crate::adapters::now_unix;
 use crate::adapters::store::ActionRow;
 use crate::app::context::AppContext;
 use crate::app::error::AppError;
@@ -220,14 +221,6 @@ async fn poll_diff(ctx: &Arc<AppContext>, run_id: i64, base: &str) -> Option<Str
         Ok(stat) if !stat.is_empty() => Some(stat),
         _ => None,
     }
-}
-
-fn now_unix() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| {
-            i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
-        })
 }
 
 /// Seconds as f64 without an `as` cast (bounded to u32 → `f64::from`).

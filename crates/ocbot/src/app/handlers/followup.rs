@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use ocbot_core::{Column, State, WriteValue};
 
+use crate::adapters::now_unix;
 use crate::adapters::store::ActionRow;
 use crate::app::context::AppContext;
 use crate::app::error::AppError;
@@ -66,7 +67,7 @@ pub async fn execute_followup(
     let writes = vec![
         (Column::FollowUps, WriteValue::Int(action.followups + 1)),
         (Column::PromptSent, WriteValue::Text(prompt.to_owned())),
-        (Column::LastEventAt, WriteValue::Int(support::now_unix())),
+        (Column::LastEventAt, WriteValue::Int(now_unix())),
         // A fresh follow-up is a fresh report: clear the previous delivery
         // key so the next completion can post (P9's `report_msg_id IS NULL`).
         (Column::ReportMessageId, WriteValue::Null),
@@ -87,7 +88,7 @@ pub async fn execute_followup(
                 action_id,
                 State::Running,
                 State::Errored,
-                &[(Column::LastEventAt, WriteValue::Int(support::now_unix()))],
+                &[(Column::LastEventAt, WriteValue::Int(now_unix()))],
             )
             .await?;
         return Err(AppError::OpenCode(error));

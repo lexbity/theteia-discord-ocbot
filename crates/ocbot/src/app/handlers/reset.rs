@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use ocbot_core::ButtonKind;
 
+use crate::adapters::now_unix;
 use crate::adapters::store::ResetIntentRow;
 use crate::app::context::AppContext;
 use crate::app::crashpoint::checkpoint;
@@ -80,7 +81,7 @@ pub async fn begin_reset(
         ));
     }
 
-    let sup_branch = format!("superseded/{}", support::now_unix());
+    let sup_branch = format!("superseded/{}", now_unix());
     let id = ctx
         .store
         .record_reset_intent(dir_text, sha, &sup_branch)

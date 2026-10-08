@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use ocbot_core::{Column, State, WriteValue};
 
+use crate::adapters::now_unix;
 use crate::adapters::store::ActionRow;
 use crate::app::context::AppContext;
 use crate::app::crashpoint::checkpoint;
@@ -191,7 +192,7 @@ pub async fn execute_accept(
     // CP-A3: record the sha, seal, release the lock, confirm.
     let writes = vec![
         (Column::AcceptSha, WriteValue::Text(sha.clone())),
-        (Column::EndedAt, WriteValue::Int(support::now_unix())),
+        (Column::EndedAt, WriteValue::Int(now_unix())),
     ];
     let accepted = ctx
         .store
@@ -248,7 +249,7 @@ pub async fn resume(ctx: &Arc<AppContext>, action: &ActionRow) -> Result<Option<
     if matches {
         let writes = vec![
             (Column::AcceptSha, WriteValue::Text(head.clone())),
-            (Column::EndedAt, WriteValue::Int(support::now_unix())),
+            (Column::EndedAt, WriteValue::Int(now_unix())),
         ];
         let adopted = ctx
             .store

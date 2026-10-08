@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use ocbot_core::OutgoingMessage;
 
+use crate::adapters::now_unix;
 use crate::app::context::AppContext;
 use crate::app::error::AppError;
 use crate::app::interaction::InteractionSource;
@@ -85,12 +86,4 @@ pub async fn execute(ctx: &Arc<AppContext>, source: &InteractionSource) -> Resul
     };
     ctx.discord.post(source.channel_id, &message).await?;
     Ok(())
-}
-
-fn now_unix() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| {
-            i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
-        })
 }

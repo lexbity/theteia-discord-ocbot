@@ -5,9 +5,10 @@ use std::sync::Arc;
 
 use ocbot_core::{Column, State, WriteValue};
 
+use crate::adapters::now_unix;
 use crate::app::context::AppContext;
 use crate::app::error::AppError;
-use crate::app::handlers::support::{self, dir_text, directory_for};
+use crate::app::handlers::support::{dir_text, directory_for};
 
 /// The decision states a Discard may start from.
 const DISCARD_FROM: [State; 3] = [State::Reported, State::Errored, State::Aborted];
@@ -35,7 +36,7 @@ pub async fn execute_discard(
             action_id,
             &DISCARD_FROM,
             State::Discarded,
-            &[(Column::EndedAt, WriteValue::Int(support::now_unix()))],
+            &[(Column::EndedAt, WriteValue::Int(now_unix()))],
         )
         .await?;
     if !discarded {
