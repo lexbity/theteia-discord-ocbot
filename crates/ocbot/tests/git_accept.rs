@@ -20,8 +20,8 @@ use common::{FakeDiscord, FakeGit, FakeOpenCode, context, init_repo, write_file}
 use ocbot::adapters::git::GitAdapter;
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::handlers::accept;
-use ocbot_core::State;
 use ocbot_core::ports::GitPort;
+use ocbot_core::{Column, State, WriteValue};
 use tempfile::TempDir;
 
 const OPERATOR: u64 = 42;
@@ -187,16 +187,15 @@ async fn accept_refuses_when_started_dirty_without_include_existing() {
     )
     .await;
     // Mark the run as started on a dirty tree that was not included (FR-27).
-    store
-        .call(move |connection| {
-            connection.execute(
-                "UPDATE action SET dirty_at_start = 1, include_existing = 0 WHERE id = ?1",
-                rusqlite::params![seeded.action_id],
-            )?;
-            Ok(())
-        })
-        .await
-        .expect("mark dirty");
+    // `include_existing` already defaults to 0, so only the dirty flag is set.
+    let writes = [(Column::DirtyAtStart, WriteValue::Int(1))];
+    assert!(
+        store
+            .cas_state(seeded.action_id, State::Reported, State::Reported, &writes)
+            .await
+            .expect("mark dirty"),
+        "mark-dirty CAS must find a reported action"
+    );
     write_file(&repo, "feature.txt", "f\n");
     let discord = FakeDiscord::new();
     let ctx = ctx_for(&store, &repo, &discord);

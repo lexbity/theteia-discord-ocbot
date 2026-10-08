@@ -198,4 +198,40 @@ for unit in deploy/ocbot.service deploy/opencode.service; do
 done
 probe "G19" "^User=" 'User=ocbot'
 
+# --- SPEC-002 appended gates ------------------------------------------------
+# The store actor's message set is typed (Phase 4/5): no `Box<dyn Any>`, no
+# dead `TypeMismatch` variant, no erased `Job`/`call` path. Detector self-tests
+# keep the patterns honest (a gate that cannot fail is decoration).
+if [ -f crates/ocbot/src/adapters/store.rs ]; then
+  for pattern in 'Box<dyn Any' 'TypeMismatch' 'type Job' 'pub async fn call'; do
+    if grep -n "$pattern" crates/ocbot/src/adapters/store.rs; then
+      fail "SPEC-002: store.rs still contains '$pattern'"
+    fi
+  done
+fi
+probe "SPEC002-erasure" 'Box<dyn Any' 'type Job = Box<dyn Any + Send>;'
+probe "SPEC002-mismatch" 'TypeMismatch' 'return Err(StoreError::TypeMismatch);'
+probe "SPEC002-erased-call" 'pub async fn call' 'pub async fn call<T, F>(&self, f: F) {}'
+
+# Row mapping is by column name (Phase 2): no numeric `row.get(N)`.
+if [ -f crates/ocbot/src/adapters/store.rs ]; then
+  if grep -nE 'row\.get(::<[^>]*>)?\(\s*[0-9]' crates/ocbot/src/adapters/store.rs; then
+    fail "SPEC-002: numeric row.get index in store.rs"
+  fi
+fi
+probe "SPEC002-numeric-row" 'row\.get\(0\)' 'let id = row.get(0)?;'
+
+# The render god module stayed decomposed (Phase 3): every concern file exists
+# and none may grow back to the 500-line ceiling.
+for render_file in mod report gate browser redact label; do
+  path="crates/ocbot-core/src/render/$render_file.rs"
+  if [ ! -f "$path" ]; then
+    fail "SPEC-002: missing render submodule $path"
+  fi
+  lines="$(wc -l < "$path")"
+  if [ "$lines" -ge 500 ]; then
+    fail "SPEC-002: $path is $lines lines (>= 500); split it by concern"
+  fi
+done
+
 echo "gates: OK"

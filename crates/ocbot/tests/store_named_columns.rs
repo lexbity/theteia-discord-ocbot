@@ -178,31 +178,6 @@ fn insert_gate(conn: &Connection) {
     .expect("insert gate");
 }
 
-/// Insert the `project`/`run`/parent-action/blocking-gate rows that
-/// `insert_action`'s foreign keys reference (the canonical schema enforces
-/// them).
-fn insert_fk_parents(conn: &Connection) {
-    conn.execute("INSERT INTO project (dir) VALUES ('/tmp/proj')", [])
-        .expect("insert project");
-    conn.execute(
-        "INSERT INTO run (id, dir, kind, created_at) VALUES (11, '/tmp/proj', 'free', 0)",
-        [],
-    )
-    .expect("insert run");
-    conn.execute(
-        "INSERT INTO action (id, run_id, label, prompt_sent, state)
-         VALUES (3, 11, 'parent', 'p', 'staged')",
-        [],
-    )
-    .expect("insert parent action");
-    conn.execute(
-        "INSERT INTO gate (id, kind, payload_json, state)
-         VALUES (5, 'permission', '{}', 'pending')",
-        [],
-    )
-    .expect("insert blocking gate");
-}
-
 /// Insert one fully-populated `project` row.
 fn insert_project(conn: &Connection) {
     conn.execute(
@@ -234,16 +209,11 @@ fn reversed<'a>(columns: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
 
 #[tokio::test]
 async fn action_row_named_access() {
-    let store = StoreHandle::open_in_memory().expect("store");
-    store
-        .call(|conn| {
-            insert_fk_parents(conn);
-            insert_action(conn);
-            Ok(())
-        })
-        .await
-        .expect("seed");
+    let dir = tempfile::tempdir().expect("tmp");
+    let path = dir.path().join("action.sqlite");
+    seed_custom_db(&path, "action", ACTION_COLUMNS, insert_action);
 
+    let store = StoreHandle::open(&path).expect("store");
     let action = store.action(7).await.expect("read").expect("row");
     assert_eq!(action.id, 7);
     assert_eq!(action.run_id, 11);
@@ -278,17 +248,11 @@ async fn action_row_named_access() {
 
 #[tokio::test]
 async fn gate_row_named_access() {
-    let store = StoreHandle::open_in_memory().expect("store");
-    store
-        .call(|conn| {
-            insert_fk_parents(conn);
-            insert_action(conn);
-            insert_gate(conn);
-            Ok(())
-        })
-        .await
-        .expect("seed");
+    let dir = tempfile::tempdir().expect("tmp");
+    let path = dir.path().join("gate.sqlite");
+    seed_custom_db(&path, "gate", GATE_COLUMNS, insert_gate);
 
+    let store = StoreHandle::open(&path).expect("store");
     let gate = store.gate(1).await.expect("read").expect("row");
     assert_eq!(gate.id, 1);
     assert_eq!(gate.ext_id.as_deref(), Some("per_1"));
@@ -308,15 +272,11 @@ async fn gate_row_named_access() {
 
 #[tokio::test]
 async fn project_row_named_access() {
-    let store = StoreHandle::open_in_memory().expect("store");
-    store
-        .call(|conn| {
-            insert_project(conn);
-            Ok(())
-        })
-        .await
-        .expect("seed");
+    let dir = tempfile::tempdir().expect("tmp");
+    let path = dir.path().join("project.sqlite");
+    seed_custom_db(&path, "project", PROJECT_COLUMNS, insert_project);
 
+    let store = StoreHandle::open(&path).expect("store");
     let project = store
         .project("/tmp/proj")
         .await
@@ -386,18 +346,17 @@ async fn project_schema_reorder_safety() {
 
 #[tokio::test]
 async fn missing_column_fails_loudly() {
-    let store = StoreHandle::open_in_memory().expect("store");
-    store
-        .call(|conn| {
-            insert_fk_parents(conn);
-            insert_action(conn);
-            // Simulate a failed/partial migration: the mapped column is gone.
-            conn.execute_batch("ALTER TABLE action DROP COLUMN template;")?;
-            Ok(())
-        })
-        .await
-        .expect("seed");
+    let dir = tempfile::tempdir().expect("tmp");
+    let path = dir.path().join("missing_column.sqlite");
+    seed_custom_db(&path, "action", ACTION_COLUMNS, insert_action);
+    {
+        let raw = Connection::open(&path).expect("raw");
+        // Simulate a failed/partial migration: the mapped column is gone.
+        raw.execute_batch("ALTER TABLE action DROP COLUMN template;")
+            .expect("drop template");
+    }
 
+    let store = StoreHandle::open(&path).expect("store");
     let error = store
         .action(7)
         .await

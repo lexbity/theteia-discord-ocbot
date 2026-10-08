@@ -16,8 +16,8 @@ use std::sync::Arc;
 use common::{FakeClock, FakeDiscord, FakeGit, FakeOpenCode, context_with, seed_running};
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::stall;
-use ocbot_core::State;
 use ocbot_core::ports::Clock;
+use ocbot_core::{Column, State, WriteValue};
 
 const OPERATOR: u64 = 42;
 const CHANNEL: u64 = 7;
@@ -25,16 +25,17 @@ const STALL_SECS: i64 = 45 * 60;
 
 /// Overwrite the action's activity timestamps with explicit clock values.
 async fn set_times(store: &StoreHandle, action_id: i64, started: i64, last: i64) {
-    store
-        .call(move |connection| {
-            connection.execute(
-                "UPDATE action SET started_at = ?1, last_event_at = ?2 WHERE id = ?3",
-                rusqlite::params![started, last, action_id],
-            )?;
-            Ok(())
-        })
-        .await
-        .expect("set times");
+    let writes = [
+        (Column::StartedAt, WriteValue::Int(started)),
+        (Column::LastEventAt, WriteValue::Int(last)),
+    ];
+    assert!(
+        store
+            .cas_state(action_id, State::Running, State::Running, &writes)
+            .await
+            .expect("set times"),
+        "set_times CAS must find a running action"
+    );
 }
 
 #[tokio::test]

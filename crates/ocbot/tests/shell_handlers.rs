@@ -21,7 +21,7 @@ use ocbot::app::handlers::{discard, mute, release, status};
 use ocbot::app::interaction::{InteractionSource, SourceKind};
 use ocbot::app::ops;
 use ocbot_core::ports::OpenCodePort;
-use ocbot_core::{State, dir_hash};
+use ocbot_core::{Column, State, WriteValue, dir_hash};
 
 const OPERATOR: u64 = 42;
 const CHANNEL: u64 = 7;
@@ -212,16 +212,17 @@ async fn release_lists_confirms_and_frees_the_lock() {
 }
 
 async fn set_times(store: &StoreHandle, action_id: i64, started: i64, last: i64) {
-    store
-        .call(move |connection| {
-            connection.execute(
-                "UPDATE action SET started_at = ?1, last_event_at = ?2 WHERE id = ?3",
-                rusqlite::params![started, last, action_id],
-            )?;
-            Ok(())
-        })
-        .await
-        .expect("set times");
+    let writes = [
+        (Column::StartedAt, WriteValue::Int(started)),
+        (Column::LastEventAt, WriteValue::Int(last)),
+    ];
+    assert!(
+        store
+            .cas_state(action_id, State::Running, State::Running, &writes)
+            .await
+            .expect("set times"),
+        "set_times CAS must find a running action"
+    );
 }
 
 #[tokio::test]

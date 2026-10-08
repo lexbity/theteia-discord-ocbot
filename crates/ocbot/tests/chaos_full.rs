@@ -59,16 +59,22 @@ fn ctx_for(
 }
 
 async fn set_started_at(store: &StoreHandle, action_id: i64) {
-    store
-        .call(move |connection| {
-            connection.execute(
-                "UPDATE action SET started_at = 1 WHERE id = ?1",
-                rusqlite::params![action_id],
-            )?;
-            Ok(())
-        })
+    // A state-preserving CAS: read the live state so the column write applies
+    // without disturbing the transition under test.
+    let state = store
+        .action(action_id)
         .await
-        .expect("set started_at");
+        .expect("read")
+        .expect("row")
+        .state;
+    let writes = [(Column::StartedAt, WriteValue::Int(1))];
+    assert!(
+        store
+            .cas_state(action_id, state, state, &writes)
+            .await
+            .expect("set started_at"),
+        "set_started_at CAS must find the action"
+    );
 }
 
 /// Put an action into `accepting` with a persisted subject (CP-A0 state).

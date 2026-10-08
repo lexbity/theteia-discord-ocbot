@@ -18,21 +18,23 @@ use common::{FakeClock, FakeDiscord, FakeGit, FakeOpenCode, context_with, seed_r
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::metrics;
 use ocbot::app::watcher::Watcher;
+use ocbot_core::{Column, State, WriteValue};
 
 const OPERATOR: u64 = 42;
 const CHANNEL: u64 = 7;
 
 async fn set_started_at(store: &StoreHandle, action_id: i64, started: i64) {
-    store
-        .call(move |connection| {
-            connection.execute(
-                "UPDATE action SET started_at = ?1, last_event_at = ?1 WHERE id = ?2",
-                rusqlite::params![started, action_id],
-            )?;
-            Ok(())
-        })
-        .await
-        .expect("set started_at");
+    let writes = [
+        (Column::StartedAt, WriteValue::Int(started)),
+        (Column::LastEventAt, WriteValue::Int(started)),
+    ];
+    assert!(
+        store
+            .cas_state(action_id, State::Running, State::Running, &writes)
+            .await
+            .expect("set started_at"),
+        "set_started_at CAS must find a running action"
+    );
 }
 
 fn system_now() -> i64 {
