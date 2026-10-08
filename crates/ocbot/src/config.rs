@@ -20,6 +20,8 @@ pub const ENV_ALLOWED_USER_ID: &str = "ALLOWED_USER_ID";
 pub const ENV_ALLOW_NON_LOOPBACK: &str = "ALLOW_NON_LOOPBACK";
 /// Env variable overriding the per-session ruleset default (FR-42).
 pub const ENV_PER_SESSION_RULESET: &str = "PER_SESSION_RULESET";
+/// Env variable enabling freeform typed paths beyond the browse roots (P11).
+pub const ENV_ALLOW_FREEFORM_PATHS: &str = "ALLOW_FREEFORM_PATHS";
 /// The default permission-baseline path, unless `permissions_file` is set.
 pub const DEFAULT_PERMISSIONS_FILE: &str = "config/opencode.permissions.jsonc";
 /// Environment variable with the Discord bot token.
@@ -76,6 +78,24 @@ pub struct Config {
     /// Per-command git timeout (spec R-9).
     #[serde(default = "default_git_timeout")]
     pub git_timeout_secs: u64,
+    /// The roots the `/ls` browser and typed paths are confined to (P11/FR-34).
+    #[serde(default = "default_browse_roots")]
+    pub browse_roots: Vec<String>,
+    /// Where uploaded attachments are persisted (P11/FR-36).
+    #[serde(default = "default_inbox_dir")]
+    pub inbox_dir: String,
+    /// Allow typed paths outside `browse_roots` (default false — P11).
+    #[serde(default)]
+    pub allow_freeform_paths: bool,
+    /// Minimum heading depth for the plan picker (P12; default 2).
+    #[serde(default = "default_plan_depth_min")]
+    pub plan_heading_min: u32,
+    /// Maximum heading depth for the plan picker (P12; default 3).
+    #[serde(default = "default_plan_depth_max")]
+    pub plan_heading_max: u32,
+    /// `/ls` entries per page (P10: stays under the component cap).
+    #[serde(default = "default_ls_page_size")]
+    pub ls_page_size: usize,
 }
 
 fn default_db() -> String {
@@ -116,6 +136,26 @@ fn default_metrics() -> String {
 
 fn default_git_timeout() -> u64 {
     10
+}
+
+fn default_browse_roots() -> Vec<String> {
+    vec!["/home".to_owned()]
+}
+
+fn default_inbox_dir() -> String {
+    "inbox".to_owned()
+}
+
+fn default_plan_depth_min() -> u32 {
+    ocbot_core::plan::DEFAULT_HEADING_MIN
+}
+
+fn default_plan_depth_max() -> u32 {
+    ocbot_core::plan::DEFAULT_HEADING_MAX
+}
+
+fn default_ls_page_size() -> usize {
+    ocbot_core::render::LS_PAGE_SIZE
 }
 
 /// The templates the bot can render (P13 envelope slots, load-time validated).
@@ -227,6 +267,27 @@ impl Config {
                 self.abort_timeout_secs
             ));
         }
+        if self.browse_roots.is_empty() || self.browse_roots.iter().any(String::is_empty) {
+            errors.push("browse_roots must name at least one non-empty root (FR-34)".to_owned());
+        }
+        if !(1..=6).contains(&self.plan_heading_min) || !(1..=6).contains(&self.plan_heading_max) {
+            errors.push(format!(
+                "plan heading depth must be within 1..=6, got {}..={}",
+                self.plan_heading_min, self.plan_heading_max
+            ));
+        }
+        if self.plan_heading_min > self.plan_heading_max {
+            errors.push(format!(
+                "plan_heading_min ({}) must not exceed plan_heading_max ({})",
+                self.plan_heading_min, self.plan_heading_max
+            ));
+        }
+        if self.ls_page_size < 1 {
+            errors.push(format!(
+                "ls_page_size must be >= 1, got {}",
+                self.ls_page_size
+            ));
+        }
 
         let operator = self.allowed_user_id.or_else(|| {
             std::env::var(ENV_ALLOWED_USER_ID)
@@ -261,6 +322,14 @@ impl Config {
     pub fn ruleset_enabled(&self) -> bool {
         self.per_session_ruleset
             || std::env::var(ENV_PER_SESSION_RULESET)
+                .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+    }
+
+    /// Whether typed paths may escape `browse_roots` (`ALLOW_FREEFORM_PATHS`,
+    /// default false — P11).
+    pub fn freeform_paths(&self) -> bool {
+        self.allow_freeform_paths
+            || std::env::var(ENV_ALLOW_FREEFORM_PATHS)
                 .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
     }
 }
@@ -443,6 +512,12 @@ typo_key = 1
             permissions_file: "config/opencode.permissions.jsonc".to_owned(),
             metrics_bind: String::new(),
             git_timeout_secs: 10,
+            browse_roots: vec![String::new()],
+            inbox_dir: "inbox".to_owned(),
+            allow_freeform_paths: false,
+            plan_heading_min: 2,
+            plan_heading_max: 3,
+            ls_page_size: 18,
         };
         let errors = config.validate().expect_err("multiple errors");
         assert!(errors.len() >= 3, "errors: {errors:?}");

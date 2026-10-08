@@ -110,6 +110,9 @@ pub struct ActionRow {
     pub last_event_at: Option<i64>,
     /// The last stall ping time (Phase 7).
     pub stall_ping_at: Option<i64>,
+    /// The rendered prompt envelope (`fresh` or `resume`, P13). The review-time
+    /// toggle flips this and re-renders `prompt_sent`.
+    pub template: String,
 }
 
 /// A per-session log cursor (P9: cache only, never correctness).
@@ -327,7 +330,7 @@ fn configure_and_migrate(connection: &mut Connection) -> Result<(), StoreError> 
     Ok(())
 }
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
     connection
@@ -355,6 +358,9 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
     }
     if current < 3 {
         transaction.execute_batch(MIGRATION_V3)?;
+    }
+    if current < 4 {
+        transaction.execute_batch(MIGRATION_V4)?;
     }
     transaction.execute(
         "INSERT INTO schema_version (v) VALUES (?1)",
@@ -498,6 +504,14 @@ CREATE TABLE reset_intent (
 /// posted so replies and re-pings can edit it (P10: edits don't notify).
 const MIGRATION_V3: &str = "
 ALTER TABLE gate ADD COLUMN channel_id INTEGER;
+";
+
+/// v4 — Phase 6 files/plans: the staged action remembers which template
+/// envelope it is rendered from (fresh/resume toggle at review), and `ui_state`
+/// carries the last selected/uploaded path (the browser and attachment draft).
+const MIGRATION_V4: &str = "
+ALTER TABLE action ADD COLUMN template TEXT NOT NULL DEFAULT 'fresh';
+ALTER TABLE ui_state ADD COLUMN draft_path TEXT;
 ";
 
 impl std::fmt::Debug for StoreHandle {
@@ -932,6 +946,110 @@ impl StoreHandle {
         .await
     }
 
+    /// Update both `label` and `prompt_sent` on a staged action (the plan pick
+    /// prefills the label, then re-renders the envelope — P12/P13).
+    pub async fn restage_label_prompt(
+        &self,
+        id: i64,
+        label: &str,
+        prompt: &str,
+    ) -> Result<bool, StoreError> {
+        let label = label.to_owned();
+        let prompt = prompt.to_owned();
+        self.call(move |connection| {
+            let changed = connection.execute(
+                "UPDATE action SET label = ?1, prompt_sent = ?2 WHERE id = ?3 AND state = 'staged'",
+                params![label, prompt, id],
+            )?;
+            Ok(changed == 1)
+        })
+        .await
+    }
+
+    /// Record the review-time template choice and the re-rendered prompt
+    /// (`fresh`/`resume` toggle, FR-6/P13).
+    pub async fn set_template_prompt(
+        &self,
+        id: i64,
+        template: &str,
+        prompt: &str,
+    ) -> Result<bool, StoreError> {
+        let template = template.to_owned();
+        let prompt = prompt.to_owned();
+        self.call(move |connection| {
+            let changed = connection.execute(
+                "UPDATE action SET template = ?1, prompt_sent = ?2 WHERE id = ?3 AND state = 'staged'",
+                params![template, prompt, id],
+            )?;
+            Ok(changed == 1)
+        })
+        .await
+    }
+
+    /// Insert a run row carrying an optional plan path (Phase 6; the P12 plan is
+    /// input, recorded on the run, never tracked).
+    pub async fn insert_run_with_plan(
+        &self,
+        dir: &str,
+        kind: &str,
+        plan_path: Option<&str>,
+    ) -> Result<i64, StoreError> {
+        let dir = dir.to_owned();
+        let kind = kind.to_owned();
+        let plan_path = plan_path.map(str::to_owned);
+        let now = now_unix();
+        self.call(move |connection| {
+            connection.execute(
+                "INSERT INTO run (dir, plan_path, kind, created_at) VALUES (?1, ?2, ?3, ?4)",
+                params![dir, plan_path, kind, now],
+            )?;
+            Ok(connection.last_insert_rowid())
+        })
+        .await
+    }
+
+    /// The last selected/uploaded path for a user (browser + attachment
+    /// draft).
+    pub async fn draft_path(&self, user_id: u64) -> Result<Option<String>, StoreError> {
+        self.call(move |connection| {
+            connection
+                .query_row(
+                    "SELECT draft_path FROM ui_state WHERE user_id = ?1",
+                    params![user_id.to_string()],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()
+                .map(Option::flatten)
+        })
+        .await
+    }
+
+    /// Remember the last selected/uploaded path for a user.
+    pub async fn set_draft_path(&self, user_id: u64, path: &str) -> Result<(), StoreError> {
+        let path = path.to_owned();
+        self.call(move |connection| {
+            connection.execute(
+                "INSERT INTO ui_state (user_id, draft_path) VALUES (?1, ?2)
+                 ON CONFLICT(user_id) DO UPDATE SET draft_path = excluded.draft_path",
+                params![user_id.to_string(), path],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Forget the draft path (consumed by a prompt).
+    pub async fn clear_draft_path(&self, user_id: u64) -> Result<(), StoreError> {
+        self.call(move |connection| {
+            connection.execute(
+                "UPDATE ui_state SET draft_path = NULL WHERE user_id = ?1",
+                params![user_id.to_string()],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
     /// Mark a send attempt as failed: leave `running` without a report and
     /// release the directory lock.
     pub async fn fail_send(&self, id: i64, dir: &str, reason: &str) -> Result<(), StoreError> {
@@ -1007,16 +1125,18 @@ impl StoreHandle {
         .await
     }
 
-    /// The remembered cwd for a user (modal prefill).
+    /// The remembered cwd for a user (modal prefill). A row created by
+    /// `set_draft_path` alone leaves `cwd` NULL, so the read is nullable.
     pub async fn ui_cwd(&self, user_id: u64) -> Result<Option<String>, StoreError> {
         self.call(move |connection| {
             connection
                 .query_row(
                     "SELECT cwd FROM ui_state WHERE user_id = ?1",
                     params![user_id.to_string()],
-                    |row| row.get(0),
+                    |row| row.get::<_, Option<String>>(0),
                 )
                 .optional()
+                .map(Option::flatten)
         })
         .await
     }
@@ -1073,27 +1193,34 @@ impl StoreHandle {
     /// Insert the staged successor action of a park-redo (spec CP-P4): same
     /// run, same stored prompt, incremented attempt, parented to the parked
     /// action. Returns the new id.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one column per argument mirrors the insert; a struct would not reduce the call-site clarity"
+    )]
     pub async fn insert_staged_child(
         &self,
         run_id: i64,
         channel_id: Option<i64>,
         label: &str,
         prompt_sent: &str,
+        template: &str,
         attempt: i64,
         parent_action_id: i64,
     ) -> Result<i64, StoreError> {
         let label = label.to_owned();
         let prompt_sent = prompt_sent.to_owned();
+        let template = template.to_owned();
         self.call(move |connection| {
             connection.execute(
                 "INSERT INTO action
-                    (run_id, channel_id, label, prompt_sent, state, attempt, parent_action_id)
-                 VALUES (?1, ?2, ?3, ?4, 'staged', ?5, ?6)",
+                    (run_id, channel_id, label, prompt_sent, template, state, attempt, parent_action_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'staged', ?6, ?7)",
                 params![
                     run_id,
                     channel_id,
                     label,
                     prompt_sent,
+                    template,
                     attempt,
                     parent_action_id
                 ],
@@ -1733,6 +1860,7 @@ fn action_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ActionRow> {
         ended_at: row.get(25)?,
         last_event_at: row.get(26)?,
         stall_ping_at: row.get(27)?,
+        template: row.get(28)?,
     })
 }
 

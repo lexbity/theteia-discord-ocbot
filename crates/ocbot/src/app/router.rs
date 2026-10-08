@@ -59,9 +59,10 @@ async fn plan(ctx: &Arc<AppContext>, source: &InteractionSource) -> Result<AckPl
             "prompt" => Ok(AckPlan::Modal(
                 handlers::prompt::prompt_modal(ctx, source).await?,
             )),
-            "status" | "history" | "reset" | "release" | "abort" | "mute" => {
+            "ls" | "status" | "history" | "reset" | "release" | "abort" | "mute" => {
                 Ok(AckPlan::DeferPublic)
             }
+            "cd" => Ok(AckPlan::Modal(handlers::ls::cd_modal(ctx, source).await?)),
             other => Err(AppError::UnknownCommand(other.to_owned())),
         },
         SourceKind::Component { custom_id } => {
@@ -121,6 +122,10 @@ async fn plan(ctx: &Arc<AppContext>, source: &InteractionSource) -> Result<AckPl
                 Ok(AckPlan::Modal(
                     handlers::followup::followup_modal(ctx, parse_action_id(id)?).await?,
                 ))
+            } else if let Some(id) = custom_id.strip_prefix("v1:planother:") {
+                Ok(AckPlan::Modal(handlers::run::plan_other_modal(
+                    parse_action_id(id)?,
+                )))
             } else if is_deferred_action(custom_id) {
                 Ok(AckPlan::DeferUpdate)
             } else {
@@ -130,12 +135,14 @@ async fn plan(ctx: &Arc<AppContext>, source: &InteractionSource) -> Result<AckPl
         SourceKind::ModalSubmit { custom_id, .. } => {
             if custom_id == handlers::run::NEW_RUN_MODAL
                 || custom_id == handlers::prompt::PROMPT_MODAL
+                || custom_id == handlers::ls::CD_MODAL
             {
                 Ok(AckPlan::DeferPublic)
             } else if custom_id.starts_with("v1:editgo:")
                 || custom_id.starts_with("v1:acceptgo:")
                 || custom_id.starts_with("v1:formgo:")
                 || custom_id.starts_with("v1:followupgo:")
+                || custom_id.starts_with(handlers::run::PLAN_OTHER_MODAL)
             {
                 Ok(AckPlan::DeferUpdate)
             } else {
@@ -153,6 +160,12 @@ fn is_deferred_action(custom_id: &str) -> bool {
         "v1:releaseq:",
         "v1:release:",
         "v1:formpick:",
+        "v1:plan:",
+        "v1:planp:",
+        "v1:planuse:",
+        "v1:tpl:",
+        "v1:ls:",
+        "v1:lssel:",
     ]
     .iter()
     .any(|prefix| custom_id.starts_with(prefix))
@@ -161,6 +174,10 @@ fn is_deferred_action(custom_id: &str) -> bool {
 
 /// The execute pass of a deferred interaction; returns an optional ephemeral
 /// followup text (which the adapter posts after the work finishes).
+#[expect(
+    clippy::too_many_lines,
+    reason = "the router is a flat, exhaustive match over the interaction grammar; splitting it would hide the one-place review of every route"
+)]
 pub async fn execute(
     ctx: &Arc<AppContext>,
     source: &InteractionSource,
@@ -189,6 +206,10 @@ pub async fn execute(
             }
             "mute" => {
                 handlers::mute::execute(ctx, source).await?;
+                Ok(None)
+            }
+            "ls" => {
+                handlers::ls::execute_ls(ctx, source).await?;
                 Ok(None)
             }
             other => Err(AppError::UnknownCommand(other.to_owned())),
@@ -228,6 +249,24 @@ pub async fn execute(
             } else if custom_id.starts_with("v1:followup:") {
                 // A Component `v1:followup` plans a modal and never executes.
                 Err(AppError::AlreadyHandled)
+            } else if let Some(rest) = custom_id.strip_prefix("v1:plan:") {
+                let (id, index) = parse_pair(rest)?;
+                handlers::run::plan_pick(ctx, id, index, source).await
+            } else if let Some(rest) = custom_id.strip_prefix("v1:planp:") {
+                let (id, page) = parse_pair(rest)?;
+                handlers::run::plan_page_edit(ctx, id, page, source).await?;
+                Ok(None)
+            } else if let Some(id) = custom_id.strip_prefix("v1:planuse:") {
+                handlers::run::plan_use(ctx, parse_action_id(id)?, source).await
+            } else if let Some(id) = custom_id.strip_prefix("v1:tpl:") {
+                handlers::run::toggle_template(ctx, parse_action_id(id)?, source).await
+            } else if let Some(rest) = custom_id.strip_prefix("v1:ls:") {
+                handlers::ls::component(ctx, source, rest).await
+            } else if let Some(index) = custom_id.strip_prefix("v1:lssel:") {
+                handlers::ls::select(ctx, source, parse_index(index)?).await
+            } else if custom_id.starts_with("v1:planother:") {
+                // A Component `v1:planother` plans a modal and never executes.
+                Err(AppError::AlreadyHandled)
             } else {
                 Err(AppError::UnknownCustomId(custom_id.to_owned()))
             }
@@ -237,6 +276,10 @@ pub async fn execute(
                 handlers::run::execute_newrun(ctx, source).await
             } else if custom_id == handlers::prompt::PROMPT_MODAL {
                 handlers::prompt::execute_prompt(ctx, source).await
+            } else if custom_id == handlers::ls::CD_MODAL {
+                handlers::ls::execute_cd(ctx, source).await
+            } else if let Some(id) = custom_id.strip_prefix(handlers::run::PLAN_OTHER_MODAL) {
+                handlers::run::execute_plan_other(ctx, parse_action_id(id)?, source).await
             } else if let Some(id) = custom_id.strip_prefix("v1:editgo:") {
                 handlers::run::execute_editgo(ctx, parse_action_id(id)?, source).await
             } else if let Some(id) = custom_id.strip_prefix("v1:followupgo:") {
@@ -278,6 +321,21 @@ fn parse_page(raw: &str) -> Result<usize, AppError> {
     raw.trim()
         .parse()
         .map_err(|_| AppError::UnknownCustomId(format!("bad page {raw:?}")))
+}
+
+/// Parse a bare usize index (`v1:lssel:<idx>`, `v1:ls:open:<idx>`).
+fn parse_index(raw: &str) -> Result<usize, AppError> {
+    raw.trim()
+        .parse()
+        .map_err(|_| AppError::UnknownCustomId(format!("bad index {raw:?}")))
+}
+
+/// Parse `<action_id>:<n>` (plan picks and plan paging).
+fn parse_pair(raw: &str) -> Result<(i64, usize), AppError> {
+    let (id, value) = raw
+        .split_once(':')
+        .ok_or_else(|| AppError::UnknownCustomId(format!("bad pair {raw:?}")))?;
+    Ok((parse_action_id(id)?, parse_index(value)?))
 }
 
 /// Parse `<action_rowid>:<decision>` for a permission-gate button.

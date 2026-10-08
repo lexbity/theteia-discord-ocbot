@@ -48,7 +48,7 @@ fn every_message_type_carries_operator_only_mentions() {
             &Footer::default(),
             &report_context(1, true),
         ),
-        staged_preview("label", "prompt text", 3, OPERATOR),
+        staged_preview("label", "prompt text", 3, OPERATOR, "fresh"),
         OutgoingMessage {
             content: "status".to_owned(),
             attachment: None,

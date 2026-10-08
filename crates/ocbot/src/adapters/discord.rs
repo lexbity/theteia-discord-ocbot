@@ -384,6 +384,8 @@ impl EventHandler for BotEvents {
                 "Interrupt the running action in the current directory",
             ),
             ("mute", "Toggle inbox reports for the current directory"),
+            ("ls", "Browse directories under the configured roots"),
+            ("cd", "Open a directory in the browser"),
         ] {
             let command = CreateCommand::new(name).description(description);
             if let Err(error) = ctx.http.create_global_command(&command).await {
@@ -410,14 +412,13 @@ impl EventHandler for BotEvents {
 
     async fn message(&self, _ctx: Context, message: Message) {
         // The one plain-message path in the bot (P14): replying to a posted
-        // inbox report continues that session as an adopted action. Every
-        // other message is ignored — the operator surface is interactions.
+        // inbox report continues that session as an adopted action. Attachments
+        // on any in-scope operator message are persisted (FR-36) and their
+        // paths become the draft. Every other message is ignored — the operator
+        // surface is interactions.
         if message.author.id.get() != self.ctx.guard.allowed_user_id || message.author.bot {
             return;
         }
-        let Some(reference) = message.referenced_message.clone() else {
-            return;
-        };
         let channel = message.channel_id.get();
         let in_scope = message.guild_id.is_none()
             || self.ctx.guard.ops_channel.is_some_and(|ops| ops == channel)
@@ -429,6 +430,28 @@ impl EventHandler for BotEvents {
         if !in_scope {
             return;
         }
+        for attachment in &message.attachments {
+            match attachment.download().await {
+                Ok(bytes) => {
+                    if let Err(error) = handlers::files::ingest(
+                        &self.ctx,
+                        message.author.id.get(),
+                        &attachment.filename,
+                        &bytes,
+                    )
+                    .await
+                    {
+                        tracing::warn!(error = %error, "attachment ingest failed");
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, "attachment download failed");
+                }
+            }
+        }
+        let Some(reference) = message.referenced_message.clone() else {
+            return;
+        };
         let Ok(Some((session, _))) = self
             .ctx
             .store

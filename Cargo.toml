@@ -43,6 +43,7 @@ tokio = { version = "1", features = [
 
 # --- pure core crate ---------------------------------------------------------
 async-trait = "0.1"
+pulldown-cmark = { version = "0.13", default-features = false }
 
 # --- shell crate (Phase 2+) --------------------------------------------------
 rusqlite = { version = "0.32", features = ["bundled"] }

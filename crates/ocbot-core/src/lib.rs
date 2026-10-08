@@ -15,23 +15,29 @@ pub mod gates;
 pub mod history;
 pub mod outcome;
 pub mod paths;
+pub mod plan;
 pub mod ports;
 pub mod render;
 pub mod state;
 pub mod templates;
 
-pub use error::{GitError, OcError};
+pub use error::{FsError, GitError, OcError};
 pub use gates::{
     FormField, FormFieldKind, FormOption, FormPlaybook, GateDecision, GateKind, GateRequest,
     MAX_FORM_FIELDS, form_playbook, form_renderable,
 };
 pub use history::{HistoryAction, HistoryKind, HistoryRow, merge};
 pub use outcome::{AssistantSnapshot, Classification, Outcome, TokenCounts, classify};
-pub use paths::{dir_hash, slug};
+pub use paths::{content_tag8, dir_hash, is_inside, sanitize_name, slug, yyyymmdd};
+pub use plan::{
+    DEFAULT_HEADING_MAX, DEFAULT_HEADING_MIN, OTHER_OPTION_LABEL, PLAN_PAGE_SIZE, PickOption,
+    PlanPage, parse_plan, plan_page,
+};
 pub use ports::HookFailure;
 pub use render::{
-    AttachmentSpec, ButtonKind, ComponentSpec, Footer, HISTORY_PAGE_SIZE, OutgoingMessage,
-    ReportContext, component_button, component_button_state, decision_buttons, fence_neutralize,
-    gate_message, headline, history_page, report, split_excerpt, staged_preview,
+    AttachmentSpec, ButtonKind, ComponentSpec, Footer, HISTORY_PAGE_SIZE, LS_PAGE_SIZE, LsEntry,
+    OutgoingMessage, ReportContext, component_button, component_button_state, decision_buttons,
+    fence_neutralize, gate_message, headline, history_page, ls_message, plan_picker_message,
+    report, split_excerpt, staged_preview,
 };
 pub use state::{ALL_STATES, CasIntent, Column, Event, State, WriteValue, transition};

@@ -11,6 +11,7 @@ use opencode_v2_client::Client as OpenCodeClient;
 
 use crate::adapters::clock::SystemClock;
 use crate::adapters::discord::{DiscordAdapter, shared_http, start_gateway};
+use crate::adapters::fs::FsAdapter;
 use crate::adapters::git::GitAdapter;
 use crate::adapters::opencode::OpenCodeAdapter;
 use crate::adapters::store::StoreHandle;
@@ -23,7 +24,7 @@ use crate::app::metrics::{self, Metrics};
 use crate::app::reconcile;
 use crate::app::watcher::Watcher;
 use crate::config::{Config, Secrets, config_path};
-use ocbot_core::ports::{GitPort, OpenCodePort, PermissionRule};
+use ocbot_core::ports::{Clock, FsPort, GitPort, OpenCodePort, PermissionRule};
 
 /// The tokio entry invoked by `main`. Returns the process exit code.
 #[expect(
@@ -127,10 +128,28 @@ pub async fn start() -> ExitCode {
     };
 
     let metrics = Arc::new(Metrics::new());
+    let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let git: Arc<dyn GitPort> = Arc::new(GitAdapter::with_bin(
         "git",
         Duration::from_secs(config.git_timeout_secs),
     ));
+    let fs: Arc<dyn FsPort> = match FsAdapter::new(
+        config
+            .browse_roots
+            .iter()
+            .map(Path::new)
+            .map(Path::to_path_buf)
+            .collect(),
+        Path::new(&config.inbox_dir).to_path_buf(),
+        config.freeform_paths(),
+        clock.clone(),
+    ) {
+        Ok(adapter) => Arc::new(adapter),
+        Err(error) => {
+            tracing::error!(error = %error, "filesystem adapter rejected the browse roots");
+            return ExitCode::from(1);
+        }
+    };
     let opencode: Arc<dyn OpenCodePort> = Arc::new(OpenCodeAdapter::new(client));
     let discord_surface: Arc<dyn DiscordPort> =
         Arc::new(DiscordAdapter::new(shared_http(&token, operator), operator));
@@ -143,13 +162,17 @@ pub async fn start() -> ExitCode {
         store: store.clone(),
         opencode,
         git,
-        clock: Arc::new(SystemClock),
+        fs,
+        clock,
         abort_timeout_secs: config.abort_timeout_secs,
         permission_ruleset,
         discord: discord_surface,
         metrics: metrics.clone(),
         guard,
         templates,
+        plan_heading_min: config.plan_heading_min,
+        plan_heading_max: config.plan_heading_max,
+        ls_page_size: config.ls_page_size,
     });
 
     if let Ok(counts) = store.action_counts_by_state().await {

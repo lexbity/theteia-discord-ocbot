@@ -121,12 +121,22 @@ pub async fn execute_prompt(
         session
     };
 
+    // A draft path (browser selection or uploaded attachment, P11/FR-36) is
+    // referenced by absolute path and consumed once.
+    let mut prompt_text = prompt.to_owned();
+    if let Some(draft) = ctx.store.draft_path(source.user_id).await? {
+        if std::path::Path::new(&draft).is_file() {
+            prompt_text = format!("{prompt_text}\n\nAttachment: {draft}");
+        }
+        ctx.store.clear_draft_path(source.user_id).await?;
+    }
+
     let channel = i64::try_from(source.channel_id).unwrap_or(i64::MAX);
     let run_id = ctx.store.insert_run(&dir_name, "free").await?;
-    let label: String = prompt.chars().take(40).collect();
+    let label: String = prompt_text.chars().take(40).collect();
     let action_id = ctx
         .store
-        .insert_action(run_id, Some(channel), &label, prompt, 1)
+        .insert_action(run_id, Some(channel), &label, &prompt_text, 1)
         .await?;
     ctx.store.set_ui_cwd(source.user_id, &dir_name).await?;
 

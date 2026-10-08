@@ -19,8 +19,8 @@ use async_trait::async_trait;
 
 use ocbot_core::outcome::{AssistantSnapshot, TokenCounts};
 use ocbot_core::ports::{
-    Activity, Clock, GateDecision, GateRequest, GitPort, HookFailure, OpenCodePort, PermissionRule,
-    PortSession, PromptAdmission, ServerFacts, SessionId,
+    Activity, Clock, FsPort, GateDecision, GateRequest, GitPort, HookFailure, OpenCodePort,
+    PermissionRule, PortSession, PromptAdmission, ServerFacts, SessionId,
 };
 use ocbot_core::{GitError, OcError, OutgoingMessage};
 
@@ -515,6 +515,7 @@ pub struct FakeDiscord {
 #[derive(Default)]
 struct FakeDiscordInner {
     posts: Vec<Posted>,
+    edits: Vec<(u64, u64, OutgoingMessage)>,
     reactions: Vec<(u64, u64, char)>,
     next_id: u64,
 }
@@ -528,6 +529,11 @@ impl FakeDiscord {
     /// All posts in order.
     pub fn posts(&self) -> Vec<Posted> {
         self.inner.lock().expect("lock").posts.clone()
+    }
+
+    /// In-place edits in order.
+    pub fn edits(&self) -> Vec<(u64, u64, OutgoingMessage)> {
+        self.inner.lock().expect("lock").edits.clone()
     }
 
     /// Reactions in order.
@@ -557,10 +563,15 @@ impl DiscordPort for FakeDiscord {
 
     async fn edit(
         &self,
-        _channel: u64,
-        _message: u64,
-        _replacement: &OutgoingMessage,
+        channel: u64,
+        message: u64,
+        replacement: &OutgoingMessage,
     ) -> Result<(), SendError> {
+        self.inner
+            .lock()
+            .expect("lock")
+            .edits
+            .push((channel, message, replacement.clone()));
         Ok(())
     }
 
@@ -626,10 +637,43 @@ pub fn context_with(
     operator: u64,
     ops_channel: Option<u64>,
 ) -> Arc<AppContext> {
+    let fs = permissive_fs(clock.clone());
+    context_with_fs(
+        store,
+        opencode,
+        git,
+        fs,
+        clock,
+        permission_ruleset,
+        abort_timeout_secs,
+        discord,
+        operator,
+        ops_channel,
+    )
+}
+
+/// A context builder with an explicit fs port (the browser/attachment tests).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "test harness context builder: every parameter is a deliberate injection"
+)]
+pub fn context_with_fs(
+    store: StoreHandle,
+    opencode: Arc<dyn OpenCodePort>,
+    git: Arc<dyn GitPort>,
+    fs: Arc<dyn FsPort>,
+    clock: Arc<dyn Clock>,
+    permission_ruleset: Option<Vec<PermissionRule>>,
+    abort_timeout_secs: u64,
+    discord: Arc<dyn DiscordPort>,
+    operator: u64,
+    ops_channel: Option<u64>,
+) -> Arc<AppContext> {
     Arc::new(AppContext {
         store,
         opencode,
         git,
+        fs,
         clock,
         abort_timeout_secs,
         permission_ruleset,
@@ -641,7 +685,21 @@ pub fn context_with(
             inbox_channel: None,
         },
         templates: workspace_templates(),
+        plan_heading_min: ocbot_core::DEFAULT_HEADING_MIN,
+        plan_heading_max: ocbot_core::DEFAULT_HEADING_MAX,
+        ls_page_size: ocbot_core::LS_PAGE_SIZE,
     })
+}
+
+/// A real fs adapter rooted at `/` with freeform paths on: enough for tests
+/// that only need a working fs port. Tests that exercise containment build
+/// their own restricted adapter via [`context_with_fs`].
+pub fn permissive_fs(clock: Arc<dyn Clock>) -> Arc<dyn FsPort> {
+    let inbox = std::env::temp_dir().join("ocbot-test-inbox");
+    Arc::new(
+        ocbot::adapters::fs::FsAdapter::new(vec![PathBuf::from("/")], inbox, true, clock)
+            .expect("permissive fs adapter"),
+    )
 }
 
 /// A scriptable clock for the re-ping policy tests (P4).

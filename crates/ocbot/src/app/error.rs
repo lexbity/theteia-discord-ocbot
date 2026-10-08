@@ -1,7 +1,7 @@
 //! App errors.
 
 use crate::adapters::store::StoreError;
-use ocbot_core::{GitError, OcError};
+use ocbot_core::{FsError, GitError, OcError};
 
 /// The app-level error used by handlers, the watcher, and reconcile.
 #[derive(Debug, thiserror::Error)]
@@ -15,6 +15,9 @@ pub enum AppError {
     /// git port failure.
     #[error("git: {0}")]
     Git(#[from] GitError),
+    /// fs port failure (browse containment, listing, attachments).
+    #[error("fs: {0}")]
+    Fs(#[from] FsError),
     /// Discord send failure.
     #[error("discord: {0}")]
     Discord(#[from] crate::app::context::SendError),

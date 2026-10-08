@@ -33,6 +33,25 @@ pub enum OcError {
     Decode(String),
 }
 
+/// A failure in the fs adapter (browse containment, listing, attachment
+/// persistence). FR-35 requires containment to be re-verified at every use, so
+/// the adapter is the only place filesystem paths become real.
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+pub enum FsError {
+    /// The path (after realpath) is not inside any configured browse root.
+    #[error("path {path:?} is outside the allowed roots (FR-34/FR-35)")]
+    OutsideRoots {
+        /// The offending path as given.
+        path: String,
+    },
+    /// The path does not exist or cannot be canonicalized.
+    #[error("path not found: {0}")]
+    NotFound(String),
+    /// Any other filesystem error.
+    #[error("fs: {0}")]
+    Io(String),
+}
+
 /// A failure running a git command. The read-only half of the git adapter
 /// (spec P7: argv-only; the adapter is the only spawn site).
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]

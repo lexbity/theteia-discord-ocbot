@@ -1,12 +1,18 @@
-//! Pure path utilities used by the git-truth handlers (spec P7).
+//! Pure path utilities used by the git-truth handlers (spec P7) and the Phase 6
+//! file browser.
 //!
-//! This module is deliberately I/O-free: the fs adapter owns `realpath` and
-//! containment re-checks (Phase 6, FR-35). Here we only need a deterministic
-//! branch-name slug and a stable short hash for `custom_id`s that must fit in
-//! Discord's 100-byte cap without holding UI state in memory (D-6).
+//! This module is deliberately I/O-free: the fs adapter owns `realpath` and the
+//! *real* containment re-check (Phase 6, FR-35). Here we define the pure,
+//! testable pieces: a branch-name slug, a stable short hash for `custom_id`s
+//! (D-6), a lexical containment predicate, attachment-name sanitization, and a
+//! dependency-free civil-date conversion for `INBOX_DIR/<yyyymmdd>/`.
+
+use std::path::{Component, Path, PathBuf};
 
 /// The maximum slug length (spec P7: `[a-z0-9-]{1,40}`).
 pub const SLUG_MAX: usize = 40;
+/// The maximum sanitized attachment file-name length.
+pub const NAME_MAX: usize = 80;
 
 /// Turn an arbitrary operator label into a branch-safe slug.
 ///
@@ -51,6 +57,108 @@ pub fn dir_hash(dir: &str) -> String {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     format!("{hash:016x}")
+}
+
+/// Lexical containment: does `candidate` live at or under `root`?
+///
+/// This is the pure half of FR-35. `..` is resolved lexically and can never
+/// escape the root; the fs adapter additionally `realpath`s both sides so a
+/// symlink swap between the check and the use is still caught at use time.
+pub fn is_inside(root: &Path, candidate: &Path) -> bool {
+    normalize_lexical(candidate).starts_with(normalize_lexical(root))
+}
+
+/// Resolve `.`/`..` components lexically without touching the filesystem.
+fn normalize_lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => out.push(prefix.as_os_str()),
+            Component::RootDir => out.push(Component::RootDir.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::Normal(part) => out.push(part),
+        }
+    }
+    out
+}
+
+/// Sanitize an operator-supplied file name for `INBOX_DIR`.
+///
+/// The result is a single path component: directory separators are dropped,
+/// every character outside `[A-Za-z0-9._-]` becomes `_`, leading/trailing dots
+/// and underscores are trimmed (so `..` and dotfiles cannot survive), and the
+/// name is capped at [`NAME_MAX`]. Empty/`.`/`..` inputs become `file`.
+pub fn sanitize_name(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let mut out = String::with_capacity(base.len());
+    for ch in base.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    let trimmed = out.trim_matches(['.', '_']);
+    let limited: String = trimmed.chars().take(NAME_MAX).collect();
+    // `trim_matches` can never leave a leading/trailing dot, so the only
+    // degenerate outcome is empty (`..`, `.`, separators, empty input).
+    if limited.is_empty() {
+        "file".to_owned()
+    } else {
+        limited
+    }
+}
+
+/// A short (~8 hex char) content discriminator for attachment file names.
+///
+/// This is FNV-1a truncated, **not** a cryptographic digest: it only breaks
+/// ties between same-named uploads in one day bucket, and a collision costs one
+/// overwritten file, never a correctness guarantee.
+pub fn content_tag8(bytes: &[u8]) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{:08x}", hash & 0xffff_ffff)
+}
+
+/// Format a unix timestamp as `yyyymmdd` (UTC) for the inbox date bucket.
+///
+/// Uses Howard Hinnant's civil-from-days algorithm, so the core needs no date
+/// dependency and the conversion is pure and independently testable.
+pub fn yyyymmdd(unix_secs: i64) -> String {
+    let days = unix_secs.div_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    format!("{year:04}{month:02}{day:02}")
+}
+
+/// Days since 1970-01-01 → (year, month, day) in the proleptic Gregorian
+/// calendar.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let shifted = days + 719_468;
+    let era = if shifted >= 0 {
+        shifted
+    } else {
+        shifted - 146_096
+    } / 146_097;
+    let day_of_era = shifted - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let mp = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 { year + 1 } else { year };
+    (
+        year,
+        u32::try_from(month).unwrap_or(1),
+        u32::try_from(day).unwrap_or(1),
+    )
 }
 
 #[cfg(test)]

@@ -204,11 +204,18 @@ pub async fn resume(
             action.channel_id,
             &action.label,
             &action.prompt_sent,
+            &action.template,
             action.attempt + 1,
             action.id,
         )
         .await?;
-    let preview = staged_preview(&action.label, &action.prompt_sent, child, operator_id);
+    let preview = staged_preview(
+        &action.label,
+        &action.prompt_sent,
+        child,
+        operator_id,
+        &action.template,
+    );
     ctx.discord.post(channel, &preview).await?;
     checkpoint("CP-P4");
     Ok(Some(format!(

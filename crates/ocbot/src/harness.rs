@@ -45,10 +45,18 @@ pub async fn run_from_env() -> Result<(), String> {
         .unwrap_or(42_u64);
 
     let store = StoreHandle::open(Path::new(&db)).map_err(|error| error.to_string())?;
+    let fs = crate::adapters::fs::FsAdapter::new(
+        vec![std::path::PathBuf::from("/")],
+        std::env::temp_dir().join("ocbot-harness-inbox"),
+        true,
+        Arc::new(crate::adapters::clock::SystemClock),
+    )
+    .map_err(|error| error.to_string())?;
     let ctx = Arc::new(AppContext {
         store: store.clone(),
         opencode: Arc::new(DeadOpenCode),
         git: Arc::new(GitAdapter::new()),
+        fs: Arc::new(fs),
         clock: Arc::new(crate::adapters::clock::SystemClock),
         abort_timeout_secs: 30,
         permission_ruleset: None,
@@ -65,6 +73,9 @@ pub async fn run_from_env() -> Result<(), String> {
             fresh: String::new(),
             resume: String::new(),
         },
+        plan_heading_min: ocbot_core::DEFAULT_HEADING_MIN,
+        plan_heading_max: ocbot_core::DEFAULT_HEADING_MAX,
+        ls_page_size: ocbot_core::LS_PAGE_SIZE,
     });
 
     match mode.as_str() {

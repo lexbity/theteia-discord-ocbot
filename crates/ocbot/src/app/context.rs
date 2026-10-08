@@ -6,7 +6,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use ocbot_core::OutgoingMessage;
-use ocbot_core::ports::{Clock, GitPort, OpenCodePort, PermissionRule};
+use ocbot_core::ports::{Clock, FsPort, GitPort, OpenCodePort, PermissionRule};
 
 use crate::adapters::store::StoreHandle;
 use crate::app::guard::Guard;
@@ -46,6 +46,8 @@ pub struct AppContext {
     pub opencode: Arc<dyn OpenCodePort>,
     /// The git port (adapter in prod, fake in tests).
     pub git: Arc<dyn GitPort>,
+    /// The filesystem port (browse containment + attachments, P11/FR-34..36).
+    pub fs: Arc<dyn FsPort>,
     /// The injected time source (P4: the re-ping policy is fake-clock tested).
     pub clock: Arc<dyn Clock>,
     /// How long `/abort` waits for the server to confirm idle before giving up
@@ -62,4 +64,10 @@ pub struct AppContext {
     pub guard: Guard,
     /// Load-time validated prompt templates.
     pub templates: Templates,
+    /// Plan-picker heading depth range (P12).
+    pub plan_heading_min: u32,
+    /// Plan-picker heading depth range (P12).
+    pub plan_heading_max: u32,
+    /// Browser entries per page (P10).
+    pub ls_page_size: usize,
 }

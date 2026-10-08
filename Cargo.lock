@@ -1099,6 +1099,7 @@ name = "ocbot-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "pulldown-cmark",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -1223,6 +1224,17 @@ dependencies = [
  "rusty-fork",
  "tempfile",
  "unarray",
+]
+
+[[package]]
+name = "pulldown-cmark"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9f068eba8e7071c5f9511831b44f32c740d5adf574e990f946ddb53db2f314e"
+dependencies = [
+ "bitflags",
+ "memchr",
+ "unicase",
 ]
 
 [[package]]

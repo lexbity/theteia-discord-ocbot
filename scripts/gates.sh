@@ -141,4 +141,27 @@ if grep -rn "PER_SESSION_RULESET=true\|per_session_ruleset = true" crates/ 2>/de
 fi
 probe "G13" "per_session_ruleset = true" 'per_session_ruleset = true'
 
+# --- Phase 6 appended gates (spec Part 2, Phase 6) -------------------------
+# G14: freeform paths ship default-off (P11); containment (FR-34/FR-35) is the
+# baseline, and enabling freeform is a deliberate deployment act, never a
+# literal in the tree.
+if grep -rn "ALLOW_FREEFORM_PATHS=true\|allow_freeform_paths = true" crates/ 2>/dev/null; then
+  fail "G14: freeform paths must stay default-off (P11)"
+fi
+probe "G14" "allow_freeform_paths = true" 'allow_freeform_paths = true'
+
+# G15: no shell interpreter is spawned anywhere in the workspace (belt+braces;
+# G5/G7 already confine spawns to the git adapter, which is argv-only).
+if grep -rnE 'Command::new\("(sh|bash|zsh|dash|fish)"\)' crates/ 2>/dev/null; then
+  fail "G15: shell-interpreter spawn found in crates/"
+fi
+probe "G15" 'Command::new\("sh"\)' 'let c = Command::new("sh");'
+
+# G16: the fs adapter is the only place a path becomes real — the browser and
+# plan handlers must go through the port, never `std::fs` directly.
+if grep -rn "std::fs::" crates/ocbot/src/app/handlers/ls.rs crates/ocbot/src/app/handlers/run.rs 2>/dev/null; then
+  fail "G16: handlers must use the fs port, not std::fs directly (FR-35)"
+fi
+probe "G16" "std::fs::" 'let x = std::fs::read_to_string(p);'
+
 echo "gates: OK"

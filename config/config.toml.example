@@ -42,3 +42,20 @@ git_timeout_secs = 10
 # created session. Keep off until S-3 confirms combine semantics (D-R6).
 # per_session_ruleset = false
 # permissions_file = "config/opencode.permissions.jsonc"
+
+# Phase 6 files & plans -------------------------------------------------------
+# The roots the /ls browser and typed paths are confined to (P11/FR-34).
+# browse_roots = ["/home"]
+
+# Where uploaded attachments are persisted (P11/FR-36).
+# inbox_dir = "inbox"
+
+# Allow typed paths outside browse_roots (default false; P11).
+# allow_freeform_paths = false
+
+# Plan picker heading depth range (P12; default 2..=3).
+# plan_heading_min = 2
+# plan_heading_max = 3
+
+# /ls entries per page (P10).
+# ls_page_size = 18

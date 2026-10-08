@@ -11,6 +11,7 @@ use crate::gates::{FormFieldKind, FormPlaybook, GateKind, GateRequest, form_play
 use crate::history::{HistoryKind, HistoryRow};
 use crate::outcome::Outcome;
 use crate::outcome::TokenCounts;
+use crate::plan::{OTHER_OPTION_LABEL, PLAN_PAGE_SIZE, PickOption};
 
 /// Discord's hard message cap (spec P10).
 pub const DISCORD_MESSAGE_CAP: usize = 2_000;
@@ -359,18 +360,28 @@ fn sanitize_label(label: &str) -> String {
 
 /// A preview spec for a staged action: the prompt text plus the
 /// Send / Edit-and-send buttons (`custom_id` grammar `v1:send:<id>` /
-/// `v1:edit:<id>`).
+/// `v1:edit:<id>`) and the Phase 6 template toggle (`v1:tpl:<id>`).
+///
+/// `template` is the envelope currently rendered (`"fresh"` or `"resume"`); the
+/// toggle button offers the *other* one. Re-rendering happens at review time so
+/// `{git_log}`/`{git_status}` are fresh (FR-6/P13).
 pub fn staged_preview(
     label: &str,
     prompt: &str,
     action_id: i64,
     operator_id: u64,
+    template: &str,
 ) -> OutgoingMessage {
     let label = sanitize_label(label);
     let content = format!(
-        "**Ready to run: {label}**\n```\n{}\n```",
+        "**Ready to run: {label}**\n_template: {template}_\n```\n{}\n```",
         fence_neutralize(prompt)
     );
+    let toggle_label = if template == "resume" {
+        "Use fresh template"
+    } else {
+        "Use resume template"
+    };
     OutgoingMessage {
         content,
         attachment: None,
@@ -385,7 +396,163 @@ pub fn staged_preview(
                 format!("v1:edit:{action_id}"),
                 ButtonKind::Secondary,
             ),
+            component_button(
+                toggle_label,
+                format!("v1:tpl:{action_id}"),
+                ButtonKind::Secondary,
+            ),
         ],
+        mentioned_users: vec![operator_id],
+    }
+}
+
+/// One browser row (rendered from an fs `DirEntry`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LsEntry {
+    /// The base name.
+    pub name: String,
+    /// Whether opening it descends into a directory.
+    pub is_dir: bool,
+}
+
+/// Rows per `/ls` page. Leaves room for Up/Select/Prev/Next under Discord's
+/// 25-component cap (P10).
+pub const LS_PAGE_SIZE: usize = 18;
+
+/// Render the `/ls` browser page (FR-34): an Up button, one Open (directory) or
+/// Select (file) button per entry, a "select this directory" action, and paging.
+///
+/// Selections carry only the global entry *index*; the handler re-lists the
+/// directory and resolves it (`v1:ls:open:<idx>` / `v1:lssel:<idx>`), so no UI
+/// state lives in memory (D-6).
+pub fn ls_message(
+    cwd: &str,
+    entries: &[LsEntry],
+    page: usize,
+    page_size: usize,
+    operator_id: u64,
+) -> OutgoingMessage {
+    let page_size = page_size.max(1);
+    let total_pages = entries.len().div_ceil(page_size).max(1);
+    let page = page.min(total_pages - 1);
+    let start = page * page_size;
+    let end = (start + page_size).min(entries.len());
+
+    let content = format!(
+        "**Browse — `{}`**\n{} entries · page {}/{}\n_open a directory or select a file; its path is kept for the next prompt._",
+        inline_safe(cwd),
+        entries.len(),
+        page + 1,
+        total_pages
+    );
+    let mut components = vec![component_button(
+        "⬆ Up",
+        "v1:ls:up".to_owned(),
+        ButtonKind::Secondary,
+    )];
+    for (offset, entry) in entries[start..end].iter().enumerate() {
+        let index = start + offset;
+        let name: String = inline_safe(&entry.name).chars().take(60).collect();
+        if entry.is_dir {
+            components.push(component_button(
+                format!("📁 {name}"),
+                format!("v1:ls:open:{index}"),
+                ButtonKind::Primary,
+            ));
+        } else {
+            components.push(component_button(
+                format!("📄 {name}"),
+                format!("v1:lssel:{index}"),
+                ButtonKind::Secondary,
+            ));
+        }
+    }
+    components.push(component_button(
+        "✓ Select this directory",
+        "v1:ls:use".to_owned(),
+        ButtonKind::Success,
+    ));
+    if page > 0 {
+        components.push(component_button(
+            "◀ Prev",
+            format!("v1:ls:p:{}", page - 1),
+            ButtonKind::Secondary,
+        ));
+    }
+    if page + 1 < total_pages {
+        components.push(component_button(
+            "Next ▶",
+            format!("v1:ls:p:{}", page + 1),
+            ButtonKind::Secondary,
+        ));
+    }
+
+    OutgoingMessage {
+        content,
+        attachment: None,
+        components,
+        mentioned_users: vec![operator_id],
+    }
+}
+
+/// Render the plan-step picker (P12): one button per option on this page, paging,
+/// and the always-present "Other: type it" / "Use typed label" affordances.
+pub fn plan_picker_message(
+    label: &str,
+    options: &[PickOption],
+    page: usize,
+    action_id: i64,
+    operator_id: u64,
+) -> OutgoingMessage {
+    let page_data = crate::plan::plan_page(options, page, PLAN_PAGE_SIZE);
+    let mut content = format!(
+        "**Plan steps — {}**\n{} option(s) · page {}/{}\n_pick a step to prefill the label; the prompt is still yours to edit._",
+        inline_safe(label),
+        options.len(),
+        page_data.page + 1,
+        page_data.total_pages
+    );
+    let mut components = Vec::new();
+    for (offset, option) in page_data.options.iter().enumerate() {
+        let index = page_data.page * PLAN_PAGE_SIZE + offset;
+        let button_label: String = inline_safe(&option.label).chars().take(60).collect();
+        components.push(component_button(
+            button_label,
+            format!("v1:plan:{action_id}:{index}"),
+            ButtonKind::Primary,
+        ));
+    }
+    if page_data.has_prev() {
+        components.push(component_button(
+            "◀ Prev",
+            format!("v1:planp:{action_id}:{}", page_data.page - 1),
+            ButtonKind::Secondary,
+        ));
+    }
+    if page_data.has_next() {
+        components.push(component_button(
+            "Next ▶",
+            format!("v1:planp:{action_id}:{}", page_data.page + 1),
+            ButtonKind::Secondary,
+        ));
+    }
+    components.push(component_button(
+        OTHER_OPTION_LABEL,
+        format!("v1:planother:{action_id}"),
+        ButtonKind::Secondary,
+    ));
+    components.push(component_button(
+        "Use typed label",
+        format!("v1:planuse:{action_id}"),
+        ButtonKind::Secondary,
+    ));
+    // Content lists the section context through the buttons; keep the header
+    // short but non-empty (Discord rejects empty content without components).
+    content.push_str("\n_options are the plan's list items under the chosen headings._");
+    OutgoingMessage {
+        content,
+        attachment: None,
+        components,
         mentioned_users: vec![operator_id],
     }
 }
@@ -609,8 +776,9 @@ fn describe_kind(kind: &FormFieldKind) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        DISCORD_MESSAGE_CAP, Footer, Outcome, ReportContext, TokenCounts, decision_buttons,
-        fence_neutralize, gate_message, report, split_excerpt, staged_preview,
+        DISCORD_MESSAGE_CAP, Footer, LS_PAGE_SIZE, Outcome, PLAN_PAGE_SIZE, ReportContext,
+        TokenCounts, decision_buttons, fence_neutralize, gate_message, report, split_excerpt,
+        staged_preview,
     };
     use crate::gates::{
         FormField, FormFieldKind, FormOption, GateKind, GateRequest, MAX_FORM_FIELDS,
@@ -694,12 +862,80 @@ mod tests {
     }
 
     #[test]
-    fn preview_carries_send_and_edit_buttons() {
-        let preview = staged_preview("poke", "do the thing", 123, 9);
-        assert_eq!(preview.components.len(), 2);
+    fn preview_carries_send_edit_and_template_buttons() {
+        let preview = staged_preview("poke", "do the thing", 123, 9, "fresh");
+        assert_eq!(preview.components.len(), 3);
         assert_eq!(preview.components[0].custom_id, "v1:send:123");
         assert_eq!(preview.components[1].custom_id, "v1:edit:123");
+        assert_eq!(preview.components[2].custom_id, "v1:tpl:123");
+        assert_eq!(preview.components[2].label, "Use resume template");
         assert_eq!(preview.mentioned_users, vec![9]);
+        let resume = staged_preview("poke", "do the thing", 123, 9, "resume");
+        assert_eq!(resume.components[2].label, "Use fresh template");
+    }
+
+    #[test]
+    fn ls_message_pages_and_uses_global_indices() {
+        let entries: Vec<super::LsEntry> = (0..LS_PAGE_SIZE + 2)
+            .map(|index| super::LsEntry {
+                name: format!("entry{index}"),
+                is_dir: index % 2 == 0,
+            })
+            .collect();
+        let first = super::ls_message("/root", &entries, 0, LS_PAGE_SIZE, 7);
+        assert_eq!(first.components[0].custom_id, "v1:ls:up");
+        assert!(
+            first
+                .components
+                .iter()
+                .any(|c| c.custom_id == "v1:ls:open:0")
+        );
+        assert!(first.components.iter().any(|c| c.custom_id == "v1:lssel:1"));
+        assert!(first.components.iter().any(|c| c.custom_id == "v1:ls:p:1"));
+        let second = super::ls_message("/root", &entries, 1, LS_PAGE_SIZE, 7);
+        // The first entry of page 1 carries the global index LS_PAGE_SIZE.
+        assert!(
+            second
+                .components
+                .iter()
+                .any(|c| c.custom_id == format!("v1:ls:open:{LS_PAGE_SIZE}")),
+            "global index on page 2"
+        );
+    }
+
+    #[test]
+    fn plan_picker_pages_and_always_offers_other() {
+        let options: Vec<crate::plan::PickOption> = (0..PLAN_PAGE_SIZE + 5)
+            .map(|index| crate::plan::PickOption {
+                label: format!("step {index}"),
+                section: None,
+            })
+            .collect();
+        let message = super::plan_picker_message("task", &options, 0, 3, 7);
+        assert!(
+            message
+                .components
+                .iter()
+                .any(|c| c.custom_id == "v1:plan:3:0")
+        );
+        assert!(
+            message
+                .components
+                .iter()
+                .any(|c| c.custom_id == "v1:planp:3:1")
+        );
+        assert!(
+            message
+                .components
+                .iter()
+                .any(|c| c.custom_id == "v1:planother:3")
+        );
+        assert!(
+            message
+                .components
+                .iter()
+                .any(|c| c.custom_id == "v1:planuse:3")
+        );
     }
 
     #[test]

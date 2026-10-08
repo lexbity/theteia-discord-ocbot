@@ -1,6 +1,8 @@
-//! The `/run` flow (spec FR-6, Phase 2 slice): directory → label → rendered
-//! preview → Send/Edit-and-send. No plan picker yet (Phase 6); the dirty-tree
-//! warning with its "Run anyway" button (FR-27) IS in this slice.
+//! The `/run` flow (spec FR-6, completed in Phase 6): directory → optional plan
+//! → item picker → rendered-prompt review (Edit & send / Send) → staged action.
+//! The plan is read-only input parsed fresh at each open (P12); a pick only
+//! prefills the label. The dirty-tree warning with its "Run anyway" button
+//! (FR-27) and the review-time fresh/resume template toggle (P13) live here too.
 //!
 //! Plan/execute split: the modal-returning plans do one fast SQLite read each;
 //! every execute pass happens after a deferral ack.
@@ -9,7 +11,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use ocbot_core::plan::{PickOption, parse_plan};
 use ocbot_core::ports::Activity;
+use ocbot_core::render::plan_picker_message;
 use ocbot_core::templates;
 use ocbot_core::{ButtonKind, OutgoingMessage, State, component_button, staged_preview};
 
@@ -20,12 +24,16 @@ use crate::app::interaction::{InputStyle, InteractionSource, ModalInputSpec, Mod
 
 /// The new-run modal `custom_id`.
 pub const NEW_RUN_MODAL: &str = "v1:newrun";
+/// The plan "Other" modal `custom_id` prefix.
+pub const PLAN_OTHER_MODAL: &str = "v1:planothergo:";
 /// Maximum git-log rows in the `{git_log}` slot.
 const GIT_LOG_ROWS: usize = 15;
 /// Maximum git-status lines in the `{git_status}` slot.
 const GIT_STATUS_LINES: usize = 15;
 
-/// Plan phase for `/run`: the new-run modal, directory prefilled from history.
+/// Plan phase for `/run`: the new-run modal, directory prefilled from history
+/// and the plan field from the user's draft path (a browser selection or an
+/// uploaded attachment, P11).
 pub async fn begin_modal(
     ctx: &Arc<AppContext>,
     source: &InteractionSource,
@@ -35,11 +43,19 @@ pub async fn begin_modal(
         None => ctx
             .store
             .recent_dirs(1)
-            .await
-            .ok()
-            .and_then(|dirs| dirs.first().cloned())
+            .await?
+            .first()
+            .cloned()
             .unwrap_or_default(),
     };
+    // Only a *file* draft (an upload or a selected file) is a plausible plan;
+    // a directory selection is meant for the plan field only after `/ls` drills
+    // in, so it is not prefilled here.
+    let plan_prefill = ctx
+        .store
+        .draft_path(source.user_id)
+        .await?
+        .filter(|path| Path::new(path).is_file());
     Ok(ModalSpec {
         custom_id: NEW_RUN_MODAL.to_owned(),
         title: "ocbot — new run".to_owned(),
@@ -58,12 +74,20 @@ pub async fn begin_modal(
                 value: None,
                 required: true,
             },
+            ModalInputSpec {
+                id: "plan".to_owned(),
+                label: "Plan (optional .md)".to_owned(),
+                style: InputStyle::Short,
+                value: plan_prefill,
+                required: false,
+            },
         ],
     })
 }
 
-/// Execute phase for the `v1:newrun` modal: validate inputs, stage the action,
-/// post the preview with Send / Edit-and-send buttons.
+/// Execute phase for the `v1:newrun` modal: validate inputs, resolve a plan when
+/// given (containment re-checked at use, FR-35), stage the action, and either
+/// post the plan picker or the rendered preview.
 pub async fn execute_newrun(
     ctx: &Arc<AppContext>,
     source: &InteractionSource,
@@ -81,9 +105,29 @@ pub async fn execute_newrun(
     if directory.is_empty() {
         return Err(AppError::Other("a directory is required".to_owned()));
     }
-    let canonical = realpath(Path::new(&directory))
-        .map_err(|error| AppError::Other(format!("directory {directory:?}: {error}")))?;
+    let canonical = ctx.fs.resolve(Path::new(&directory)).await?;
     let dir_name = canonical.to_string_lossy().into_owned();
+
+    // The plan path is optional and strictly resolved through the fs port, so a
+    // refusal happens before any DB write (zero side effects).
+    let plan_input = source.input("plan").map(str::trim).unwrap_or_default();
+    let plan_path = if plan_input.is_empty() {
+        None
+    } else {
+        Some(
+            ctx.fs
+                .resolve(Path::new(plan_input))
+                .await?
+                .to_string_lossy()
+                .into_owned(),
+        )
+    };
+    // Read and parse the plan *before* any DB write: a containment/read failure
+    // must leave zero side effects (FR-35).
+    let plan_options = match &plan_path {
+        Some(path) => load_plan(ctx, path).await?,
+        None => Vec::new(),
+    };
 
     let (branch, base) = if ctx.git.is_repo(&canonical).await? {
         (
@@ -97,8 +141,11 @@ pub async fn execute_newrun(
         .upsert_project(&dir_name, branch.as_deref(), base.as_deref())
         .await?;
 
-    let prompt = prompt_for(ctx, &canonical, label).await?;
-    let run_id = ctx.store.insert_run(&dir_name, "free").await?;
+    let prompt = prompt_for(ctx, &canonical, label, plan_path.as_deref(), "fresh").await?;
+    let run_id = ctx
+        .store
+        .insert_run_with_plan(&dir_name, "free", plan_path.as_deref())
+        .await?;
     let channel = i64::try_from(source.channel_id).unwrap_or(i64::MAX);
     let action_id = ctx
         .store
@@ -109,15 +156,164 @@ pub async fn execute_newrun(
         .audit(source.user_id, "run", Some(action_id), "staged")
         .await?;
 
-    let preview = staged_preview(label, &prompt, action_id, source.user_id);
-    let message_id = ctx.discord.post(source.channel_id, &preview).await?;
-    ctx.store
-        .set_origin(action_id, &message_id.to_string())
-        .await?;
+    if plan_path.is_some() && !plan_options.is_empty() {
+        let picker = plan_picker_message(label, &plan_options, 0, action_id, source.user_id);
+        let message_id = ctx.discord.post(source.channel_id, &picker).await?;
+        ctx.store
+            .set_origin(action_id, &message_id.to_string())
+            .await?;
+        return Ok(Some("pick a plan step (or Other: type it)".to_owned()));
+    }
 
+    show_preview(ctx, source, action_id, label, &prompt, "fresh").await?;
     Ok(Some(
         "staged — choose **Send as-is** or **Edit & send**".to_owned(),
     ))
+}
+
+/// Execute `v1:plan:<id>:<idx>`: prefill the label from a parsed plan item and
+/// re-render the preview (the plan is re-read and re-checked at this use, P12).
+pub async fn plan_pick(
+    ctx: &Arc<AppContext>,
+    action_id: i64,
+    index: usize,
+    source: &InteractionSource,
+) -> Result<Option<String>, AppError> {
+    let action = load_staged(ctx, action_id).await?;
+    let (dir, plan_path) = plan_context(ctx, &action).await?;
+    let options = load_plan(ctx, &plan_path).await?;
+    let option: &PickOption = options
+        .get(index)
+        .ok_or_else(|| AppError::Other(format!("plan item {index} is gone")))?;
+    let prompt = prompt_for(ctx, &dir, &option.label, Some(&plan_path), &action.template).await?;
+    if !ctx
+        .store
+        .restage_label_prompt(action_id, &option.label, &prompt)
+        .await?
+    {
+        return Err(AppError::AlreadyHandled);
+    }
+    show_preview(
+        ctx,
+        source,
+        action_id,
+        &option.label,
+        &prompt,
+        &action.template,
+    )
+    .await?;
+    Ok(Some("step selected — review and send".to_owned()))
+}
+
+/// Execute `v1:planp:<id>:<n>`: re-render the picker at another page (edits do
+/// not notify, P10).
+pub async fn plan_page_edit(
+    ctx: &Arc<AppContext>,
+    action_id: i64,
+    page: usize,
+    source: &InteractionSource,
+) -> Result<(), AppError> {
+    let action = load_staged(ctx, action_id).await?;
+    let (_, plan_path) = plan_context(ctx, &action).await?;
+    let options = load_plan(ctx, &plan_path).await?;
+    let picker = plan_picker_message(&action.label, &options, page, action_id, source.user_id);
+    match source.message_id {
+        Some(message_id) => {
+            ctx.discord
+                .edit(source.channel_id, message_id, &picker)
+                .await?;
+        }
+        None => {
+            ctx.discord.post(source.channel_id, &picker).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Plan phase for `v1:planother:<id>`: a modal to type the step by hand.
+pub fn plan_other_modal(action_id: i64) -> ModalSpec {
+    ModalSpec {
+        custom_id: format!("{PLAN_OTHER_MODAL}{action_id}"),
+        title: "Plan step".to_owned(),
+        inputs: vec![ModalInputSpec {
+            id: "step".to_owned(),
+            label: "Step".to_owned(),
+            style: InputStyle::Short,
+            value: None,
+            required: true,
+        }],
+    }
+}
+
+/// Execute the "Other" plan modal: use the typed text as the label.
+pub async fn execute_plan_other(
+    ctx: &Arc<AppContext>,
+    action_id: i64,
+    source: &InteractionSource,
+) -> Result<Option<String>, AppError> {
+    let step = source.input("step").map(str::trim).unwrap_or_default();
+    if step.is_empty() {
+        return Err(AppError::Other("a step is required".to_owned()));
+    }
+    let action = load_staged(ctx, action_id).await?;
+    let (dir, plan_path) = plan_context(ctx, &action).await?;
+    let prompt = prompt_for(ctx, &dir, step, Some(&plan_path), &action.template).await?;
+    if !ctx
+        .store
+        .restage_label_prompt(action_id, step, &prompt)
+        .await?
+    {
+        return Err(AppError::AlreadyHandled);
+    }
+    show_preview(ctx, source, action_id, step, &prompt, &action.template).await?;
+    Ok(Some("step set — review and send".to_owned()))
+}
+
+/// Execute `v1:planuse:<id>`: keep the typed label and show the preview.
+pub async fn plan_use(
+    ctx: &Arc<AppContext>,
+    action_id: i64,
+    source: &InteractionSource,
+) -> Result<Option<String>, AppError> {
+    let action = load_staged(ctx, action_id).await?;
+    show_preview(
+        ctx,
+        source,
+        action_id,
+        &action.label,
+        &action.prompt_sent,
+        &action.template,
+    )
+    .await?;
+    Ok(Some("staged — choose Send as-is or Edit & send".to_owned()))
+}
+
+/// Execute `v1:tpl:<id>`: flip the prompt envelope between fresh and resume,
+/// re-rendering the git slots at review time (P13).
+pub async fn toggle_template(
+    ctx: &Arc<AppContext>,
+    action_id: i64,
+    source: &InteractionSource,
+) -> Result<Option<String>, AppError> {
+    let action = load_staged(ctx, action_id).await?;
+    let next = if action.template == "resume" {
+        "fresh"
+    } else {
+        "resume"
+    };
+    let dir = run_directory(ctx, action.run_id).await?;
+    let run = ctx.store.run(action.run_id).await?;
+    let plan_path = run.and_then(|run| run.plan_path);
+    let prompt = prompt_for(ctx, &dir, &action.label, plan_path.as_deref(), next).await?;
+    if !ctx
+        .store
+        .set_template_prompt(action_id, next, &prompt)
+        .await?
+    {
+        return Err(AppError::AlreadyHandled);
+    }
+    show_preview(ctx, source, action_id, &action.label, &prompt, next).await?;
+    Ok(Some(format!("template: {next}")))
 }
 
 /// Plan phase for `v1:edit:<id>`: reopen the editable prompt modal (one fast
@@ -324,6 +520,57 @@ async fn load_staged(ctx: &Arc<AppContext>, action_id: i64) -> Result<ActionRow,
     Ok(action)
 }
 
+/// The run directory and plan path for a staged plan action.
+async fn plan_context(
+    ctx: &Arc<AppContext>,
+    action: &ActionRow,
+) -> Result<(PathBuf, String), AppError> {
+    let dir = run_directory(ctx, action.run_id).await?;
+    let run = ctx
+        .store
+        .run(action.run_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("run {}", action.run_id)))?;
+    let plan_path = run
+        .plan_path
+        .ok_or_else(|| AppError::Other("this run has no plan".to_owned()))?;
+    Ok((dir, plan_path))
+}
+
+/// Resolve, read, and parse a plan (containment re-checked at use, FR-35/P12).
+async fn load_plan(ctx: &Arc<AppContext>, plan_path: &str) -> Result<Vec<PickOption>, AppError> {
+    let resolved = ctx.fs.resolve(Path::new(plan_path)).await?;
+    let text = ctx.fs.read_text(&resolved).await?;
+    Ok(parse_plan(
+        &text,
+        ctx.plan_heading_min,
+        ctx.plan_heading_max,
+    ))
+}
+
+/// Post (or edit in place) the staged preview and remember its origin.
+async fn show_preview(
+    ctx: &Arc<AppContext>,
+    source: &InteractionSource,
+    action_id: i64,
+    label: &str,
+    prompt: &str,
+    template: &str,
+) -> Result<(), AppError> {
+    let preview = staged_preview(label, prompt, action_id, source.user_id, template);
+    if let Some(message_id) = source.message_id {
+        ctx.discord
+            .edit(source.channel_id, message_id, &preview)
+            .await?;
+    } else {
+        let message_id = ctx.discord.post(source.channel_id, &preview).await?;
+        ctx.store
+            .set_origin(action_id, &message_id.to_string())
+            .await?;
+    }
+    Ok(())
+}
+
 /// The directory an action's run targets.
 pub(crate) async fn run_directory(ctx: &Arc<AppContext>, run_id: i64) -> Result<PathBuf, AppError> {
     let run = ctx
@@ -334,11 +581,14 @@ pub(crate) async fn run_directory(ctx: &Arc<AppContext>, run_id: i64) -> Result<
     Ok(PathBuf::from(run.dir))
 }
 
-/// Render `templates/fresh.md` with the label/git slots (P13).
+/// Render a prompt envelope (`fresh.md` or `resume.md`) with the label, plan
+/// path, and git slots (P13).
 async fn prompt_for(
     ctx: &Arc<AppContext>,
     directory: &Path,
     label: &str,
+    plan_path: Option<&str>,
+    template: &str,
 ) -> Result<String, AppError> {
     let (git_log, git_status) = if ctx.git.is_repo(directory).await? {
         let git_log = match ctx.git.log(directory, None).await {
@@ -369,10 +619,18 @@ async fn prompt_for(
 
     let mut values: HashMap<&'static str, String> = HashMap::new();
     values.insert("label", label.to_owned());
-    values.insert("plan_path", String::new());
+    values.insert(
+        "plan_path",
+        plan_path.map_or_else(String::new, |path| format!("Plan: {path}")),
+    );
     values.insert("git_log", git_log);
     values.insert("git_status", git_status);
-    templates::render(&ctx.templates.fresh, &values)
+    let source = if template == "resume" {
+        &ctx.templates.resume
+    } else {
+        &ctx.templates.fresh
+    };
+    templates::render(source, &values)
         .map_err(|error| AppError::Other(format!("template render: {error}")))
 }
 

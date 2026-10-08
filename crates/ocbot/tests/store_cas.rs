@@ -194,13 +194,16 @@ async fn migrates_a_v1_database_forward_to_v2() {
         store.shutdown().await;
     }
     // Reshape the file into a Phase-2 (v1) database: no `reset_intent`, no v3
-    // `gate.channel_id` column, and the recorded schema version back at 1.
-    // Reopening must apply V2 and V3 only.
+    // `gate.channel_id` column, no v4 `action.template` / `ui_state.draft_path`
+    // columns, and the recorded schema version back at 1. Reopening must apply
+    // every later migration exactly once.
     {
         let raw = rusqlite::Connection::open(&path).expect("raw open");
         raw.execute_batch(
             "DROP TABLE reset_intent;
              ALTER TABLE gate DROP COLUMN channel_id;
+             ALTER TABLE action DROP COLUMN template;
+             ALTER TABLE ui_state DROP COLUMN draft_path;
              DELETE FROM schema_version;
              INSERT INTO schema_version (v) VALUES (1);",
         )
