@@ -152,23 +152,36 @@ async fn plan(ctx: &Arc<AppContext>, source: &InteractionSource) -> Result<AckPl
     }
 }
 
+/// Custom-id prefixes whose plan is a plain deferral: acknowledged with
+/// `DeferUpdate` immediately and fully dispatched in the execute pass.
+///
+/// This is the single source of truth for the deferred-prefix set (SPEC-002
+/// FR-14/FR-15). `is_deferred_action` derives from it, and the `prefix_sync`
+/// regression test checks it against the real plan/execute behaviour, so the
+/// list cannot drift from the router.
+///
+/// The state-dependent button families (`v1:send:`, `v1:runany:`, `v1:accept:`,
+/// `v1:park:`, `v1:discard:`, `v1:gate:`) have their own preflight branches and
+/// are deliberately not plain deferrals.
+const DEFERRED_PREFIXES: &[&str] = &[
+    "v1:reset:",
+    "v1:resetgo:",
+    "v1:releaseq:",
+    "v1:release:",
+    "v1:formpick:",
+    "v1:plan:",
+    "v1:planp:",
+    "v1:planuse:",
+    "v1:tpl:",
+    "v1:ls:",
+    "v1:lssel:",
+];
+
 /// Custom ids whose plan is a plain deferral (all work is in the execute pass).
 fn is_deferred_action(custom_id: &str) -> bool {
-    [
-        "v1:reset:",
-        "v1:resetgo:",
-        "v1:releaseq:",
-        "v1:release:",
-        "v1:formpick:",
-        "v1:plan:",
-        "v1:planp:",
-        "v1:planuse:",
-        "v1:tpl:",
-        "v1:ls:",
-        "v1:lssel:",
-    ]
-    .iter()
-    .any(|prefix| custom_id.starts_with(prefix))
+    DEFERRED_PREFIXES
+        .iter()
+        .any(|prefix| custom_id.starts_with(prefix))
         || custom_id.starts_with("v1:page:history:")
 }
 
