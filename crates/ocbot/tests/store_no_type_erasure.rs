@@ -11,9 +11,10 @@
     reason = "integration tests assert by unwrapping and panicking (C6)"
 )]
 
-/// Patterns that must not exist in the store adapter.
+/// Patterns that must not exist in the store adapter. `Box<dyn` covers both the
+/// message-set erasure and the CAS `ToSql` trait objects (D-8).
 const BANNED: &[&str] = &[
-    "Box<dyn Any",
+    "Box<dyn",
     "TypeMismatch",
     "type Job",
     "type Request",

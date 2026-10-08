@@ -199,17 +199,19 @@ done
 probe "G19" "^User=" 'User=ocbot'
 
 # --- SPEC-002 appended gates ------------------------------------------------
-# The store actor's message set is typed (Phase 4/5): no `Box<dyn Any>`, no
-# dead `TypeMismatch` variant, no erased `Job`/`call` path. Detector self-tests
-# keep the patterns honest (a gate that cannot fail is decoration).
+# The store actor's message set is typed (Phase 4/5): no trait-object erasure
+# (`Box<dyn ...>`, including the CAS `ToSql` params, D-8), no dead `TypeMismatch`
+# variant, no erased `Job`/`call` path. Detector self-tests keep the patterns
+# honest (a gate that cannot fail is decoration).
 if [ -f crates/ocbot/src/adapters/store.rs ]; then
-  for pattern in 'Box<dyn Any' 'TypeMismatch' 'type Job' 'pub async fn call'; do
+  for pattern in 'Box<dyn' 'TypeMismatch' 'type Job' 'pub async fn call'; do
     if grep -n "$pattern" crates/ocbot/src/adapters/store.rs; then
       fail "SPEC-002: store.rs still contains '$pattern'"
     fi
   done
 fi
 probe "SPEC002-erasure" 'Box<dyn Any' 'type Job = Box<dyn Any + Send>;'
+probe "SPEC002-erasure-tosql" 'Box<dyn' 'let v: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();'
 probe "SPEC002-mismatch" 'TypeMismatch' 'return Err(StoreError::TypeMismatch);'
 probe "SPEC002-erased-call" 'pub async fn call' 'pub async fn call<T, F>(&self, f: F) {}'
 

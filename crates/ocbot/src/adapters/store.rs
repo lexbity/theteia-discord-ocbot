@@ -2562,6 +2562,17 @@ impl StoreHandle {
     }
 }
 
+/// The owned SQL value for a store write. rusqlite's own `Value` type implements
+/// `ToSql`, so CAS parameters need neither trait objects nor boxing (SPEC-002
+/// D-8).
+fn sql_value(value: &WriteValue) -> rusqlite::types::Value {
+    match value {
+        WriteValue::Null => rusqlite::types::Value::Null,
+        WriteValue::Text(text) => rusqlite::types::Value::Text(text.clone()),
+        WriteValue::Int(integer) => rusqlite::types::Value::Integer(*integer),
+    }
+}
+
 /// Shared CAS implementation. `extra_condition` adds a guard to the `WHERE`.
 fn cas_inner(
     connection: &Connection,
@@ -2573,26 +2584,19 @@ fn cas_inner(
 ) -> rusqlite::Result<bool> {
     use std::fmt::Write as _;
     let mut sql = String::from("UPDATE action SET state = ?1");
-    let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-    values.push(Box::new(to.as_str()));
+    let mut values = vec![rusqlite::types::Value::Text(to.as_str().to_owned())];
     for (column, value) in writes {
         let _ = write!(sql, ", {} = ?{}", column.sql(), values.len() + 1);
-        match value {
-            WriteValue::Null => values.push(Box::new(Option::<String>::None)),
-            WriteValue::Text(text) => values.push(Box::new(text.clone())),
-            WriteValue::Int(integer) => values.push(Box::new(integer.to_owned())),
-        }
+        values.push(sql_value(value));
     }
     sql.push_str(" WHERE id = ?");
-    values.push(Box::new(id));
+    values.push(rusqlite::types::Value::Integer(id));
     sql.push_str(" AND state = ?");
-    values.push(Box::new(from.as_str()));
+    values.push(rusqlite::types::Value::Text(from.as_str().to_owned()));
     if let Some(condition) = extra_condition {
         let _ = write!(sql, " AND {condition}");
     }
-    let references: Vec<&dyn rusqlite::ToSql> = values.iter().map(AsRef::as_ref).collect();
-    let params = rusqlite::params_from_iter(references.iter().copied());
-    let changed = connection.execute(&sql, params)?;
+    let changed = connection.execute(&sql, rusqlite::params_from_iter(values))?;
     Ok(changed == 1)
 }
 
@@ -2609,25 +2613,18 @@ fn cas_inner_any(
 ) -> rusqlite::Result<bool> {
     use std::fmt::Write as _;
     let mut sql = String::from("UPDATE action SET state = ?1");
-    let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-    values.push(Box::new(to.as_str()));
+    let mut values = vec![rusqlite::types::Value::Text(to.as_str().to_owned())];
     for (column, value) in writes {
         let _ = write!(sql, ", {} = ?{}", column.sql(), values.len() + 1);
-        match value {
-            WriteValue::Null => values.push(Box::new(Option::<String>::None)),
-            WriteValue::Text(text) => values.push(Box::new(text.clone())),
-            WriteValue::Int(integer) => values.push(Box::new(integer.to_owned())),
-        }
+        values.push(sql_value(value));
     }
     sql.push_str(" WHERE id = ?");
-    values.push(Box::new(id));
+    values.push(rusqlite::types::Value::Integer(id));
     for from in froms {
-        values.push(Box::new(from.clone()));
+        values.push(rusqlite::types::Value::Text(from.clone()));
     }
     let _ = write!(sql, " AND {extra_condition}");
-    let references: Vec<&dyn rusqlite::ToSql> = values.iter().map(AsRef::as_ref).collect();
-    let params = rusqlite::params_from_iter(references.iter().copied());
-    let changed = connection.execute(&sql, params)?;
+    let changed = connection.execute(&sql, rusqlite::params_from_iter(values))?;
     Ok(changed == 1)
 }
 
