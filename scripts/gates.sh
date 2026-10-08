@@ -108,4 +108,22 @@ if grep -q "journal_mode=WAL" <(printf 'PRAGMA synchronous=NORMAL;'); then
   fail "G9-selftest: WAL detector did not fire on a neutral file"
 fi
 
+# --- Phase 3 appended gates (spec Part 2, Phase 3) -------------------------
+# G10: git operations are boring — the bot never pushes and never forces (P7).
+if grep -rnE '(-{2}force|git push)' crates/ocbot/src/adapters/git.rs 2>/dev/null; then
+  fail "G10: --force / git push found in the git adapter"
+fi
+probe "G10-force" '(-{2}force|git push)' 'let args = ["reset", "--force"];'
+probe "G10-push" '(-{2}force|git push)' 'git push origin main'
+
+# G11: no process spawn / hard exit outside the git adapter (D-4/NFR-10 belt;
+# the clippy disallowed-methods table is the enforcement). `std::process` is
+# allowed only for `ExitCode`/`id()`; `Command` and `exit` are not.
+if grep -rnE 'child_process|execFile|std::process::Command|std::process::exit' \
+     crates/ocbot/src 2>/dev/null | grep -v 'adapters/git.rs'; then
+  fail "G11: process spawning/exit outside adapters/git.rs"
+fi
+probe "G11-command" 'std::process::Command' 'let c = std::process::Command::new("git");'
+probe "G11-node" 'child_process' 'const c = child_process.spawn("git");'
+
 echo "gates: OK"

@@ -88,14 +88,38 @@ fn modal(user: u64, channel: u64, custom_id: &str, values: Vec<(&str, &str)>) ->
     }
 }
 
+fn slash_named(name: &str, user: u64, channel: u64, guild: Option<u64>) -> InteractionSource {
+    InteractionSource {
+        kind: SourceKind::SlashCommand {
+            name: name.to_owned(),
+        },
+        user_id: user,
+        channel_id: channel,
+        guild_id: guild,
+        message_id: None,
+        is_dm: guild.is_none(),
+    }
+}
+
 /// Every handler the router can dispatch to — as an interaction source.
 fn all_handler_sources(channel: u64, guild: Option<u64>) -> Vec<InteractionSource> {
     vec![
         slash_run(OPERATOR, channel, guild),
         slash_status(OPERATOR, channel, guild),
+        slash_named("history", OPERATOR, channel, guild),
+        slash_named("reset", OPERATOR, channel, guild),
+        slash_named("release", OPERATOR, channel, guild),
         button(OPERATOR, channel, guild, "v1:send:1", 5),
         button(OPERATOR, channel, guild, "v1:edit:1", 5),
         button(OPERATOR, channel, guild, "v1:runany:1", 5),
+        button(OPERATOR, channel, guild, "v1:accept:1", 5),
+        button(OPERATOR, channel, guild, "v1:park:1", 5),
+        button(OPERATOR, channel, guild, "v1:discard:1", 5),
+        button(OPERATOR, channel, guild, "v1:reset:abc", 5),
+        button(OPERATOR, channel, guild, "v1:resetgo:abc", 5),
+        button(OPERATOR, channel, guild, "v1:releaseq:deadbeef", 5),
+        button(OPERATOR, channel, guild, "v1:release:deadbeef", 5),
+        button(OPERATOR, channel, guild, "v1:page:history:0", 5),
         modal(
             OPERATOR,
             channel,
@@ -103,6 +127,12 @@ fn all_handler_sources(channel: u64, guild: Option<u64>) -> Vec<InteractionSourc
             vec![("directory", "/tmp/x"), ("label", "l")],
         ),
         modal(OPERATOR, channel, "v1:editgo:1", vec![("prompt", "do it")]),
+        modal(
+            OPERATOR,
+            channel,
+            "v1:acceptgo:1",
+            vec![("subject", "s"), ("body", "")],
+        ),
     ]
 }
 

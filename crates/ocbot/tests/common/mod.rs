@@ -19,8 +19,8 @@ use async_trait::async_trait;
 
 use ocbot_core::outcome::{AssistantSnapshot, TokenCounts};
 use ocbot_core::ports::{
-    Activity, GateDecision, GateRequest, GitPort, OpenCodePort, PortSession, PromptAdmission,
-    ServerFacts, SessionId,
+    Activity, GateDecision, GateRequest, GitPort, HookFailure, OpenCodePort, PortSession,
+    PromptAdmission, ServerFacts, SessionId,
 };
 use ocbot_core::{GitError, OcError, OutgoingMessage};
 
@@ -65,6 +65,16 @@ pub enum Call {
     GitLog(String, Option<String>),
     /// git: `is_ancestor`
     GitIsAncestor(String, String, String),
+    /// git: `untracked_files(dir)`
+    GitUntracked(String),
+    /// git: `commit_all(dir, no_verify)`
+    GitCommit(String, bool),
+    /// git: `branch_exists(dir, name)`
+    GitBranchExists(String, String),
+    /// git: `create_branch_at(dir, name, at)`
+    GitCreateBranch(String, String, String),
+    /// git: `reset_hard(dir, sha)`
+    GitReset(String, String),
 }
 
 /// Stateful fake opencode port. Behavior is scripted; every call is recorded.
@@ -337,6 +347,82 @@ impl GitPort for FakeGit {
         })?;
         self.fake_adapter.is_ancestor(repo, sha, of).await
     }
+
+    async fn untracked_files(&self, directory: &Path) -> Result<Vec<String>, GitError> {
+        self.calls
+            .lock()
+            .expect("lock")
+            .push(Call::GitUntracked(directory.display().to_string()));
+        match &self.repo {
+            Some(repo) => self.fake_adapter.untracked_files(repo).await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    async fn commit_all(
+        &self,
+        directory: &Path,
+        message_path: &Path,
+        no_verify: bool,
+    ) -> Result<Result<String, HookFailure>, GitError> {
+        self.calls
+            .lock()
+            .expect("lock")
+            .push(Call::GitCommit(directory.display().to_string(), no_verify));
+        let repo = self.repo.as_ref().ok_or(GitError::Spawn {
+            kind: "commit",
+            message: "no repo".to_owned(),
+        })?;
+        self.fake_adapter
+            .commit_all(repo, message_path, no_verify)
+            .await
+    }
+
+    async fn branch_exists(
+        &self,
+        directory: &Path,
+        name: &str,
+    ) -> Result<Option<String>, GitError> {
+        self.calls.lock().expect("lock").push(Call::GitBranchExists(
+            directory.display().to_string(),
+            name.to_owned(),
+        ));
+        let repo = self.repo.as_ref().ok_or(GitError::Spawn {
+            kind: "branch",
+            message: "no repo".to_owned(),
+        })?;
+        self.fake_adapter.branch_exists(repo, name).await
+    }
+
+    async fn create_branch_at(
+        &self,
+        directory: &Path,
+        name: &str,
+        at: &str,
+    ) -> Result<(), GitError> {
+        self.calls.lock().expect("lock").push(Call::GitCreateBranch(
+            directory.display().to_string(),
+            name.to_owned(),
+            at.to_owned(),
+        ));
+        let repo = self.repo.as_ref().ok_or(GitError::Spawn {
+            kind: "branch",
+            message: "no repo".to_owned(),
+        })?;
+        self.fake_adapter.create_branch_at(repo, name, at).await
+    }
+
+    async fn reset_hard(&self, directory: &Path, sha: &str) -> Result<(), GitError> {
+        self.calls.lock().expect("lock").push(Call::GitReset(
+            directory.display().to_string(),
+            sha.to_owned(),
+        ));
+        let repo = self.repo.as_ref().ok_or(GitError::Spawn {
+            kind: "reset",
+            message: "no repo".to_owned(),
+        })?;
+        self.fake_adapter.reset_hard(repo, sha).await
+    }
 }
 
 /// A posted message.
@@ -474,6 +560,68 @@ pub async fn seed_project(store: &ocbot::adapters::store::StoreHandle, dir: &str
         .expect("upsert project");
 }
 
+/// A seeded run/action pair for the git-truth tests.
+#[derive(Debug, Clone, Copy)]
+pub struct Seeded {
+    /// The run row id.
+    pub run_id: i64,
+    /// The action row id.
+    pub action_id: i64,
+}
+
+/// Seed an action that has run and delivered a report (state `reported`), with
+/// the directory lock held by it.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "test harness seed: each parameter is a column the test needs to control"
+)]
+pub async fn seed_reported(
+    store: &ocbot::adapters::store::StoreHandle,
+    dir: &str,
+    work_branch: Option<&str>,
+    base_sha: Option<&str>,
+    channel: u64,
+    label: &str,
+    prompt: &str,
+    session: &str,
+) -> Seeded {
+    store
+        .upsert_project(dir, work_branch, base_sha)
+        .await
+        .expect("upsert project");
+    let run_id = store.insert_run(dir, "free").await.expect("run");
+    let action_id = store
+        .insert_action(
+            run_id,
+            Some(i64::try_from(channel).expect("channel fits i64")),
+            label,
+            prompt,
+            1,
+        )
+        .await
+        .expect("action");
+    assert!(
+        store
+            .begin_send(action_id, dir, session, base_sha, false)
+            .await
+            .expect("send"),
+        "begin_send takes the lock"
+    );
+    assert!(
+        store
+            .cas_state(
+                action_id,
+                ocbot_core::State::Running,
+                ocbot_core::State::Reported,
+                &[]
+            )
+            .await
+            .expect("reported"),
+        "running → reported"
+    );
+    Seeded { run_id, action_id }
+}
+
 /// Initialize a git repo with one commit and return its path.
 #[expect(
     clippy::disallowed_methods,
@@ -492,6 +640,46 @@ pub fn init_repo(dir: &Path) -> std::process::Output {
 /// Write a file into the repo.
 pub fn write_file(repo: &Path, name: &str, contents: &str) {
     std::fs::write(repo.join(name), contents).expect("write");
+}
+
+/// Run a raw `git -C <repo> <args>` (test-only diagnostics and setup).
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test harness: drives real git directly on temp repos"
+)]
+pub fn run_git(repo: &Path, args: &[&str]) -> std::process::Output {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .expect("git runs")
+}
+
+/// Run a raw git command and return trimmed stdout, asserting success.
+pub fn git_stdout(repo: &Path, args: &[&str]) -> String {
+    let output = run_git(repo, args);
+    assert!(output.status.success(), "git {args:?} failed");
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// Spawn the AC-6 crash-harness binary with the supplied environment (see
+/// `src/harness.rs`). The test watches for the checkpoint marker, then SIGKILLs
+/// this child.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test harness: spawns the crash-harness process for AC-6"
+)]
+pub fn spawn_harness(envs: &[(&str, String)]) -> std::process::Child {
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_ocbot-crash-harness"));
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    command
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn crash harness")
 }
 
 /// Append to a file in the repo (marking it modified).

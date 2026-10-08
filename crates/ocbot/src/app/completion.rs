@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use ocbot_core::State;
 use ocbot_core::outcome::{self, AssistantSnapshot, Outcome, classify};
-use ocbot_core::render::{Footer, report};
+use ocbot_core::render::{Footer, ReportContext, report};
 
 use crate::adapters::store::ActionRow;
 use crate::app::context::AppContext;
@@ -76,7 +76,12 @@ async fn build_and_deliver(
     snapshot: Option<&AssistantSnapshot>,
 ) -> Result<bool, AppError> {
     let footer = build_footer(ctx, action, snapshot).await;
-    let message = report(&action.label, outcome, &footer, ctx.guard.allowed_user_id);
+    let context = ReportContext {
+        action_id: action.id,
+        is_git: action_is_git(ctx, action).await,
+        operator_id: ctx.guard.allowed_user_id,
+    };
+    let message = report(&action.label, outcome, &footer, &context);
     let channel = action.channel_id;
 
     let message_id = post_report(ctx, channel, &message).await?;
@@ -183,6 +188,20 @@ async fn build_footer(
         tokens: snapshot.and_then(|snapshot| snapshot.tokens),
         cost: snapshot.and_then(|snapshot| snapshot.cost),
     }
+}
+
+/// Whether the action's directory is a git project (store-only; drives the
+/// FR-15/FR-26 decision buttons without a git subprocess).
+async fn action_is_git(ctx: &Arc<AppContext>, action: &ActionRow) -> bool {
+    let Ok(Some(run)) = ctx.store.run(action.run_id).await else {
+        return false;
+    };
+    ctx.store
+        .project(&run.dir)
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|project| project.work_branch.is_some())
 }
 
 /// Best-effort `git diff --stat` vs a base sha (R-9: the adapter timeout

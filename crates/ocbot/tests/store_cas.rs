@@ -185,6 +185,36 @@ async fn migration_is_idempotent_across_connections() {
 }
 
 #[tokio::test]
+async fn migrates_a_v1_database_forward_to_v2() {
+    let tmp = TempDir::new().expect("tmp");
+    let path = tmp.path().join("ocbot.db");
+    {
+        let store = StoreHandle::open(&path).expect("first");
+        common::seed_project(&store, "/tmp/v1").await;
+        store.shutdown().await;
+    }
+    // Reshape the file into a Phase-2 (v1) database: no `reset_intent`, and the
+    // recorded schema version back at 1. Reopening must apply V2 only.
+    {
+        let raw = rusqlite::Connection::open(&path).expect("raw open");
+        raw.execute_batch(
+            "DROP TABLE reset_intent;
+             DELETE FROM schema_version;
+             INSERT INTO schema_version (v) VALUES (1);",
+        )
+        .expect("reshape to v1");
+    }
+
+    let store = StoreHandle::open(&path).expect("upgrade open");
+    let id = store
+        .record_reset_intent("/tmp/v1", "deadbeef", "superseded/t")
+        .await
+        .expect("v2 table exists and works");
+    assert_eq!(store.pending_reset_intents().await.expect("read").len(), 1);
+    assert!(store.set_reset_step(id, 1).await.expect("step"));
+}
+
+#[tokio::test]
 async fn begin_send_records_dirty_start_head() {
     let store = StoreHandle::open_in_memory().expect("store");
     common::seed_project(&store, "/tmp/d").await;

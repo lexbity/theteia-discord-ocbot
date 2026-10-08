@@ -3,6 +3,7 @@
 
 pub mod completion;
 pub mod context;
+pub mod crashpoint;
 pub mod error;
 pub mod guard;
 pub mod handlers;

@@ -15,11 +15,19 @@ mod common;
 
 use ocbot::adapters::discord::{message_builder, operator_allowed_mentions};
 use ocbot_core::render::{
-    ButtonKind, Footer, OutgoingMessage, component_button, report, staged_preview,
+    ButtonKind, Footer, OutgoingMessage, ReportContext, component_button, report, staged_preview,
 };
 use ocbot_core::{Outcome, TokenCounts};
 
 const OPERATOR: u64 = 42;
+
+fn report_context(action_id: i64, is_git: bool) -> ReportContext {
+    ReportContext {
+        action_id,
+        is_git,
+        operator_id: OPERATOR,
+    }
+}
 
 fn allowed_mentions_of(message: &serde_json::Value) -> serde_json::Value {
     message
@@ -37,7 +45,7 @@ fn every_message_type_carries_operator_only_mentions() {
                 report: "done".to_owned(),
             },
             &Footer::default(),
-            OPERATOR,
+            &report_context(1, true),
         ),
         staged_preview("label", "prompt text", 3, OPERATOR),
         OutgoingMessage {
@@ -126,7 +134,7 @@ fn report_footer_is_inline_and_stays_under_cap() {
             report: "body".to_owned(),
         },
         &footer,
-        OPERATOR,
+        &report_context(2, true),
     );
     assert!(message.content.len() <= 2_000);
     assert!(message.content.contains("Duration 1m 30s"));

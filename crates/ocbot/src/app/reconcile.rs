@@ -1,16 +1,21 @@
-//! Boot / reconnect reconcile (spec P9 steps 1–3): **status facts, never the
-//! cursor**. For every action in `running`: if its session is idle and
-//! `report_msg_id` is NULL ⇒ run the completion path; if set ⇒ already
-//! delivered; if busy ⇒ keep watching. Inbox/`session_seen` bookkeeping
-//! (P9 step 6) and write-git roll-forward (step 5) land in Phases 5 and 3
-//! respectively — the states those concern cannot exist yet.
+//! Boot / reconnect reconcile (spec P9): **facts, never the cursor**.
+//!
+//! Two independent passes:
+//! 1. [`reconcile_git_states`] rolls forward the write-ahead intents of
+//!    interrupted Accept/Park/Reset sequences (P6/P7) — from DB + git facts,
+//!    and *without needing opencode to be up*.
+//! 2. The session pass probes the server and, for every `running` action,
+//!    finalizes idle ones exactly once (`report_msg_id IS NULL`), keeps watching
+//!    busy ones, and leaves everything untouched while the server is down.
 
 use std::sync::Arc;
 
+use ocbot_core::State;
 use ocbot_core::ports::Activity;
 
 use crate::app::completion::finalize_action;
 use crate::app::context::AppContext;
+use crate::app::handlers::{accept, park, reset};
 
 /// What the reconcile pass observed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,11 +24,16 @@ pub struct ReconcileReport {
     pub server_up: bool,
     /// How many completions this pass delivered.
     pub completed: usize,
+    /// How many interrupted git sequences this pass rolled forward/reverted.
+    pub repaired: usize,
 }
 
-/// One reconcile pass. Never returns an error for a down server; it reports
+/// One full reconcile pass: git-state repair first (server-independent), then
+/// the session sweep. Never returns an error for a down server; it reports
 /// `server_up: false` and leaves every action untouched (`degraded` mode).
 pub async fn reconcile(ctx: &Arc<AppContext>) -> ReconcileReport {
+    let repaired = reconcile_git_states(ctx).await;
+
     match ctx.opencode.probe().await {
         Ok(facts) => {
             ctx.metrics.set_opencode_up(true);
@@ -35,6 +45,7 @@ pub async fn reconcile(ctx: &Arc<AppContext>) -> ReconcileReport {
             return ReconcileReport {
                 server_up: false,
                 completed: 0,
+                repaired,
             };
         }
     }
@@ -46,6 +57,7 @@ pub async fn reconcile(ctx: &Arc<AppContext>) -> ReconcileReport {
             return ReconcileReport {
                 server_up: true,
                 completed: 0,
+                repaired,
             };
         }
     };
@@ -78,5 +90,62 @@ pub async fn reconcile(ctx: &Arc<AppContext>) -> ReconcileReport {
     ReconcileReport {
         server_up: true,
         completed,
+        repaired,
     }
+}
+
+/// Roll forward (or conservatively revert) every interrupted Accept/Park/Reset
+/// from its write-ahead intent. Returns the number of sequences repaired.
+pub async fn reconcile_git_states(ctx: &Arc<AppContext>) -> usize {
+    let mut repaired = 0;
+
+    match ctx.store.actions_in_states(&[State::Accepting]).await {
+        Ok(actions) => {
+            for action in &actions {
+                match accept::resume(ctx, action).await {
+                    Ok(_) => repaired += 1,
+                    Err(error) => {
+                        tracing::warn!(action = action.id, error = %error, "accept resume failed");
+                    }
+                }
+            }
+        }
+        Err(error) => tracing::error!(error = %error, "reconcile: accepting read failed"),
+    }
+
+    match ctx.store.actions_in_states(&[State::Parking]).await {
+        Ok(actions) => {
+            for action in &actions {
+                match park::resume(ctx, action, ctx.guard.allowed_user_id).await {
+                    Ok(_) => repaired += 1,
+                    Err(error) => {
+                        tracing::warn!(action = action.id, error = %error, "park resume failed");
+                    }
+                }
+            }
+        }
+        Err(error) => tracing::error!(error = %error, "reconcile: parking read failed"),
+    }
+
+    match ctx.store.pending_reset_intents().await {
+        Ok(intents) => {
+            for intent in &intents {
+                match reset::resume(ctx, intent, ctx.guard.allowed_user_id, None).await {
+                    Ok(_) => repaired += 1,
+                    Err(error) => {
+                        tracing::warn!(intent = intent.id, error = %error, "reset resume failed");
+                    }
+                }
+            }
+        }
+        Err(error) => tracing::error!(error = %error, "reconcile: reset-intent read failed"),
+    }
+
+    if repaired > 0 {
+        tracing::info!(
+            repaired,
+            "reconcile rolled forward interrupted git sequences"
+        );
+    }
+    repaired
 }

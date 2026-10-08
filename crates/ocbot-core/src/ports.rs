@@ -107,6 +107,16 @@ pub struct CommitRow {
     pub timestamp: i64,
 }
 
+/// A commit that did not land because `git` rejected it (a failing hook, or a
+/// commit with nothing to record). This is *not* a transport failure: the
+/// repository is intact and the caller surfaces `output` and returns to
+/// `reported` (spec P7 accept/park write halves).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookFailure {
+    /// The hook/commit output to surface to the operator.
+    pub output: String,
+}
+
 /// The opencode v2 HTTP surface, normalized for downstream use.
 #[async_trait]
 pub trait OpenCodePort: Send + Sync {
@@ -139,7 +149,9 @@ pub trait OpenCodePort: Send + Sync {
     ) -> Result<(), OcError>;
 }
 
-/// The read-only git surface used in Phase 2 (write verbs land in Phase 3).
+/// The git surface used by the bot. The read half lands in Phase 2; the write
+/// verbs (`commit_all`, `branch_exists`, `create_branch_at`, `reset_hard`) and
+/// the `untracked_files` helper (park's big-file guard) land in Phase 3 (P7).
 #[async_trait]
 pub trait GitPort: Send + Sync {
     /// Whether `directory` is inside a git work tree.
@@ -156,4 +168,29 @@ pub trait GitPort: Send + Sync {
     async fn log(&self, directory: &Path, base: Option<&str>) -> Result<Vec<CommitRow>, GitError>;
     /// Whether `sha` is an ancestor of `of`.
     async fn is_ancestor(&self, directory: &Path, sha: &str, of: &str) -> Result<bool, GitError>;
+    /// Every untracked, unignored path (repo-relative) in `directory`. The park
+    /// guard stats these to refuse an oversized attempt (P7).
+    async fn untracked_files(&self, directory: &Path) -> Result<Vec<String>, GitError>;
+    /// `git add -A` then commit the tree using the message file at
+    /// `message_path` (never argv, P7). `no_verify` skips commit hooks (park).
+    /// `Ok(Ok(sha))` is a landed commit; `Ok(Err(HookFailure))` is a rejected
+    /// commit whose output must be surfaced.
+    async fn commit_all(
+        &self,
+        directory: &Path,
+        message_path: &Path,
+        no_verify: bool,
+    ) -> Result<Result<String, HookFailure>, GitError>;
+    /// The tip of `name`, or `None` when the branch does not exist.
+    async fn branch_exists(&self, directory: &Path, name: &str)
+    -> Result<Option<String>, GitError>;
+    /// Create branch `name` at `at` (no checkout).
+    async fn create_branch_at(
+        &self,
+        directory: &Path,
+        name: &str,
+        at: &str,
+    ) -> Result<(), GitError>;
+    /// `git reset --hard <sha>`, discarding tracked/index changes (P7).
+    async fn reset_hard(&self, directory: &Path, sha: &str) -> Result<(), GitError>;
 }

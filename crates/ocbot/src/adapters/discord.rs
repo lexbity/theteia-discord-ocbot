@@ -80,22 +80,31 @@ pub fn message_builder(spec: &OutgoingMessage, operator: u64) -> CreateMessage {
         ));
     }
     if !spec.components.is_empty() {
-        let buttons = spec
+        // Discord allows at most five buttons per action row; a page of history
+        // can carry reset buttons plus paging, so chunk into rows of five.
+        let rows = spec
             .components
-            .iter()
-            .map(|component| {
-                let style = match component.kind {
-                    ButtonKind::Primary => ButtonStyle::Primary,
-                    ButtonKind::Secondary => ButtonStyle::Secondary,
-                    ButtonKind::Danger => ButtonStyle::Danger,
-                    ButtonKind::Success => ButtonStyle::Success,
-                };
-                CreateButton::new(component.custom_id.clone())
-                    .label(component.label.clone())
-                    .style(style)
+            .chunks(5)
+            .map(|chunk| {
+                let buttons = chunk
+                    .iter()
+                    .map(|component| {
+                        let style = match component.kind {
+                            ButtonKind::Primary => ButtonStyle::Primary,
+                            ButtonKind::Secondary => ButtonStyle::Secondary,
+                            ButtonKind::Danger => ButtonStyle::Danger,
+                            ButtonKind::Success => ButtonStyle::Success,
+                        };
+                        CreateButton::new(component.custom_id.clone())
+                            .label(component.label.clone())
+                            .style(style)
+                            .disabled(component.disabled)
+                    })
+                    .collect();
+                CreateActionRow::Buttons(buttons)
             })
             .collect();
-        builder = builder.components(vec![CreateActionRow::Buttons(buttons)]);
+        builder = builder.components(rows);
     }
     builder
 }
@@ -365,6 +374,9 @@ impl EventHandler for BotEvents {
         for (name, description) in [
             ("run", "Start a prompt run in a directory"),
             ("status", "Bot and server status"),
+            ("history", "Action history for the current directory"),
+            ("reset", "Reset the directory to a live commit"),
+            ("release", "Release a held directory lock"),
         ] {
             let command = CreateCommand::new(name).description(description);
             if let Err(error) = ctx.http.create_global_command(&command).await {

@@ -8,6 +8,7 @@
 pub mod adapters;
 pub mod app;
 pub mod config;
+pub mod harness;
 pub mod run;
 
 /// The current bot identity, used in user-agent strings and logs.

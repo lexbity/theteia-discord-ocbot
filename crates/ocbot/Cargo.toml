@@ -22,7 +22,6 @@ opencode-v2-client = { path = "../opencode-client", version = "0.1.0" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-anyhow.workspace = true
 async-trait.workspace = true
 tokio.workspace = true
 rusqlite.workspace = true

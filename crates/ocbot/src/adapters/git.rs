@@ -15,31 +15,57 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use ocbot_core::error::GitError;
-use ocbot_core::ports::{CommitRow, GitPort};
+use ocbot_core::ports::{CommitRow, GitPort, HookFailure};
 
-/// A git port bound to a binary path and a per-command timeout.
+/// The commit/hook timeout (spec §6.4 CP-A2: 120 s). Read verbs keep the
+/// shorter configurable timeout; a commit runs hooks, which deserve slack.
+pub const COMMIT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// A git port bound to a binary path and per-command timeouts.
 #[derive(Debug, Clone)]
 pub struct GitAdapter {
     git_bin: PathBuf,
     timeout: Duration,
+    commit_timeout: Duration,
 }
 
 impl GitAdapter {
-    /// The production adapter: `git` with a 10 s timeout (spec R-9).
+    /// The production adapter: `git`, a 10 s read timeout (spec R-9) and the
+    /// 120 s commit timeout.
     pub fn new() -> Self {
         Self::with_bin("git", Duration::from_secs(10))
     }
 
     /// A test seam: any executable (including a scripted fake git) with any
-    /// timeout. Not called by production wiring.
+    /// read timeout; commits keep the 120 s budget.
     pub fn with_bin(git_bin: impl Into<PathBuf>, timeout: Duration) -> Self {
+        Self::with_timeouts(git_bin, timeout, COMMIT_TIMEOUT)
+    }
+
+    /// A test seam exposing the commit timeout as well.
+    pub fn with_timeouts(
+        git_bin: impl Into<PathBuf>,
+        timeout: Duration,
+        commit_timeout: Duration,
+    ) -> Self {
         Self {
             git_bin: git_bin.into(),
             timeout,
+            commit_timeout,
         }
     }
 
-    /// Spawn `git -C <dir> <args...>`, wait with the configured timeout.
+    /// Spawn `git -C <dir> <args...>` with the default read timeout.
+    async fn run(
+        &self,
+        kind: &'static str,
+        args: &[&str],
+        directory: &Path,
+    ) -> Result<Output, GitError> {
+        self.run_with(kind, args, directory, self.timeout).await
+    }
+
+    /// Spawn `git -C <dir> <args...>`, wait with `timeout`.
     ///
     /// Uses `Command::output()` — which pipes stdout/stderr internally — under
     /// a timeout. No `kill_on_drop`: combined with output collection it kills
@@ -50,16 +76,17 @@ impl GitAdapter {
         clippy::disallowed_methods,
         reason = "the git adapter is the ONLY process spawn site (D-4/NFR-10)"
     )]
-    async fn run(
+    async fn run_with(
         &self,
         kind: &'static str,
         args: &[&str],
         directory: &Path,
+        timeout: Duration,
     ) -> Result<Output, GitError> {
         let mut command = tokio::process::Command::new(&self.git_bin);
         command.arg("-C").arg(directory).args(args);
         let output = command.output();
-        tokio::time::timeout(self.timeout, output)
+        tokio::time::timeout(timeout, output)
             .await
             .map_err(|_| GitError::Timeout { kind })?
             .map_err(|error| GitError::Spawn {
@@ -163,6 +190,107 @@ impl GitPort for GitAdapter {
             )
             .await?;
         Ok(output.status.success())
+    }
+
+    async fn untracked_files(&self, directory: &Path) -> Result<Vec<String>, GitError> {
+        let output = self
+            .run(
+                "untracked",
+                &["ls-files", "--others", "--exclude-standard", "-z"],
+                directory,
+            )
+            .await?;
+        if !output.status.success() {
+            return Err(GitError::Command {
+                kind: "untracked",
+                code: status_code(output.status),
+                stderr: truncate(500, &String::from_utf8_lossy(&output.stderr)),
+            });
+        }
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .split('\u{0}')
+            .filter(|path| !path.is_empty())
+            .map(str::to_owned)
+            .collect())
+    }
+
+    async fn commit_all(
+        &self,
+        directory: &Path,
+        message_path: &Path,
+        no_verify: bool,
+    ) -> Result<Result<String, HookFailure>, GitError> {
+        // `git add -A` stages tracked edits, deletions and untracked files so
+        // the attempt (including new files) is captured (P7).
+        let add = self.run("add", &["add", "-A"], directory).await?;
+        if !add.status.success() {
+            return Err(GitError::Command {
+                kind: "add",
+                code: status_code(add.status),
+                stderr: truncate(500, &String::from_utf8_lossy(&add.stderr)),
+            });
+        }
+        let message_path = message_path.to_str().ok_or_else(|| GitError::Spawn {
+            kind: "commit",
+            message: "commit message path is not valid utf-8".to_owned(),
+        })?;
+        let mut args = vec!["commit", "-F", message_path];
+        if no_verify {
+            args.insert(1, "--no-verify");
+        }
+        let commit = self
+            .run_with("commit", &args, directory, self.commit_timeout)
+            .await?;
+        if !commit.status.success() {
+            let mut text = String::from_utf8_lossy(&commit.stderr).into_owned();
+            text.push_str(&String::from_utf8_lossy(&commit.stdout));
+            return Ok(Err(HookFailure {
+                output: truncate(2_000, text.trim()),
+            }));
+        }
+        let sha = self
+            .capture("head", &["rev-parse", "HEAD"], directory)
+            .await?;
+        Ok(Ok(sha))
+    }
+
+    async fn branch_exists(
+        &self,
+        directory: &Path,
+        name: &str,
+    ) -> Result<Option<String>, GitError> {
+        let reference = format!("refs/heads/{name}");
+        let output = self
+            .run(
+                "rev-parse",
+                &["rev-parse", "--verify", "--quiet", &reference],
+                directory,
+            )
+            .await?;
+        if output.status.success() {
+            Ok(Some(
+                String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+            ))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn create_branch_at(
+        &self,
+        directory: &Path,
+        name: &str,
+        at: &str,
+    ) -> Result<(), GitError> {
+        self.capture("branch", &["branch", name, at], directory)
+            .await
+            .map(|_| ())
+    }
+
+    async fn reset_hard(&self, directory: &Path, sha: &str) -> Result<(), GitError> {
+        self.capture("reset", &["reset", "--hard", sha], directory)
+            .await
+            .map(|_| ())
     }
 }
 

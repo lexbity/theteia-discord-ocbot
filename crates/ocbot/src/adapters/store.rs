@@ -132,6 +132,22 @@ pub struct RunRow {
     pub kind: String,
 }
 
+/// A recorded reset intent (spec §6.4 CP-R0): the write-ahead log for a
+/// `reset --hard` whose `superseded/*` safety branch must exist first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResetIntentRow {
+    /// Row id.
+    pub id: i64,
+    /// The directory being reset.
+    pub dir: String,
+    /// The target sha.
+    pub target_sha: String,
+    /// The `superseded/<ts>` safety branch.
+    pub sup_branch: String,
+    /// The last completed step (0 = intent recorded).
+    pub step: i64,
+}
+
 type Job = Box<dyn FnOnce(&mut Connection) -> rusqlite::Result<Box<dyn Any + Send>> + Send>;
 type Request = (
     Job,
@@ -276,7 +292,7 @@ fn configure_and_migrate(connection: &mut Connection) -> Result<(), StoreError> 
     Ok(())
 }
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
     connection
@@ -288,11 +304,20 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
             |row| row.get(0),
         )
         .optional()?;
-    if current.is_some_and(|version| version >= SCHEMA_VERSION) {
+    let current = current.unwrap_or(0);
+    if current >= SCHEMA_VERSION {
         return Ok(());
     }
+    // Forward-only, stepwise: a v1 database gets V2 only, an empty database gets
+    // V1 then V2. Applying V1 to an existing v1 database would fail on the
+    // already-present tables.
     let transaction = connection.transaction()?;
-    transaction.execute_batch(MIGRATION_V1)?;
+    if current < 1 {
+        transaction.execute_batch(MIGRATION_V1)?;
+    }
+    if current < 2 {
+        transaction.execute_batch(MIGRATION_V2)?;
+    }
     transaction.execute(
         "INSERT INTO schema_version (v) VALUES (?1)",
         params![SCHEMA_VERSION],
@@ -414,6 +439,20 @@ CREATE TABLE audit (
   verb TEXT,
   action_id INTEGER,
   result TEXT
+);
+";
+
+/// v2 — the `reset_intent` write-ahead log (spec §6.4 CP-R0). A reset has no
+/// action state to CAS, so its intent lives in its own row: boot reconcile
+/// rolls the remaining steps forward from `step` (P6/P7).
+const MIGRATION_V2: &str = "
+CREATE TABLE reset_intent (
+  id INTEGER PRIMARY KEY,
+  dir TEXT NOT NULL,
+  target_sha TEXT NOT NULL,
+  sup_branch TEXT NOT NULL,
+  step INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
 );
 ";
 
@@ -610,13 +649,64 @@ impl StoreHandle {
     }
 
     async fn actions_with_state(&self, state: State) -> Result<Vec<ActionRow>, StoreError> {
-        let state_name = state.as_str().to_owned();
+        self.actions_in_states(&[state]).await
+    }
+
+    /// Actions currently in any of `states` (boot reconcile over intermediate
+    /// states uses this — spec P9 step 5).
+    pub async fn actions_in_states(&self, states: &[State]) -> Result<Vec<ActionRow>, StoreError> {
+        let names: Vec<String> = states
+            .iter()
+            .map(|state| state.as_str().to_owned())
+            .collect();
         self.call(move |connection| {
-            let mut statement = connection.prepare("SELECT * FROM action WHERE state = ?1")?;
+            if names.is_empty() {
+                return Ok(Vec::new());
+            }
+            let placeholders = vec!["?"; names.len()].join(",");
+            let sql = format!("SELECT * FROM action WHERE state IN ({placeholders}) ORDER BY id");
+            let mut statement = connection.prepare(&sql)?;
             let rows = statement
-                .query_map(params![state_name], action_row)?
+                .query_map(rusqlite::params_from_iter(names.iter()), action_row)?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(rows)
+        })
+        .await
+    }
+
+    /// Every action belonging to a directory, oldest first (history merge, P8).
+    pub async fn actions_for_dir(&self, dir: &str) -> Result<Vec<ActionRow>, StoreError> {
+        let dir = dir.to_owned();
+        self.call(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT action.* FROM action
+                 JOIN run ON action.run_id = run.id
+                 WHERE run.dir = ?1 ORDER BY action.id",
+            )?;
+            let rows = statement
+                .query_map(params![dir], action_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await
+    }
+
+    /// The most recent accepted sha in a directory, if any (park's fallback
+    /// reset target, spec P7 step 3).
+    pub async fn last_accept_sha(&self, dir: &str) -> Result<Option<String>, StoreError> {
+        let dir = dir.to_owned();
+        self.call(move |connection| {
+            connection
+                .query_row(
+                    "SELECT action.accept_sha FROM action
+                     JOIN run ON action.run_id = run.id
+                     WHERE run.dir = ?1 AND action.accept_sha IS NOT NULL
+                     ORDER BY action.id DESC LIMIT 1",
+                    params![dir],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()
+                .map(Option::flatten)
         })
         .await
     }
@@ -651,6 +741,32 @@ impl StoreHandle {
         let writes = writes.to_vec();
         self.call(move |connection| cas_inner(connection, id, from, to, &writes, None))
             .await
+    }
+
+    /// A CAS whose `from` may be any of `froms` (park starts from reported,
+    /// errored, or aborted; discard likewise — spec §6.4). Exactly one row
+    /// changes or the caller lost the race.
+    pub async fn cas_state_from_any(
+        &self,
+        id: i64,
+        froms: &[State],
+        to: State,
+        writes: &[(Column, WriteValue)],
+    ) -> Result<bool, StoreError> {
+        let writes = writes.to_vec();
+        let froms: Vec<String> = froms
+            .iter()
+            .map(|state| state.as_str().to_owned())
+            .collect();
+        self.call(move |connection| {
+            if froms.is_empty() {
+                return Ok(false);
+            }
+            let placeholders = vec!["?"; froms.len()].join(",");
+            let extra = format!("state IN ({placeholders})");
+            cas_inner_any(connection, id, &froms, to, &writes, &extra)
+        })
+        .await
     }
 
     /// The report-delivery CAS: `running → reported/errored/aborted` **only
@@ -909,6 +1025,135 @@ impl StoreHandle {
         })
         .await
     }
+
+    /// Insert the staged successor action of a park-redo (spec CP-P4): same
+    /// run, same stored prompt, incremented attempt, parented to the parked
+    /// action. Returns the new id.
+    pub async fn insert_staged_child(
+        &self,
+        run_id: i64,
+        channel_id: Option<i64>,
+        label: &str,
+        prompt_sent: &str,
+        attempt: i64,
+        parent_action_id: i64,
+    ) -> Result<i64, StoreError> {
+        let label = label.to_owned();
+        let prompt_sent = prompt_sent.to_owned();
+        self.call(move |connection| {
+            connection.execute(
+                "INSERT INTO action
+                    (run_id, channel_id, label, prompt_sent, state, attempt, parent_action_id)
+                 VALUES (?1, ?2, ?3, ?4, 'staged', ?5, ?6)",
+                params![
+                    run_id,
+                    channel_id,
+                    label,
+                    prompt_sent,
+                    attempt,
+                    parent_action_id
+                ],
+            )?;
+            Ok(connection.last_insert_rowid())
+        })
+        .await
+    }
+
+    /// Release a directory lock only if `holder` currently owns it (P5). A
+    /// stale holder (another action already took over) is a no-op.
+    pub async fn release_lock(&self, dir: &str, holder: &str) -> Result<bool, StoreError> {
+        let dir = dir.to_owned();
+        let holder = holder.to_owned();
+        self.call(move |connection| {
+            let changed = connection.execute(
+                "UPDATE project SET lock_holder = NULL, lock_since = NULL
+                 WHERE dir = ?1 AND lock_holder = ?2",
+                params![dir, holder],
+            )?;
+            Ok(changed == 1)
+        })
+        .await
+    }
+
+    /// Clear the promptable session for a directory (FR-30). Park and reset
+    /// retire the session so a stale session is readable but never prompted.
+    pub async fn retire_active_session(&self, dir: &str) -> Result<(), StoreError> {
+        let dir = dir.to_owned();
+        self.call(move |connection| {
+            connection.execute(
+                "UPDATE project SET active_session_id = NULL WHERE dir = ?1",
+                params![dir],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Record a reset intent (CP-R0) and return its id.
+    pub async fn record_reset_intent(
+        &self,
+        dir: &str,
+        target_sha: &str,
+        sup_branch: &str,
+    ) -> Result<i64, StoreError> {
+        let dir = dir.to_owned();
+        let target_sha = target_sha.to_owned();
+        let sup_branch = sup_branch.to_owned();
+        let now = now_unix();
+        self.call(move |connection| {
+            connection.execute(
+                "INSERT INTO reset_intent (dir, target_sha, sup_branch, step, created_at)
+                 VALUES (?1, ?2, ?3, 0, ?4)",
+                params![dir, target_sha, sup_branch, now],
+            )?;
+            Ok(connection.last_insert_rowid())
+        })
+        .await
+    }
+
+    /// Every unfinished reset intent (boot reconcile, P9 step 5).
+    pub async fn pending_reset_intents(&self) -> Result<Vec<ResetIntentRow>, StoreError> {
+        self.call(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT id, dir, target_sha, sup_branch, step FROM reset_intent ORDER BY id",
+            )?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok(ResetIntentRow {
+                        id: row.get(0)?,
+                        dir: row.get(1)?,
+                        target_sha: row.get(2)?,
+                        sup_branch: row.get(3)?,
+                        step: row.get(4)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await
+    }
+
+    /// Advance a reset intent's step (write-ahead; the intent row survives a
+    /// crash so the next boot rolls forward).
+    pub async fn set_reset_step(&self, id: i64, step: i64) -> Result<bool, StoreError> {
+        self.call(move |connection| {
+            let changed = connection.execute(
+                "UPDATE reset_intent SET step = ?1 WHERE id = ?2",
+                params![step, id],
+            )?;
+            Ok(changed == 1)
+        })
+        .await
+    }
+
+    /// Remove a completed reset intent.
+    pub async fn delete_reset_intent(&self, id: i64) -> Result<(), StoreError> {
+        self.call(move |connection| {
+            connection.execute("DELETE FROM reset_intent WHERE id = ?1", params![id])?;
+            Ok(())
+        })
+        .await
+    }
 }
 
 /// Shared CAS implementation. `extra_condition` adds a guard to the `WHERE`.
@@ -939,6 +1184,41 @@ fn cas_inner(
     if let Some(condition) = extra_condition {
         let _ = write!(sql, " AND {condition}");
     }
+    let references: Vec<&dyn rusqlite::ToSql> = values.iter().map(AsRef::as_ref).collect();
+    let params = rusqlite::params_from_iter(references.iter().copied());
+    let changed = connection.execute(&sql, params)?;
+    Ok(changed == 1)
+}
+
+/// A CAS whose state guard is a caller-supplied `IN (...)` clause (park and
+/// discard start from several decision states). `froms` are bound in order
+/// after the row id, matching the `?`s in `extra_condition`.
+fn cas_inner_any(
+    connection: &Connection,
+    id: i64,
+    froms: &[String],
+    to: State,
+    writes: &[(Column, WriteValue)],
+    extra_condition: &str,
+) -> rusqlite::Result<bool> {
+    use std::fmt::Write as _;
+    let mut sql = String::from("UPDATE action SET state = ?1");
+    let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    values.push(Box::new(to.as_str()));
+    for (column, value) in writes {
+        let _ = write!(sql, ", {} = ?{}", column.sql(), values.len() + 1);
+        match value {
+            WriteValue::Null => values.push(Box::new(Option::<String>::None)),
+            WriteValue::Text(text) => values.push(Box::new(text.clone())),
+            WriteValue::Int(integer) => values.push(Box::new(integer.to_owned())),
+        }
+    }
+    sql.push_str(" WHERE id = ?");
+    values.push(Box::new(id));
+    for from in froms {
+        values.push(Box::new(from.clone()));
+    }
+    let _ = write!(sql, " AND {extra_condition}");
     let references: Vec<&dyn rusqlite::ToSql> = values.iter().map(AsRef::as_ref).collect();
     let params = rusqlite::params_from_iter(references.iter().copied());
     let changed = connection.execute(&sql, params)?;

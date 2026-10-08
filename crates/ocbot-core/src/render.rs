@@ -5,6 +5,7 @@
 //! its single builder always sets `allowed_mentions { parse: [], users:
 //! [OPERATOR] }` (FR-3, structurally enforced).
 
+use crate::history::{HistoryKind, HistoryRow};
 use crate::outcome::Outcome;
 use crate::outcome::TokenCounts;
 
@@ -48,6 +49,9 @@ pub struct ComponentSpec {
     pub custom_id: String,
     /// The button style.
     pub kind: ButtonKind,
+    /// Whether the button is disabled (FR-15: a verb that cannot run here is
+    /// shown disabled-with-reason, never as a dead button).
+    pub disabled: bool,
 }
 
 /// Discord button styles.
@@ -69,10 +73,21 @@ pub fn component_button(
     custom_id: impl Into<String>,
     kind: ButtonKind,
 ) -> ComponentSpec {
+    component_button_state(label, custom_id, kind, false)
+}
+
+/// Build a button spec with an explicit enabled/disabled state.
+pub fn component_button_state(
+    label: impl Into<String>,
+    custom_id: impl Into<String>,
+    kind: ButtonKind,
+    disabled: bool,
+) -> ComponentSpec {
     ComponentSpec {
         label: label.into(),
         custom_id: custom_id.into(),
         kind,
+        disabled,
     }
 }
 
@@ -193,9 +208,53 @@ pub fn headline(outcome: &Outcome, label: &str) -> String {
     }
 }
 
-/// The full report message: headline + fenced excerpt + always-inline footer.
-/// Attaches the full text when the excerpt had to be truncated (non-searchable
-/// attachment is fine — full text lives in the DB, spec P10).
+/// The context the decision buttons need (spec FR-15/FR-26): the action rowid
+/// (for the `custom_id` grammar) and whether the directory is a git repo (a
+/// non-git action degrades to "Mark done", and Park/Reset are disabled).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReportContext {
+    /// The action row id.
+    pub action_id: i64,
+    /// Whether the run's directory is a git work tree.
+    pub is_git: bool,
+    /// The operator id, the only mentionable user (FR-3).
+    pub operator_id: u64,
+}
+
+/// The decision buttons for a finished action (spec FR-15). Buttons for verbs
+/// whose handlers exist in this build only — no dead buttons. `Follow up`
+/// arrives in Phase 5.
+pub fn decision_buttons(outcome: &Outcome, context: &ReportContext) -> Vec<ComponentSpec> {
+    let id = context.action_id;
+    let park = component_button_state(
+        "Park & redo",
+        format!("v1:park:{id}"),
+        ButtonKind::Danger,
+        !context.is_git,
+    );
+    match outcome {
+        Outcome::Completed { .. } => vec![
+            component_button(
+                if context.is_git {
+                    "Accept"
+                } else {
+                    "Mark done"
+                },
+                format!("v1:accept:{id}"),
+                ButtonKind::Success,
+            ),
+            park,
+        ],
+        Outcome::Errored { .. } | Outcome::Aborted | Outcome::Empty => vec![
+            park,
+            component_button("Discard", format!("v1:discard:{id}"), ButtonKind::Secondary),
+        ],
+    }
+}
+
+/// The full report message: headline + fenced excerpt + always-inline footer,
+/// followed by the decision buttons (FR-15) and, for a non-git directory, the
+/// FR-26 degradation note.
 ///
 /// `budget` is the total allowed size of `content` (default Discord cap); the
 /// footer is composed *before* truncation so it can never be cut.
@@ -203,12 +262,17 @@ pub fn report(
     label: &str,
     outcome: &Outcome,
     footer: &Footer,
-    operator_id: u64,
+    context: &ReportContext,
 ) -> OutgoingMessage {
     let label = sanitize_label(label);
     let head = headline(outcome, &label);
     let (excerpt, truncated) = report_excerpt(outcome, footer, &head, DISCORD_MESSAGE_CAP);
-    let content = format!("{head}\n```\n{excerpt}\n```\n{}", footer.render());
+    let mut message_text = format!("{head}\n```\n{excerpt}\n```\n{}", footer.render());
+    if !context.is_git {
+        message_text.push_str(
+            "\n_non-git directory: **Mark done** records the decision; Park/Reset are disabled._",
+        );
+    }
     let attachment = if truncated {
         let full = report_body(outcome);
         Some(AttachmentSpec {
@@ -219,10 +283,10 @@ pub fn report(
         None
     };
     OutgoingMessage {
-        content,
+        content: message_text,
         attachment,
-        components: Vec::new(),
-        mentioned_users: vec![operator_id],
+        components: decision_buttons(outcome, context),
+        mentioned_users: vec![context.operator_id],
     }
 }
 
@@ -306,12 +370,118 @@ pub fn staged_preview(
     }
 }
 
+/// Rows per history page. Five keeps the reset buttons plus paging well under
+/// Discord's 25-component cap.
+pub const HISTORY_PAGE_SIZE: usize = 5;
+
+/// Render one page of the P8 history: live commits are reset-eligible and show
+/// a `Reset here` button (`v1:reset:<sha>`); manual commits, orphaned actions
+/// and DB-only rows are shown with their provenance (spec P8, FR-25).
+pub fn history_page(
+    dir: &str,
+    rows: &[HistoryRow],
+    page: usize,
+    show_reset: bool,
+    operator_id: u64,
+) -> OutgoingMessage {
+    let total = rows.len().div_ceil(HISTORY_PAGE_SIZE).max(1);
+    let page = page.min(total - 1);
+    let start = page * HISTORY_PAGE_SIZE;
+    let end = (start + HISTORY_PAGE_SIZE).min(rows.len());
+
+    let mut content = format!(
+        "**History — `{}`**  ({} rows, page {}/{})\n",
+        inline_safe(dir),
+        rows.len(),
+        page + 1,
+        total
+    );
+    let mut components = Vec::new();
+    for row in &rows[start..end] {
+        content.push_str(&format_history_row(row));
+        content.push('\n');
+        if show_reset
+            && row.live
+            && let Some(sha) = row.sha.as_deref()
+        {
+            components.push(component_button(
+                format!("Reset {}", row.short_sha().unwrap_or_default()),
+                format!("v1:reset:{sha}"),
+                ButtonKind::Secondary,
+            ));
+        }
+    }
+    if total > 1 {
+        if page > 0 {
+            components.push(component_button(
+                "◀ Prev",
+                format!("v1:page:history:{}", page - 1),
+                ButtonKind::Secondary,
+            ));
+        }
+        if page + 1 < total {
+            components.push(component_button(
+                "Next ▶",
+                format!("v1:page:history:{}", page + 1),
+                ButtonKind::Secondary,
+            ));
+        }
+    }
+
+    OutgoingMessage {
+        content,
+        attachment: None,
+        components,
+        mentioned_users: vec![operator_id],
+    }
+}
+
+fn format_history_row(row: &HistoryRow) -> String {
+    let sha = row.short_sha().unwrap_or_else(|| "-------".to_owned());
+    match row.kind {
+        HistoryKind::Commit => format!(
+            "`{sha}` ✅ **{}** — {}",
+            inline_safe(row.label.as_deref().unwrap_or("?")),
+            inline_safe(&row.subject)
+        ),
+        HistoryKind::Manual => format!("`{sha}` ✎ manual — {}", inline_safe(&row.subject)),
+        HistoryKind::Orphaned => {
+            let branch = row.branch.as_deref().map_or(String::new(), |branch| {
+                format!(" · branch `{}`", inline_safe(branch))
+            });
+            format!(
+                "`{sha}` ⚠ **{}** (orphaned){branch}",
+                inline_safe(row.label.as_deref().unwrap_or("?"))
+            )
+        }
+        HistoryKind::DbOnly => format!(
+            "• **{}** ({})",
+            inline_safe(row.label.as_deref().unwrap_or("?")),
+            row.state.map_or("?", |state| state.as_str())
+        ),
+    }
+}
+
+/// Neutralize a value for inline (non-fenced) markdown: collapse whitespace and
+/// drop backticks so a label cannot break the row structure.
+fn inline_safe(text: &str) -> String {
+    sanitize_label(text).replace('`', "'")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        DISCORD_MESSAGE_CAP, Footer, Outcome, TokenCounts, fence_neutralize, report, split_excerpt,
-        staged_preview,
+        DISCORD_MESSAGE_CAP, Footer, Outcome, ReportContext, TokenCounts, decision_buttons,
+        fence_neutralize, report, split_excerpt, staged_preview,
     };
+
+    fn done_context(action_id: i64, is_git: bool) -> ReportContext {
+        ReportContext {
+            action_id,
+            is_git,
+            operator_id: 42,
+        }
+    }
 
     #[test]
     fn fence_neutralization_never_leaves_triple_backticks() {
@@ -350,7 +520,7 @@ mod tests {
             "big task",
             &Outcome::Completed { report: long },
             &footer,
-            42,
+            &done_context(5, true),
         );
         assert!(
             message.content.len() <= DISCORD_MESSAGE_CAP,
@@ -375,7 +545,7 @@ mod tests {
                 report: "short".to_owned(),
             },
             &Footer::default(),
-            7,
+            &done_context(7, true),
         );
         assert!(message.attachment.is_none());
         assert!(message.content.contains("Duration n/a"));
@@ -398,11 +568,62 @@ mod tests {
                 report: "x".to_owned(),
             },
             &Footer::default(),
-            1,
+            &done_context(1, true),
         );
         assert_eq!(
             message.content.lines().next().unwrap(),
             "✅ Completed — **a ``` @everyone**"
         );
+    }
+
+    #[test]
+    fn completed_git_report_carries_accept_and_park() {
+        let buttons = decision_buttons(
+            &Outcome::Completed {
+                report: "x".to_owned(),
+            },
+            &done_context(11, true),
+        );
+        assert_eq!(buttons.len(), 2);
+        assert_eq!(buttons[0].custom_id, "v1:accept:11");
+        assert_eq!(buttons[0].label, "Accept");
+        assert!(!buttons[0].disabled);
+        assert_eq!(buttons[1].custom_id, "v1:park:11");
+        assert!(!buttons[1].disabled);
+    }
+
+    #[test]
+    fn non_git_completed_report_marks_done_and_disables_park() {
+        let message = report(
+            "t",
+            &Outcome::Completed {
+                report: "x".to_owned(),
+            },
+            &Footer::default(),
+            &done_context(12, false),
+        );
+        let accept = &message.components[0];
+        assert_eq!(accept.label, "Mark done");
+        assert_eq!(accept.custom_id, "v1:accept:12");
+        assert!(
+            message
+                .components
+                .iter()
+                .any(|c| c.label == "Park & redo" && c.disabled),
+            "park disabled for non-git"
+        );
+        assert!(message.content.contains("non-git"));
+    }
+
+    #[test]
+    fn errored_report_carries_park_and_discard() {
+        let buttons = decision_buttons(
+            &Outcome::Errored {
+                error: "boom".to_owned(),
+            },
+            &done_context(13, true),
+        );
+        assert_eq!(buttons[0].custom_id, "v1:park:13");
+        assert_eq!(buttons[1].custom_id, "v1:discard:13");
     }
 }

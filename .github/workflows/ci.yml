@@ -102,7 +102,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-mutants
-      - run: cargo mutants --file crates/ocbot-core/src/state.rs --file crates/ocbot-core/src/render.rs
+      - run: cargo mutants --file crates/ocbot-core/src/state.rs --file crates/ocbot-core/src/render.rs --file crates/ocbot-core/src/history.rs
         continue-on-error: false
 
   client-publish-dry-run:
