@@ -32,10 +32,12 @@ use crate::config::Templates;
 /// Read the harness environment and run one step sequence.
 ///
 /// Environment: `OCBOT_CRASH_DB`, `OCBOT_CRASH_MODE`
-/// (`accept|park|reset`), `OCBOT_CRASH_ACTION` (accept/park),
-/// `OCBOT_CRASH_DIR`/`OCBOT_CRASH_TARGET` (reset), `OCBOT_CRASH_OPERATOR`, and
-/// the `OCBOT_TEST_CRASH_AFTER`/`OCBOT_TEST_CRASH_DIR` pair consumed by the
-/// checkpoint hook.
+/// (`accept|park|reset|store`), `OCBOT_CRASH_ACTION` (accept/park),
+/// `OCBOT_CRASH_DIR`/`OCBOT_CRASH_TARGET` (reset/store), `OCBOT_CRASH_OPERATOR`,
+/// and the `OCBOT_TEST_CRASH_AFTER`/`OCBOT_TEST_CRASH_DIR` pair consumed by the
+/// checkpoint hook. `store` runs a fixed typed-store write sequence with a
+/// checkpoint after each commit, so `tests/store_actor_chaos` can SIGKILL
+/// between operations and assert durability.
 pub async fn run_from_env() -> Result<(), String> {
     let db = env("OCBOT_CRASH_DB")?;
     let mode = env("OCBOT_CRASH_MODE")?;
@@ -102,8 +104,63 @@ pub async fn run_from_env() -> Result<(), String> {
                 .await
                 .map_err(|error| error.to_string())?;
         }
+        // A fixed typed-store write sequence; each commit is a labelled crash
+        // point. `StoreHandle::open` above already created the schema.
+        "store" => run_store_sequence(&store, &env("OCBOT_CRASH_DIR")?).await?,
         other => return Err(format!("unknown OCBOT_CRASH_MODE {other:?}")),
     }
+    Ok(())
+}
+
+/// The `store` crash sequence: one typed commit per labelled checkpoint, so a
+/// SIGKILL between them leaves exactly the committed prefix.
+async fn run_store_sequence(store: &StoreHandle, dir: &str) -> Result<(), String> {
+    let checkpoint = crate::app::crashpoint::checkpoint;
+    let store_err = |error: crate::adapters::store::StoreError| error.to_string();
+    store
+        .upsert_project(dir, None, None)
+        .await
+        .map_err(store_err)?;
+    checkpoint("STORE-PROJECT");
+    let run_id = store.insert_run(dir, "free").await.map_err(store_err)?;
+    checkpoint("STORE-RUN");
+    let action_id = store
+        .insert_action(run_id, Some(7), "chaos", "prompt", 1)
+        .await
+        .map_err(store_err)?;
+    checkpoint("STORE-ACTION");
+    if !store
+        .begin_send(action_id, dir, "ses_chaos", None, false)
+        .await
+        .map_err(store_err)?
+    {
+        return Err("begin_send did not take".to_owned());
+    }
+    checkpoint("STORE-SEND");
+    if !store
+        .deliver_report(
+            action_id,
+            ocbot_core::State::Reported,
+            "m1",
+            "completed",
+            Some("done"),
+            "{}",
+            1,
+        )
+        .await
+        .map_err(store_err)?
+    {
+        return Err("deliver_report did not take".to_owned());
+    }
+    checkpoint("STORE-REPORT");
+    if !store
+        .release_lock(dir, &action_id.to_string())
+        .await
+        .map_err(store_err)?
+    {
+        return Err("release_lock did not take".to_owned());
+    }
+    checkpoint("STORE-RELEASE");
     Ok(())
 }
 

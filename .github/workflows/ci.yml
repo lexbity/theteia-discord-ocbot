@@ -187,5 +187,10 @@ jobs:
           tool: cargo-nextest
       - if: matrix.job == 'sigkill'
         # The real-SIGKILL half of AC-6: spawn the harness, kill it at each
-        # labelled point, and prove boot reconcile recovers.
-        run: cargo nextest run -p ocbot --test chaos_sigkill --retries 2
+        # labelled point, and prove boot reconcile recovers. The store-actor
+        # chaos test kills between typed-store commits and proves WAL recovery.
+        run: >-
+          cargo nextest run -p ocbot
+          --test chaos_sigkill
+          --test store_actor_chaos
+          --retries 2
