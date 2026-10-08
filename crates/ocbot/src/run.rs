@@ -271,8 +271,8 @@ pub async fn start() -> ExitCode {
         }
     };
 
-    match tokio::signal::ctrl_c().await {
-        Ok(()) => tracing::info!("ctrl-c received; draining"),
+    match shutdown_signal().await {
+        Ok(signal) => tracing::info!(signal, "shutdown received; draining"),
         Err(error) => {
             tracing::error!(error = %error, "signal handler failed");
             return ExitCode::from(1);
@@ -283,4 +283,24 @@ pub async fn start() -> ExitCode {
     store.shutdown().await;
     tracing::info!("drained; goodbye");
     ExitCode::SUCCESS
+}
+
+/// Wait for SIGINT or SIGTERM. `systemd` sends SIGTERM (`KillSignal=SIGTERM`),
+/// so both must drain: a bare `ctrl_c()` would terminate on SIGTERM without the
+/// store's WAL checkpoint (spec NFR-9). Returns the signal name for the log.
+async fn shutdown_signal() -> std::io::Result<&'static str> {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut interrupt = signal(SignalKind::interrupt())?;
+        let mut terminate = signal(SignalKind::terminate())?;
+        tokio::select! {
+            _ = interrupt.recv() => Ok("SIGINT"),
+            _ = terminate.recv() => Ok("SIGTERM"),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await.map(|()| "ctrl-c")
+    }
 }

@@ -1,9 +1,9 @@
-# CI for ocbot — Phase 0 job matrix (spec Part 2 §D4).
+# CI for ocbot — job matrix (spec Part 2 §D4).
 #
-# Coverage and mutant jobs are intentionally absent until Phase 1 (they gate
-# `ocbot-core`), per the spec's "from P1" carve-outs. The nightly job authoring
-# cargo-fuzz serde targets and the live contract suite is configured now so the
-# capability exists from commit one.
+# Coverage gates are per crate (`scripts/coverage.sh`): core ≥ 90, client ≥ 90,
+# shell ≥ 70. Mutation testing is scoped per PR and full-core nightly. The
+# nightly job also runs cargo-fuzz serde targets, the live contract suite, and
+# the real-SIGKILL chaos half.
 
 name: ci
 
@@ -82,8 +82,8 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - run: ./scripts/gates.sh
 
-  coverage-core:
-    # ocbot-core ≥ 90% lines (NFR-8), active from Phase 1.
+  coverage:
+    # Per-crate line-coverage gates (NFR-8): core ≥ 90, client ≥ 90, shell ≥ 70.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -91,7 +91,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov
-      - run: cargo llvm-cov -p ocbot-core --fail-under-lines 90 --summary-only
+      - run: ./scripts/coverage.sh
 
   mutants:
     # Scoped mutation check for the diff (NFR-8); nightly runs the full core.

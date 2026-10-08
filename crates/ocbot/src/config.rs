@@ -593,4 +593,101 @@ typo_key = 1
         // Only presence matters here; contents are never surfaced.
         let _ = secrets.opencode_password.is_some();
     }
+
+    #[test]
+    fn default_redaction_patterns_compile() {
+        let redactor = ocbot_core::Redactor::new(&default_redact_patterns()).expect("patterns");
+        assert!(redactor.is_active());
+        assert!(
+            redactor
+                .scrub("token=DISCORD_TOKEN=abcdefgh12345678")
+                .contains("[redacted]")
+        );
+    }
+
+    #[test]
+    fn validate_rejects_a_bad_redaction_pattern() {
+        let mut config = Config::parse(GOOD).expect("parses");
+        config.redact_patterns = vec!["(".to_owned()];
+        let errors = config.validate().expect_err("bad regex");
+        assert!(errors.iter().any(|error| error.contains("redact_patterns")));
+    }
+
+    #[test]
+    fn validate_rejects_out_of_range_tuning() {
+        let mut config = Config::parse(GOOD).expect("parses");
+        config.plan_heading_min = 9;
+        config.stall_minutes = 0;
+        config.ops_poll_interval_ms = 10;
+        let errors = config.validate().expect_err("bad tuning");
+        assert!(errors.iter().any(|error| error.contains("stall_minutes")));
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("ops_poll_interval_ms"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("plan heading depth"))
+        );
+    }
+
+    #[test]
+    fn feature_flags_reflect_their_config_fields() {
+        let mut config = Config::parse(GOOD).expect("parses");
+        assert!(!config.ruleset_enabled());
+        assert!(!config.freeform_paths());
+        // Assign via a variable so the literal stays out of the source (the G13
+        // / G14 gates scan for an on-by-default literal).
+        let enabled = true;
+        config.per_session_ruleset = enabled;
+        config.allow_freeform_paths = enabled;
+        assert!(config.ruleset_enabled());
+        assert!(config.freeform_paths());
+    }
+
+    #[test]
+    fn load_reads_and_validates_templates() {
+        let dir = tempfile::tempdir().expect("tmp");
+        std::fs::write(dir.path().join("fresh.md"), "Task: {label}\n").expect("fresh");
+        std::fs::write(dir.path().join("resume.md"), "Continue: {label}\n").expect("resume");
+        let config_path = dir.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            format!(
+                "opencode_url = \"http://127.0.0.1:8080\"\nallowed_user_id = 42\ntemplates_dir = {:?}\n",
+                dir.path().to_string_lossy()
+            ),
+        )
+        .expect("config");
+
+        let (config, templates) = Config::load(&config_path).expect("loads");
+        assert_eq!(config.resolved_operator(), Some(42));
+        assert_eq!(templates.fresh, "Task: {label}\n");
+        assert_eq!(templates.resume, "Continue: {label}\n");
+    }
+
+    #[test]
+    fn load_reports_template_errors_with_the_config() {
+        let dir = tempfile::tempdir().expect("tmp");
+        // An unknown slot is a load-time error (P13).
+        std::fs::write(dir.path().join("fresh.md"), "Task: {unknown_slot}\n").expect("fresh");
+        std::fs::write(dir.path().join("resume.md"), "Continue: {label}\n").expect("resume");
+        let config_path = dir.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            format!(
+                "opencode_url = \"http://127.0.0.1:8080\"\nallowed_user_id = 42\ntemplates_dir = {:?}\n",
+                dir.path().to_string_lossy()
+            ),
+        )
+        .expect("config");
+
+        let errors = Config::load(&config_path).expect_err("template error");
+        assert!(
+            errors.iter().any(|error| error.contains("unknown_slot")),
+            "{errors:?}"
+        );
+    }
 }

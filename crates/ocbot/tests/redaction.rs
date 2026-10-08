@@ -163,3 +163,22 @@ fn logging_writer_scrubs_captured_lines() {
     assert!(captured.contains("[redacted]"), "{captured}");
     assert!(captured.contains("a leaky log line"), "{captured}");
 }
+
+#[test]
+fn logging_writer_passes_lines_through_when_disarmed() {
+    use tracing_subscriber::layer::SubscriberExt as _;
+
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let subscriber =
+        tracing_subscriber::registry().with(tracing_subscriber::fmt::layer().json().with_writer(
+            logging::scrub_writer(Buffer(buffer.clone()), Arc::new(Redactor::default())),
+        ));
+
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::info!(detail = "nothing sensitive", "plain line");
+    });
+
+    let captured = String::from_utf8(buffer.lock().expect("lock").clone()).expect("utf8");
+    assert!(captured.contains("plain line"), "{captured}");
+    assert!(!captured.contains("[redacted]"), "{captured}");
+}

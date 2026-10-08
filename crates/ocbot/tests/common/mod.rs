@@ -205,12 +205,15 @@ impl OpenCodePort for FakeOpenCode {
         self.inner()
             .calls
             .push(Call::Activity(session_id.to_owned()));
-        Ok(self
-            .inner()
-            .activities
-            .get(session_id)
-            .copied()
-            .unwrap_or(Activity::Idle))
+        // An explicitly scripted session wins, so a test can hold one session
+        // busy while forcing every unscripted probe to fail.
+        if let Some(activity) = self.inner().activities.get(session_id).copied() {
+            return Ok(activity);
+        }
+        if self.inner().unreachable {
+            return Err(OcError::Transport("server down".to_owned()));
+        }
+        Ok(Activity::Idle)
     }
 
     async fn create_session(
