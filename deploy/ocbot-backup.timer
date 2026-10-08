@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly ocbot SQLite backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=5m
+Persistent=true
+Unit=ocbot-backup.service
+
+[Install]
+WantedBy=timers.target

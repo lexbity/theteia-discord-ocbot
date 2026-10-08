@@ -5,10 +5,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use ocbot_core::OutgoingMessage;
 use ocbot_core::ports::{Clock, FsPort, GitPort, OpenCodePort, PermissionRule};
+use ocbot_core::{OutgoingMessage, Redactor};
 
 use crate::adapters::store::StoreHandle;
+use crate::app::degraded::HealthMonitor;
 use crate::app::guard::Guard;
 use crate::app::metrics::Metrics;
 use crate::config::Templates;
@@ -60,6 +61,10 @@ pub struct AppContext {
     pub discord: Arc<dyn DiscordPort>,
     /// Metrics registry.
     pub metrics: Arc<Metrics>,
+    /// Inline-report secret scrubber (R-12).
+    pub redactor: Arc<Redactor>,
+    /// opencode reachability transition state (FR-38).
+    pub health: Arc<HealthMonitor>,
     /// The single chokepoint (P1/AC-1).
     pub guard: Guard,
     /// Load-time validated prompt templates.

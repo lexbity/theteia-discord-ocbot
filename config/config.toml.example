@@ -59,3 +59,19 @@ git_timeout_secs = 10
 
 # /ls entries per page (P10).
 # ls_page_size = 18
+
+# Phase 7 ops -----------------------------------------------------------------
+# Minutes of silence before the stall watchdog posts one ping (P3/FR-39).
+# stall_minutes = 45
+
+# Cadence of the ops loop: reachability (FR-38), derived gauges, stall scan.
+# ops_poll_interval_ms = 30000
+
+# Regexes scrubbed from the *inline* report path (R-12). The full report body
+# (DB + report.md attachment) is stored verbatim for the operator's audit trail.
+# redact_patterns = [
+#   "(?i)discord[_-]?token\\s*[:=]\\s*[A-Za-z0-9._\\-]{8,}",
+#   "(?i)opencode[_-]?password\\s*[:=]\\s*\\S+",
+#   "(?i)api[_-]?key\\s*[:=]\\s*\\S+",
+#   "(?i)bearer\\s+[A-Za-z0-9._\\-]{8,}",
+# ]

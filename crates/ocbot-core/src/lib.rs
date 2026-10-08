@@ -36,8 +36,8 @@ pub use plan::{
 pub use ports::HookFailure;
 pub use render::{
     AttachmentSpec, ButtonKind, ComponentSpec, Footer, HISTORY_PAGE_SIZE, LS_PAGE_SIZE, LsEntry,
-    OutgoingMessage, ReportContext, component_button, component_button_state, decision_buttons,
-    fence_neutralize, gate_message, headline, history_page, ls_message, plan_picker_message,
-    report, split_excerpt, staged_preview,
+    OutgoingMessage, REDACTED, RedactError, Redactor, ReportContext, component_button,
+    component_button_state, decision_buttons, fence_neutralize, gate_message, headline,
+    history_page, ls_message, plan_picker_message, report, split_excerpt, staged_preview,
 };
 pub use state::{ALL_STATES, CasIntent, Column, Event, State, WriteValue, transition};

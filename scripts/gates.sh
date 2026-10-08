@@ -164,4 +164,38 @@ if grep -rn "std::fs::" crates/ocbot/src/app/handlers/ls.rs crates/ocbot/src/app
 fi
 probe "G16" "std::fs::" 'let x = std::fs::read_to_string(p);'
 
+# --- Phase 7 appended gates (spec Part 2, Phase 7) -------------------------
+# G17: no secret value is committed (NFR-10 / R-12). A token/password assigned
+# a long literal would be a live credential in git history.
+SECRET_RE="(DISCORD_TOKEN|OPENCODE_PASSWORD)[[:space:]]*=[[:space:]]*[\"'][A-Za-z0-9_-]{8,}"
+# Exclude this script: its own self-test contains the sample it must detect.
+if grep -rnE "$SECRET_RE" --exclude-dir=target --exclude-dir=.git --exclude=gates.sh . 2>/dev/null; then
+  fail "G17: a secret value is committed"
+fi
+probe "G17" "$SECRET_RE" 'DISCORD_TOKEN="abcdefgh12345678"'
+
+# G18: the metrics listener is loopback-only (NFR-9). A wildcard bind would
+# expose the registry to the network.
+if grep -rn "0\.0\.0\.0" crates/ocbot/src/app/metrics.rs config/config.toml.example 2>/dev/null; then
+  fail "G18: metrics must bind loopback only"
+fi
+if ! grep -q "127.0.0.1:9464" config/config.toml.example; then
+  fail "G18: the loopback metrics default is missing from config.toml.example"
+fi
+probe "G18" "0\.0\.0\.0" 'metrics_bind = "0.0.0.0:9464"'
+
+# G19: the deployment units run unprivileged and are memory-capped (NFR-6/R-3).
+for unit in deploy/ocbot.service deploy/opencode.service; do
+  if [ ! -f "$unit" ]; then
+    fail "G19: missing deployment unit $unit"
+  fi
+  if ! grep -q "^User=" "$unit"; then
+    fail "G19: $unit does not drop to a non-root user"
+  fi
+  if ! grep -q "^MemoryMax=" "$unit"; then
+    fail "G19: $unit has no MemoryMax ceiling (NFR-6)"
+  fi
+done
+probe "G19" "^User=" 'User=ocbot'
+
 echo "gates: OK"

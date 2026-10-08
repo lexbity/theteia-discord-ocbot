@@ -115,7 +115,7 @@ async fn handle_gate(
     let payload_json = serde_json::to_string(gate)
         .map_err(|error| AppError::Other(format!("gate payload: {error}")))?;
 
-    let (rowid, _inserted) = ctx
+    let (rowid, inserted) = ctx
         .store
         .upsert_gate(
             &gate.id,
@@ -129,6 +129,13 @@ async fn handle_gate(
             ctx.clock.now(),
         )
         .await?;
+    if inserted {
+        let tool = match &gate.kind {
+            GateKind::Permission { action, .. } => action.as_str(),
+            GateKind::Form { .. } => "form",
+        };
+        ctx.metrics.inc_gate_request(kind, tool);
+    }
 
     if let Some(action_id) = action_id {
         ctx.store.set_action_blocked(action_id, rowid).await?;

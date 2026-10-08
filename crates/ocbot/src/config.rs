@@ -96,6 +96,15 @@ pub struct Config {
     /// `/ls` entries per page (P10: stays under the component cap).
     #[serde(default = "default_ls_page_size")]
     pub ls_page_size: usize,
+    /// Minutes of silence before the stall watchdog pings (P3/FR-39).
+    #[serde(default = "default_stall_minutes")]
+    pub stall_minutes: u64,
+    /// Cadence of the ops loop (health, gauges, stall) in ms.
+    #[serde(default = "default_ops_poll")]
+    pub ops_poll_interval_ms: u64,
+    /// Regexes scrubbed from the inline report path (R-12).
+    #[serde(default = "default_redact_patterns")]
+    pub redact_patterns: Vec<String>,
 }
 
 fn default_db() -> String {
@@ -158,6 +167,25 @@ fn default_ls_page_size() -> usize {
     ocbot_core::render::LS_PAGE_SIZE
 }
 
+fn default_stall_minutes() -> u64 {
+    45
+}
+
+fn default_ops_poll() -> u64 {
+    30_000
+}
+
+/// The default secret scrubbers (R-12): token/password/key assignments and
+/// bearer tokens. Applied to the inline report path only.
+pub fn default_redact_patterns() -> Vec<String> {
+    vec![
+        r"(?i)discord[_-]?token\s*[:=]\s*[A-Za-z0-9._\-]{8,}".to_owned(),
+        r"(?i)opencode[_-]?password\s*[:=]\s*\S+".to_owned(),
+        r"(?i)api[_-]?key\s*[:=]\s*\S+".to_owned(),
+        r"(?i)bearer\s+[A-Za-z0-9._\-]{8,}".to_owned(),
+    ]
+}
+
 /// The templates the bot can render (P13 envelope slots, load-time validated).
 #[derive(Debug, Clone)]
 pub struct Templates {
@@ -205,6 +233,10 @@ impl Config {
 
     /// Collect every config-level validation error at once (spec: "all
     /// validation errors collected and reported together").
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one flat list of independent checks; each is a few lines and grouping them would hide one behind a helper"
+    )]
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
 
@@ -287,6 +319,21 @@ impl Config {
                 "ls_page_size must be >= 1, got {}",
                 self.ls_page_size
             ));
+        }
+        if self.stall_minutes < 1 {
+            errors.push(format!(
+                "stall_minutes must be >= 1, got {}",
+                self.stall_minutes
+            ));
+        }
+        if self.ops_poll_interval_ms < 1_000 {
+            errors.push(format!(
+                "ops_poll_interval_ms must be >= 1000, got {}",
+                self.ops_poll_interval_ms
+            ));
+        }
+        if let Err(error) = ocbot_core::Redactor::new(&self.redact_patterns) {
+            errors.push(format!("redact_patterns: {error}"));
         }
 
         let operator = self.allowed_user_id.or_else(|| {
@@ -463,7 +510,7 @@ use std::os::unix::fs::PermissionsExt;
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, Secrets, is_loopback};
+    use super::{Config, Secrets, default_redact_patterns, is_loopback};
     use url::Url;
 
     const GOOD: &str = r#"
@@ -518,6 +565,9 @@ typo_key = 1
             plan_heading_min: 2,
             plan_heading_max: 3,
             ls_page_size: 18,
+            stall_minutes: 45,
+            ops_poll_interval_ms: 30_000,
+            redact_patterns: default_redact_patterns(),
         };
         let errors = config.validate().expect_err("multiple errors");
         assert!(errors.len() >= 3, "errors: {errors:?}");

@@ -15,7 +15,8 @@ mod common;
 
 use ocbot::adapters::discord::{message_builder, operator_allowed_mentions};
 use ocbot_core::render::{
-    ButtonKind, Footer, OutgoingMessage, ReportContext, component_button, report, staged_preview,
+    ButtonKind, Footer, OutgoingMessage, Redactor, ReportContext, component_button, report,
+    staged_preview,
 };
 use ocbot_core::{Outcome, TokenCounts};
 
@@ -47,6 +48,7 @@ fn every_message_type_carries_operator_only_mentions() {
             },
             &Footer::default(),
             &report_context(1, true),
+            &Redactor::default(),
         ),
         staged_preview("label", "prompt text", 3, OPERATOR, "fresh"),
         OutgoingMessage {
@@ -136,6 +138,7 @@ fn report_footer_is_inline_and_stays_under_cap() {
         },
         &footer,
         &report_context(2, true),
+        &Redactor::default(),
     );
     assert!(message.content.len() <= 2_000);
     assert!(message.content.contains("Duration 1m 30s"));

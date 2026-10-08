@@ -801,28 +801,28 @@ impl StoreHandle {
             .await
     }
 
-    /// A CAS whose `from` may be any of `froms` (park starts from reported,
-    /// errored, or aborted; discard likewise — spec §6.4). Exactly one row
-    /// changes or the caller lost the race.
+    /// A CAS whose `from` may be any of `from_states` (park starts from
+    /// reported, errored, or aborted; discard likewise — spec §6.4). Exactly
+    /// one row changes or the caller lost the race.
     pub async fn cas_state_from_any(
         &self,
         id: i64,
-        froms: &[State],
+        from_states: &[State],
         to: State,
         writes: &[(Column, WriteValue)],
     ) -> Result<bool, StoreError> {
         let writes = writes.to_vec();
-        let froms: Vec<String> = froms
+        let from_states: Vec<String> = from_states
             .iter()
             .map(|state| state.as_str().to_owned())
             .collect();
         self.call(move |connection| {
-            if froms.is_empty() {
+            if from_states.is_empty() {
                 return Ok(false);
             }
-            let placeholders = vec!["?"; froms.len()].join(",");
+            let placeholders = vec!["?"; from_states.len()].join(",");
             let extra = format!("state IN ({placeholders})");
-            cas_inner_any(connection, id, &froms, to, &writes, &extra)
+            cas_inner_any(connection, id, &from_states, to, &writes, &extra)
         })
         .await
     }
@@ -982,6 +982,18 @@ impl StoreHandle {
                 params![template, prompt, id],
             )?;
             Ok(changed == 1)
+        })
+        .await
+    }
+
+    /// Record a stall ping time (P3/FR-39: one ping per stall episode).
+    pub async fn set_stall_ping(&self, id: i64, ts: i64) -> Result<(), StoreError> {
+        self.call(move |connection| {
+            connection.execute(
+                "UPDATE action SET stall_ping_at = ?1 WHERE id = ?2",
+                params![ts, id],
+            )?;
+            Ok(())
         })
         .await
     }

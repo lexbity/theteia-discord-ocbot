@@ -1,0 +1,31 @@
+[Unit]
+Description=ocbot — deterministic Discord controller for a local opencode v2 server
+After=network-online.target opencode.service
+Wants=opencode.service
+# Boot order is a soft preference: ocbot starts in `degraded` mode if opencode
+# is not up yet (FR-38) and recovers on its own.
+
+[Service]
+Type=simple
+User=ocbot
+Group=ocbot
+WorkingDirectory=/srv/ocbot
+# DISCORD_TOKEN, OPENCODE_PASSWORD, ALLOWED_USER_ID live here, mode 0600.
+EnvironmentFile=/etc/ocbot/ocbot.env
+ExecStart=/usr/local/bin/ocbot
+Restart=on-failure
+RestartSec=5
+# SIGTERM is handled: drain gateway, checkpoint WAL, exit 0 (NFR-9).
+KillSignal=SIGTERM
+TimeoutStopSec=30
+# Hardening (R-3/R-4): no ambient authority; narrow write surface.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/srv/ocbot
+# NFR-6: the steady-state RSS ceiling, enforced by the cgroup.
+MemoryMax=200M
+
+[Install]
+WantedBy=multi-user.target

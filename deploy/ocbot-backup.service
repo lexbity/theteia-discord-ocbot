@@ -1,0 +1,17 @@
+[Unit]
+Description=ocbot SQLite backup (VACUUM INTO, 14-day retention)
+After=ocbot.service
+# A failed backup must be visible, not silent (NFR-12).
+
+[Service]
+Type=oneshot
+User=ocbot
+Group=ocbot
+WorkingDirectory=/srv/ocbot
+EnvironmentFile=/etc/ocbot/ocbot.env
+Environment=OCBOT_DB=/srv/ocbot/ocbot.db
+Environment=OCBOT_BACKUP_DIR=/srv/ocbot/backups
+Environment=OCBOT_BACKUP_RETAIN_DAYS=14
+ExecStart=/srv/ocbot/scripts/backup.sh
+Nice=10
+IOSchedulingClass=idle

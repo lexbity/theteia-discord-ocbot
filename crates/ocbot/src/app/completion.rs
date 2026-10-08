@@ -85,7 +85,7 @@ async fn build_and_deliver(
         operator_id: ctx.guard.allowed_user_id,
         followups: action.followups,
     };
-    let message = report(&action.label, outcome, &footer, &context);
+    let message = report(&action.label, outcome, &footer, &context, &ctx.redactor);
     let channel = action.channel_id;
 
     let message_id = post_report(ctx, channel, &message).await?;

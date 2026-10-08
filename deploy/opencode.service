@@ -1,0 +1,28 @@
+[Unit]
+Description=opencode v2 server (loopback-only)
+Documentation=https://opencode.ai
+After=network.target
+# The bot attaches over loopback; nothing else should reach this port.
+
+[Service]
+Type=simple
+User=opencode
+Group=opencode
+WorkingDirectory=/srv/opencode
+# The server password lives here, mode 0600, owned by opencode.
+EnvironmentFile=/etc/opencode/opencode.env
+ExecStart=/usr/local/bin/opencode serve --hostname 127.0.0.1 --port 8080
+Restart=on-failure
+RestartSec=2
+# Hardening (R-3): an unprivileged user with no ambient authority.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/srv/opencode
+# Give the agent room but a ceiling (A1: one local server).
+MemoryMax=1500M
+CPUQuota=400%
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,9 @@
-//! AC-6 snapshot half: for each labelled crash point, construct the DB + repo
-//! state exactly as of that point (using the separately-callable steps) and
-//! assert that `reconcile_git_states` rolls forward to the §6.4 table outcome.
+//! AC-6 snapshot half — the **full** labelled crash-point matrix. For each
+//! labelled point (CP-A0..A3, CP-P0..P4, CP-R0..R2) this constructs the DB +
+//! repo state exactly as of that point (using the separately-callable steps) and
+//! asserts that `reconcile_git_states` rolls forward (or conservatively
+//! reverts) to the §6.4 table outcome. This runs in CI; `chaos_sigkill.rs` adds
+//! the real-SIGKILL half.
 
 // Integration tests assert via unwrap/panic; production code remains strict
 // (workspace lint floor + G3). See common/mod.rs for the shared harness.
@@ -384,4 +387,147 @@ async fn reset_cp_r1_and_r2_resume() {
             "step {step}"
         );
     }
+}
+
+#[tokio::test]
+async fn accept_cp_a1_with_a_foreign_commit_reverts_to_reported() {
+    let tmp = TempDir::new().expect("tmp");
+    let (repo, base) = make_repo(&tmp);
+    let store = StoreHandle::open_in_memory().expect("store");
+    let seeded = common::seed_reported(
+        &store,
+        &repo_str(&repo),
+        Some("main"),
+        Some(&base),
+        CHANNEL,
+        "work",
+        "prompt",
+        "ses_1",
+    )
+    .await;
+    enter_accepting(&store, seeded.action_id, "the expected subject").await;
+    set_started_at(&store, seeded.action_id).await;
+    // A commit lands, but it is not the one the accept was going to make.
+    write_file(&repo, "foreign.txt", "x\n");
+    let add = common::run_git(&repo, &["add", "-A"]);
+    assert!(add.status.success());
+    let commit = common::run_git(&repo, &["commit", "-m", "a foreign subject"]);
+    assert!(commit.status.success());
+
+    let ctx = ctx_for(&store, &repo, &FakeDiscord::new());
+    let repaired = reconcile_git_states(&ctx).await;
+    assert_eq!(repaired, 1);
+    let row = store
+        .action(seeded.action_id)
+        .await
+        .expect("read")
+        .expect("row");
+    assert_eq!(
+        row.state,
+        State::Reported,
+        "CP-A1: a subject mismatch is re-offered, never silently accepted"
+    );
+    assert!(row.accept_sha.is_none());
+    // `reported` still holds the directory lock (P5).
+    assert_eq!(
+        store.lock_holder(&repo_str(&repo)).await.expect("lock"),
+        Some(seeded.action_id.to_string())
+    );
+}
+
+#[tokio::test]
+async fn accept_cp_a3_accepted_is_terminal_and_untouched() {
+    let tmp = TempDir::new().expect("tmp");
+    let (repo, base) = make_repo(&tmp);
+    let store = StoreHandle::open_in_memory().expect("store");
+    let seeded = common::seed_reported(
+        &store,
+        &repo_str(&repo),
+        Some("main"),
+        Some(&base),
+        CHANNEL,
+        "work",
+        "prompt",
+        "ses_1",
+    )
+    .await;
+    enter_accepting(&store, seeded.action_id, "subject").await;
+    assert!(
+        store
+            .cas_state(
+                seeded.action_id,
+                State::Accepting,
+                State::Accepted,
+                &[(
+                    ocbot_core::Column::AcceptSha,
+                    ocbot_core::WriteValue::Text(base.clone()),
+                )],
+            )
+            .await
+            .expect("accepted")
+    );
+
+    let ctx = ctx_for(&store, &repo, &FakeDiscord::new());
+    assert_eq!(reconcile_git_states(&ctx).await, 0, "Accepted is terminal");
+    let row = store
+        .action(seeded.action_id)
+        .await
+        .expect("read")
+        .expect("row");
+    assert_eq!(row.state, State::Accepted);
+    assert_eq!(row.accept_sha.as_deref(), Some(base.as_str()));
+}
+
+#[tokio::test]
+async fn park_cp_p0_commits_from_a_dirty_worktree() {
+    let tmp = TempDir::new().expect("tmp");
+    let (repo, base) = make_repo(&tmp);
+    // The attempt left uncommitted work; CP-P0 has only recorded the intent.
+    write_file(&repo, "feature.txt", "f\n");
+    let store = StoreHandle::open_in_memory().expect("store");
+    let action_id = seed_parking(&store, &repo, &base, 0, "park: work (attempt 1)").await;
+
+    let ctx = ctx_for(&store, &repo, &FakeDiscord::new());
+    assert_eq!(reconcile_git_states(&ctx).await, 1);
+    let row = store.action(action_id).await.expect("read").expect("row");
+    assert_eq!(row.state, State::Parked, "CP-P0 commits, branches, resets");
+    let git = GitAdapter::new();
+    assert_eq!(git.head(&repo).await.expect("head"), base);
+    assert!(git.status_porcelain(&repo).await.expect("clean").is_empty());
+    assert!(
+        git.branch_exists(&repo, "rejected/work-1")
+            .await
+            .expect("branch")
+            .is_some()
+    );
+    assert_eq!(
+        common::git_stdout(&repo, &["show", "rejected/work-1:feature.txt"]),
+        "f"
+    );
+}
+
+#[tokio::test]
+async fn park_cp_p4_parked_is_untouched_on_a_second_pass() {
+    let tmp = TempDir::new().expect("tmp");
+    let (repo, base) = make_repo(&tmp);
+    write_file(&repo, "feature.txt", "f\n");
+    let store = StoreHandle::open_in_memory().expect("store");
+    let action_id = seed_parking(&store, &repo, &base, 3, "park: work (attempt 1)").await;
+
+    let ctx = ctx_for(&store, &repo, &FakeDiscord::new());
+    assert_eq!(reconcile_git_states(&ctx).await, 1);
+    assert_eq!(
+        reconcile_git_states(&ctx).await,
+        0,
+        "CP-P4: a sealed park is never re-run"
+    );
+    assert_eq!(
+        store
+            .action(action_id)
+            .await
+            .expect("read")
+            .expect("row")
+            .state,
+        State::Parked
+    );
 }

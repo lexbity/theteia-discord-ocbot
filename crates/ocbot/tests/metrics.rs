@@ -1,0 +1,144 @@
+//! Metrics completeness (NFR-9 / §6.8): after a scripted scenario the loopback
+//! HTTP endpoint exposes every named family, including a real
+//! `idle_to_report_seconds` observation taken from a completed report.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "integration tests assert by unwrapping and panicking (C6)"
+)]
+
+mod common;
+
+use std::net::SocketAddr;
+use std::sync::Arc;
+
+use common::{FakeClock, FakeDiscord, FakeGit, FakeOpenCode, context_with, seed_running};
+use ocbot::adapters::store::StoreHandle;
+use ocbot::app::metrics;
+use ocbot::app::watcher::Watcher;
+
+const OPERATOR: u64 = 42;
+const CHANNEL: u64 = 7;
+
+async fn set_started_at(store: &StoreHandle, action_id: i64, started: i64) {
+    store
+        .call(move |connection| {
+            connection.execute(
+                "UPDATE action SET started_at = ?1, last_event_at = ?1 WHERE id = ?2",
+                rusqlite::params![started, action_id],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("set started_at");
+}
+
+fn system_now() -> i64 {
+    i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_secs(),
+    )
+    .expect("fits i64")
+}
+
+async fn http_get(addr: SocketAddr) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
+    stream
+        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .await
+        .expect("write");
+    let mut buffer = Vec::new();
+    stream.read_to_end(&mut buffer).await.expect("read");
+    String::from_utf8_lossy(&buffer).into_owned()
+}
+
+#[tokio::test]
+async fn endpoint_exposes_every_family_after_a_scripted_scenario() {
+    let store = StoreHandle::open_in_memory().expect("store");
+    let seeded = seed_running(
+        &store,
+        "/tmp/metrics",
+        Some("main"),
+        Some(&"d".repeat(40)),
+        CHANNEL,
+        "work",
+        "ses_m",
+    )
+    .await;
+    let opencode = FakeOpenCode::new();
+    opencode.set_snapshot("ses_m", FakeOpenCode::completed_snapshot());
+    let discord = FakeDiscord::new();
+    let ctx = context_with(
+        store.clone(),
+        Arc::new(opencode),
+        Arc::new(FakeGit::inert()),
+        Arc::new(FakeClock::at(1_000)),
+        None,
+        common::DEFAULT_ABORT_TIMEOUT_SECS,
+        Arc::new(discord.clone()),
+        OPERATOR,
+        Some(CHANNEL),
+    );
+
+    // A real completed report, started ~3 s ago, observes the histogram.
+    set_started_at(&store, seeded.action_id, system_now() - 3).await;
+    let watcher = Watcher::new(ctx.clone(), std::time::Duration::from_millis(10));
+    watcher.tick().await.expect("tick");
+
+    let registry = ctx.metrics.clone();
+    // Script the remaining families.
+    registry.inc_cas_conflict();
+    registry.inc_denied();
+    registry.set_gate_pending(2);
+    registry.inc_gate_request("permission", "bash");
+    registry.inc_reconcile_repair("accept");
+    registry.set_locks_held(1);
+    registry.set_lock_age_seconds(42);
+    registry.set_log_lag_seconds(7);
+    registry.inc_stream_reconnect();
+    registry.set_opencode_up(true);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move {
+        let _ = metrics::serve_listener(listener, registry).await;
+    });
+
+    let response = http_get(addr).await;
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    for needle in [
+        "ocbot_actions_total{state=\"running\"}",
+        "ocbot_transition_cas_conflicts_total",
+        "ocbot_reports_delivered_total",
+        "ocbot_gate_requests_total{kind=\"permission\",tool=\"bash\"}",
+        "ocbot_gate_pending",
+        "ocbot_idle_to_report_seconds_bucket{le=\"5\"}",
+        "ocbot_idle_to_report_seconds_count",
+        "ocbot_idle_to_report_seconds_sum",
+        "ocbot_opencode_up",
+        "ocbot_reconcile_repairs_total{kind=\"accept\"}",
+        "ocbot_locks_held",
+        "ocbot_lock_age_seconds",
+        "ocbot_log_lag_seconds",
+        "ocbot_stream_reconnects_total",
+    ] {
+        assert!(response.contains(needle), "missing metric family {needle}");
+    }
+    // The report was observed exactly once, in the ≤5 s bucket, with a sum.
+    assert!(
+        response.contains("ocbot_idle_to_report_seconds_count 1"),
+        "one observation: {response}"
+    );
+    assert!(
+        response.contains("ocbot_idle_to_report_seconds_bucket{le=\"5\"} 1"),
+        "within 5 s: {response}"
+    );
+    assert!(!response.contains("ocbot_idle_to_report_seconds_sum 0\n"));
+}

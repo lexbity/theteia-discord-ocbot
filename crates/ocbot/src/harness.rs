@@ -64,6 +64,8 @@ pub async fn run_from_env() -> Result<(), String> {
             next: std::sync::atomic::AtomicU64::new(1),
         }),
         metrics: Arc::new(Metrics::new()),
+        redactor: Arc::new(ocbot_core::Redactor::default()),
+        health: Arc::new(crate::app::degraded::HealthMonitor::new()),
         guard: Guard {
             allowed_user_id: operator,
             ops_channel: None,

@@ -1,6 +1,7 @@
-//! The imperative wiring (spec Phase 2): load config, doctor the server,
-//! start the store actor, metrics server, watcher, and the serenity gateway;
-//! drain cleanly on SIGINT/SIGTERM.
+//! The imperative wiring (spec §6.1): build the secret scrubber and logging
+//! first, load config, doctor the server, start the store actor, metrics
+//! server, watcher, gates/inbox loops, the ops loop (health + gauges + stall),
+//! and the serenity gateway; drain cleanly on SIGINT/SIGTERM.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -16,14 +17,18 @@ use crate::adapters::git::GitAdapter;
 use crate::adapters::opencode::OpenCodeAdapter;
 use crate::adapters::store::StoreHandle;
 use crate::app::context::{AppContext, DiscordPort};
+use crate::app::degraded::HealthMonitor;
 use crate::app::doctor;
 use crate::app::gates_loop::GatesLoop;
 use crate::app::guard::Guard;
 use crate::app::inbox::Inbox;
+use crate::app::logging;
 use crate::app::metrics::{self, Metrics};
+use crate::app::ops::OpsLoop;
 use crate::app::reconcile;
 use crate::app::watcher::Watcher;
 use crate::config::{Config, Secrets, config_path};
+use ocbot_core::Redactor;
 use ocbot_core::ports::{Clock, FsPort, GitPort, OpenCodePort, PermissionRule};
 
 /// The tokio entry invoked by `main`. Returns the process exit code.
@@ -32,9 +37,20 @@ use ocbot_core::ports::{Clock, FsPort, GitPort, OpenCodePort, PermissionRule};
     reason = "the bootstrap sequence is a linear I/O chain; per-step extraction would add indirection without reuse"
 )]
 pub async fn start() -> ExitCode {
-    init_tracing();
+    // The scrubber must exist before the first log line: load the config
+    // first, fall back to the built-in patterns if it does not parse, then
+    // install the JSON subscriber. Config errors are reported through it.
+    let loaded = Config::load(config_path());
+    let redactor = Arc::new(match &loaded {
+        Ok((config, _)) => {
+            Redactor::new(&config.redact_patterns).unwrap_or_else(|_| Redactor::default())
+        }
+        Err(_) => Redactor::new(&crate::config::default_redact_patterns())
+            .unwrap_or_else(|_| Redactor::default()),
+    });
+    logging::init(redactor.clone());
 
-    let (config, templates) = match Config::load(config_path()) {
+    let (config, templates) = match loaded {
         Ok(pair) => pair,
         Err(errors) => {
             for error in errors {
@@ -168,6 +184,8 @@ pub async fn start() -> ExitCode {
         permission_ruleset,
         discord: discord_surface,
         metrics: metrics.clone(),
+        redactor,
+        health: Arc::new(HealthMonitor::new()),
         guard,
         templates,
         plan_heading_min: config.plan_heading_min,
@@ -228,6 +246,19 @@ pub async fn start() -> ExitCode {
         });
     }
 
+    // Ops loop (Phase 7): reachability announcement (FR-38), derived gauges,
+    // and the stall watchdog (P3/FR-39).
+    let ops_interval = Duration::from_millis(config.ops_poll_interval_ms.max(1_000));
+    let stall_secs = i64::try_from(config.stall_minutes.saturating_mul(60)).unwrap_or(i64::MAX);
+    {
+        let ctx = ctx.clone();
+        tokio::spawn(async move {
+            OpsLoop::new(ctx, ops_interval, stall_secs)
+                .run_forever()
+                .await;
+        });
+    }
+
     let intents = serenity::all::GatewayIntents::GUILDS
         | serenity::all::GatewayIntents::GUILD_MESSAGES
         | serenity::all::GatewayIntents::DIRECT_MESSAGES
@@ -252,16 +283,4 @@ pub async fn start() -> ExitCode {
     store.shutdown().await;
     tracing::info!("drained; goodbye");
     ExitCode::SUCCESS
-}
-
-/// Structured JSON logging to stderr (NFR-9). Secrets never pass through here
-/// (grep gate).
-fn init_tracing() {
-    use tracing_subscriber::EnvFilter;
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .json()
-        .with_writer(std::io::stderr)
-        .try_init();
 }

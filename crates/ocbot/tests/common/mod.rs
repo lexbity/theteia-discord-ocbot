@@ -159,6 +159,11 @@ impl FakeOpenCode {
         self.inner().transport_failures_remaining = failures;
     }
 
+    /// Make `probe` answer as unreachable (FR-38 degraded-mode tests).
+    pub fn set_unreachable(&self, unreachable: bool) {
+        self.inner().unreachable = unreachable;
+    }
+
     /// Make replies answer "unknown request" (404) — the FR-23 success path.
     pub fn reply_unknown(&self) {
         self.inner().reply_404 = true;
@@ -679,6 +684,8 @@ pub fn context_with_fs(
         permission_ruleset,
         discord,
         metrics: Arc::new(Metrics::new()),
+        redactor: Arc::new(ocbot_core::Redactor::default()),
+        health: Arc::new(ocbot::app::degraded::HealthMonitor::new()),
         guard: Guard {
             allowed_user_id: operator,
             ops_channel,

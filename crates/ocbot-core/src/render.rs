@@ -19,6 +19,68 @@ pub const DISCORD_MESSAGE_CAP: usize = 2_000;
 pub const EXCERPT_TARGET: usize = 1_500;
 /// The filename used for the full report attachment.
 pub const REPORT_ATTACHMENT_NAME: &str = "report.md";
+/// What every redaction pattern is replaced with (R-12).
+pub const REDACTED: &str = "[redacted]";
+
+/// A redaction pattern that failed to compile at load time. A bad pattern is a
+/// deployment fault, not a runtime surprise: refusing it stops a typo from
+/// silently disabling the scrubber.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("redaction pattern {pattern:?}: {message}")]
+pub struct RedactError {
+    /// The offending pattern.
+    pub pattern: String,
+    /// The regex compiler's message.
+    pub message: String,
+}
+
+/// Secret scrubber for the **inline** report path (R-12). Patterns are
+/// compiled once at startup; [`Redactor::default`] is the no-op used by tests
+/// and by callers that have no secrets to protect.
+///
+/// The full report body (`report_full`, the `report.md` attachment) is
+/// deliberately left unredacted: it is stored verbatim for the operator's own
+/// audit trail, and R-12 accepts that residual exposure in exchange for never
+/// corrupting the record of what the agent actually said.
+#[derive(Debug, Clone, Default)]
+pub struct Redactor {
+    patterns: Vec<regex::Regex>,
+}
+
+impl Redactor {
+    /// Compile every pattern; the first failure aborts with its source.
+    pub fn new(patterns: &[String]) -> Result<Self, RedactError> {
+        let mut compiled = Vec::with_capacity(patterns.len());
+        for pattern in patterns {
+            match regex::Regex::new(pattern) {
+                Ok(regex) => compiled.push(regex),
+                Err(error) => {
+                    return Err(RedactError {
+                        pattern: pattern.clone(),
+                        message: error.to_string(),
+                    });
+                }
+            }
+        }
+        Ok(Self { patterns: compiled })
+    }
+
+    /// Whether any pattern is armed.
+    pub fn is_active(&self) -> bool {
+        !self.patterns.is_empty()
+    }
+
+    /// Replace every match of every pattern with [`REDACTED`].
+    pub fn scrub(&self, text: &str) -> String {
+        let mut out = text.to_owned();
+        for pattern in &self.patterns {
+            if pattern.is_match(&out) {
+                out = pattern.replace_all(&out, REDACTED).into_owned();
+            }
+        }
+        out
+    }
+}
 
 /// A message the bot wants to post. Pure data.
 #[derive(Debug, Clone, PartialEq)]
@@ -279,6 +341,7 @@ pub fn report(
     outcome: &Outcome,
     footer: &Footer,
     context: &ReportContext,
+    redactor: &Redactor,
 ) -> OutgoingMessage {
     let label = sanitize_label(label);
     let head = headline(outcome, &label);
@@ -304,7 +367,8 @@ pub fn report(
         None
     };
     OutgoingMessage {
-        content: message_text,
+        // R-12: only the inline path is scrubbed (see [`Redactor`]).
+        content: redactor.scrub(&message_text),
         attachment,
         components: decision_buttons(outcome, context),
         mentioned_users: vec![context.operator_id],
@@ -776,9 +840,9 @@ fn describe_kind(kind: &FormFieldKind) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        DISCORD_MESSAGE_CAP, Footer, LS_PAGE_SIZE, Outcome, PLAN_PAGE_SIZE, ReportContext,
-        TokenCounts, decision_buttons, fence_neutralize, gate_message, report, split_excerpt,
-        staged_preview,
+        DISCORD_MESSAGE_CAP, Footer, LS_PAGE_SIZE, Outcome, PLAN_PAGE_SIZE, REDACTED, Redactor,
+        ReportContext, TokenCounts, decision_buttons, fence_neutralize, gate_message, report,
+        split_excerpt, staged_preview,
     };
     use crate::gates::{
         FormField, FormFieldKind, FormOption, GateKind, GateRequest, MAX_FORM_FIELDS,
@@ -791,6 +855,16 @@ mod tests {
             operator_id: 42,
             followups: 0,
         }
+    }
+
+    /// `report` with the no-op redactor: the tests that do not exercise R-12.
+    fn plain_report(
+        label: &str,
+        outcome: &Outcome,
+        footer: &Footer,
+        context: &ReportContext,
+    ) -> super::OutgoingMessage {
+        report(label, outcome, footer, context, &Redactor::default())
     }
 
     #[test]
@@ -814,6 +888,40 @@ mod tests {
     }
 
     #[test]
+    fn redaction_scrubs_the_inline_path_but_keeps_the_record() {
+        let patterns = vec![r"(?i)discord[_-]?token\s*[:=]\s*[A-Za-z0-9._-]{8,}".to_owned()];
+        let redactor = Redactor::new(&patterns).expect("pattern compiles");
+        assert!(redactor.is_active());
+        let secret = "DISCORD_TOKEN=abcdefgh12345678";
+        let body = format!("{secret}\n{}", "detail ".repeat(500));
+        let message = report(
+            "leaky",
+            &Outcome::Completed { report: body },
+            &Footer::default(),
+            &done_context(3, true),
+            &redactor,
+        );
+        assert!(
+            !message.content.contains("abcdefgh12345678"),
+            "inline content is scrubbed"
+        );
+        assert!(message.content.contains(REDACTED));
+        let attachment = message.attachment.expect("truncated report is attached");
+        let full = String::from_utf8(attachment.bytes).expect("utf8");
+        assert!(
+            full.contains("abcdefgh12345678"),
+            "the full record stays verbatim (documented residual, R-12)"
+        );
+    }
+
+    #[test]
+    fn invalid_redaction_pattern_is_a_load_error() {
+        let error = Redactor::new(&["(".to_owned()]).expect_err("bad regex rejected");
+        assert_eq!(error.pattern, "(");
+        assert!(!Redactor::default().is_active());
+    }
+
+    #[test]
     fn report_stays_under_cap_and_carries_footer() {
         let long = "word ".repeat(2_000);
         let footer = Footer {
@@ -826,7 +934,7 @@ mod tests {
             }),
             cost: Some(0.41),
         };
-        let message = report(
+        let message = plain_report(
             "big task",
             &Outcome::Completed { report: long },
             &footer,
@@ -849,7 +957,7 @@ mod tests {
 
     #[test]
     fn short_report_has_no_attachment() {
-        let message = report(
+        let message = plain_report(
             "hi",
             &Outcome::Completed {
                 report: "short".to_owned(),
@@ -940,7 +1048,7 @@ mod tests {
 
     #[test]
     fn label_cannot_inject_markdown() {
-        let message = report(
+        let message = plain_report(
             "a\n```\n@everyone",
             &Outcome::Completed {
                 report: "x".to_owned(),
@@ -987,7 +1095,7 @@ mod tests {
 
     #[test]
     fn reports_nudge_toward_park_after_two_followups() {
-        let done = report(
+        let done = plain_report(
             "t",
             &Outcome::Completed {
                 report: "x".to_owned(),
@@ -1001,7 +1109,7 @@ mod tests {
             },
         );
         assert!(done.content.contains("Park & redo"), "{}", done.content);
-        let fresh = report(
+        let fresh = plain_report(
             "t",
             &Outcome::Completed {
                 report: "x".to_owned(),
@@ -1019,7 +1127,7 @@ mod tests {
 
     #[test]
     fn non_git_completed_report_marks_done_and_disables_park() {
-        let message = report(
+        let message = plain_report(
             "t",
             &Outcome::Completed {
                 report: "x".to_owned(),

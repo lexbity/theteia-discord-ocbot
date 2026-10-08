@@ -115,7 +115,10 @@ pub async fn reconcile_git_states(ctx: &Arc<AppContext>) -> usize {
         Ok(actions) => {
             for action in &actions {
                 match accept::resume(ctx, action).await {
-                    Ok(_) => repaired += 1,
+                    Ok(_) => {
+                        repaired += 1;
+                        ctx.metrics.inc_reconcile_repair("accept");
+                    }
                     Err(error) => {
                         tracing::warn!(action = action.id, error = %error, "accept resume failed");
                     }
@@ -129,7 +132,10 @@ pub async fn reconcile_git_states(ctx: &Arc<AppContext>) -> usize {
         Ok(actions) => {
             for action in &actions {
                 match park::resume(ctx, action, ctx.guard.allowed_user_id).await {
-                    Ok(_) => repaired += 1,
+                    Ok(_) => {
+                        repaired += 1;
+                        ctx.metrics.inc_reconcile_repair("park");
+                    }
                     Err(error) => {
                         tracing::warn!(action = action.id, error = %error, "park resume failed");
                     }
@@ -143,7 +149,10 @@ pub async fn reconcile_git_states(ctx: &Arc<AppContext>) -> usize {
         Ok(intents) => {
             for intent in &intents {
                 match reset::resume(ctx, intent, ctx.guard.allowed_user_id, None).await {
-                    Ok(_) => repaired += 1,
+                    Ok(_) => {
+                        repaired += 1;
+                        ctx.metrics.inc_reconcile_repair("reset");
+                    }
                     Err(error) => {
                         tracing::warn!(intent = intent.id, error = %error, "reset resume failed");
                     }

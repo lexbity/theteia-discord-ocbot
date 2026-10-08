@@ -5,5 +5,5 @@ fuzz/Cargo.lock
 /fuzz/artifacts
 /fuzz/corpus
 *.profraw
-/mutants.out/
+/mutants.out*/
 /devdocs

@@ -102,8 +102,27 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-mutants
-      - run: cargo mutants --file crates/ocbot-core/src/state.rs --file crates/ocbot-core/src/render.rs --file crates/ocbot-core/src/history.rs
+      - run: >-
+          cargo mutants
+          --file crates/ocbot-core/src/state.rs
+          --file crates/ocbot-core/src/render.rs
+          --file crates/ocbot-core/src/history.rs
+          --file crates/ocbot-core/src/plan.rs
+          --file crates/ocbot-core/src/paths.rs
+          --test-package ocbot-core
         continue-on-error: false
+
+  typos:
+    # Docs-side spelling check (Phase 7 exit criteria).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: typos-cli
+      # `devdocs/` is gitignored (local spec/phase notes); check the committed
+      # docs tree only.
+      - run: typos docs README.md
 
   client-publish-dry-run:
     runs-on: ubuntu-latest
@@ -114,7 +133,8 @@ jobs:
 
   nightly:
     # Fuzz serde targets + live contract suite against the pinned opencode
-    # version (R-1 detection). Only runs on schedule / manual dispatch.
+    # version (R-1 detection) + the full mutation run + real-SIGKILL chaos.
+    # Only runs on schedule / manual dispatch.
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     strategy:
@@ -122,11 +142,16 @@ jobs:
         include:
           - job: fuzz
           - job: contract
+          - job: mutants-full
+          - job: sigkill
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - if: matrix.job == 'fuzz'
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: nightly
+      - if: matrix.job != 'fuzz'
+        uses: actions-rust-lang/setup-rust-toolchain@v1
       - if: matrix.job == 'fuzz'
         uses: taiki-e/install-action@v2
         with:
@@ -145,3 +170,17 @@ jobs:
             exit 0
           fi
           cargo run -q -p opencode-v2-client --example spike
+      - if: matrix.job == 'mutants-full'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      - if: matrix.job == 'mutants-full'
+        run: cargo mutants -p ocbot-core --test-package ocbot-core
+      - if: matrix.job == 'sigkill'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - if: matrix.job == 'sigkill'
+        # The real-SIGKILL half of AC-6: spawn the harness, kill it at each
+        # labelled point, and prove boot reconcile recovers.
+        run: cargo nextest run -p ocbot --test chaos_sigkill --retries 2
