@@ -187,336 +187,1114 @@ pub struct GateRow {
 /// The typed reply channel for one [`StoreRequest`].
 type Reply<T> = oneshot::Sender<Result<T, StoreError>>;
 
-/// One typed store request (SPEC-002 §4.1, FR-1/FR-2). Each variant carries its
-/// own response sender, so the actor's message set is explicit and the reply
-/// type is checked at compile time — no type erasure, no runtime downcast.
-enum StoreRequest {
-    // --- project / run ---
-    LockHolder {
-        dir: String,
-        reply: Reply<Option<String>>,
-    },
-    UpsertProject {
-        dir: String,
-        work_branch: Option<String>,
-        base_sha: Option<String>,
-        reply: Reply<()>,
-    },
-    Project {
-        dir: String,
-        reply: Reply<Option<ProjectRow>>,
-    },
-    LockedProjects {
-        reply: Reply<Vec<ProjectRow>>,
-    },
-    InsertRun {
-        dir: String,
-        kind: String,
-        reply: Reply<i64>,
-    },
-    InsertRunWithPlan {
-        dir: String,
-        kind: String,
-        plan_path: Option<String>,
-        reply: Reply<i64>,
-    },
-    // --- action ---
-    InsertAction {
-        run_id: i64,
-        channel_id: Option<i64>,
-        label: String,
-        prompt_sent: String,
-        attempt: i64,
-        reply: Reply<i64>,
-    },
-    InsertStagedChild {
-        run_id: i64,
-        channel_id: Option<i64>,
-        label: String,
-        prompt_sent: String,
-        template: String,
-        attempt: i64,
-        parent_action_id: i64,
-        reply: Reply<i64>,
-    },
-    Run {
-        id: i64,
-        reply: Reply<Option<RunRow>>,
-    },
-    Action {
-        id: i64,
-        reply: Reply<Option<ActionRow>>,
-    },
-    ActionsInStates {
-        states: Vec<String>,
-        reply: Reply<Vec<ActionRow>>,
-    },
-    ActionsForDir {
-        dir: String,
-        reply: Reply<Vec<ActionRow>>,
-    },
-    LastAcceptSha {
-        dir: String,
-        reply: Reply<Option<String>>,
-    },
-    RunningForSession {
-        session_id: String,
-        reply: Reply<Option<ActionRow>>,
-    },
-    RunningActionForDir {
-        dir: String,
-        reply: Reply<Option<ActionRow>>,
-    },
-    SetOrigin {
-        action_id: i64,
-        origin: String,
-        reply: Reply<()>,
-    },
-    MarkIncludeExisting {
-        action_id: i64,
-        reply: Reply<bool>,
-    },
-    // --- transitions ---
-    CasState {
-        id: i64,
-        from: State,
-        to: State,
-        writes: Vec<(Column, WriteValue)>,
-        reply: Reply<bool>,
-    },
-    CasStateFromAny {
-        id: i64,
-        from_states: Vec<String>,
-        to: State,
-        writes: Vec<(Column, WriteValue)>,
-        reply: Reply<bool>,
-    },
-    DeliverReport {
-        id: i64,
-        to: State,
-        writes: Vec<(Column, WriteValue)>,
-        reply: Reply<bool>,
-    },
-    BeginSend {
-        action_id: i64,
-        dir: String,
-        session_id: String,
-        start_head: Option<String>,
-        dirty: bool,
-        reply: Reply<bool>,
-    },
-    RestagePrompt {
-        id: i64,
-        prompt: String,
-        reply: Reply<bool>,
-    },
-    RestageLabelPrompt {
-        id: i64,
-        label: String,
-        prompt: String,
-        reply: Reply<bool>,
-    },
-    SetTemplatePrompt {
-        id: i64,
-        template: String,
-        prompt: String,
-        reply: Reply<bool>,
-    },
-    SetStallPing {
-        id: i64,
-        ts: i64,
-        reply: Reply<()>,
-    },
-    FailSend {
-        id: i64,
-        dir: String,
-        reason: String,
-        reply: Reply<()>,
-    },
-    // --- ui state / audit / cursor ---
-    DraftPath {
-        user_id: u64,
-        reply: Reply<Option<String>>,
-    },
-    SetDraftPath {
-        user_id: u64,
-        path: String,
-        reply: Reply<()>,
-    },
-    ClearDraftPath {
-        user_id: u64,
-        reply: Reply<()>,
-    },
-    UiCwd {
-        user_id: u64,
-        reply: Reply<Option<String>>,
-    },
-    SetUiCwd {
-        user_id: u64,
-        cwd: String,
-        reply: Reply<()>,
-    },
-    UpsertSeen {
-        session_id: String,
-        directory: Option<String>,
-        reply: Reply<()>,
-    },
-    UpsertCursor {
-        session_id: String,
-        seq: u64,
-        reply: Reply<()>,
-    },
-    Cursor {
-        session_id: String,
-        reply: Reply<Option<CursorRow>>,
-    },
-    RecentDirs {
-        limit: u64,
-        reply: Reply<Vec<String>>,
-    },
-    Audit {
-        user_id: u64,
-        verb: String,
-        action_id: Option<i64>,
-        result: String,
-        reply: Reply<()>,
-    },
-    ActionCountsByState {
-        reply: Reply<Vec<(String, i64)>>,
-    },
-    // --- reset intent ---
-    RecordResetIntent {
-        dir: String,
-        target_sha: String,
-        sup_branch: String,
-        reply: Reply<i64>,
-    },
-    PendingResetIntents {
-        reply: Reply<Vec<ResetIntentRow>>,
-    },
-    SetResetStep {
-        id: i64,
-        step: i64,
-        reply: Reply<bool>,
-    },
-    DeleteResetIntent {
-        id: i64,
-        reply: Reply<()>,
-    },
-    // --- gate lifecycle ---
-    UpsertGate {
-        ext_id: String,
-        action_id: Option<i64>,
-        session_id: Option<String>,
-        root_session_id: Option<String>,
-        kind: String,
-        payload_json: String,
-        renderable: bool,
-        channel_id: Option<i64>,
-        now: i64,
-        reply: Reply<(i64, bool)>,
-    },
-    Gate {
-        id: i64,
-        reply: Reply<Option<GateRow>>,
-    },
-    PendingGates {
-        reply: Reply<Vec<GateRow>>,
-    },
-    CasGate {
-        id: i64,
-        from: String,
-        to: String,
-        answer: Option<String>,
-        reply: Reply<bool>,
-    },
-    SetGateMsg {
-        id: i64,
-        msg_id: String,
-        channel_id: Option<i64>,
-        reply: Reply<()>,
-    },
-    BumpGatePings {
-        id: i64,
-        now: i64,
-        reply: Reply<i64>,
-    },
-    AnsweredGates {
-        reply: Reply<Vec<GateRow>>,
-    },
-    SetActionBlocked {
-        action_id: i64,
-        gate_id: i64,
-        reply: Reply<()>,
-    },
-    ClearActionBlocked {
-        action_id: i64,
-        gate_id: i64,
-        reply: Reply<()>,
-    },
-    // --- session lifecycle ---
-    SetActiveSession {
-        dir: String,
-        session_id: String,
-        reply: Reply<()>,
-    },
-    SetExternalLock {
-        dir: String,
-        session_id: String,
-        since: i64,
-        reply: Reply<()>,
-    },
-    ReleaseLock {
-        dir: String,
-        holder: String,
-        reply: Reply<bool>,
-    },
-    RetireActiveSession {
-        dir: String,
-        reply: Reply<()>,
-    },
-    SessionDir {
-        session_id: String,
-        reply: Reply<Option<String>>,
-    },
-    KnownBotSessions {
-        reply: Reply<Vec<String>>,
-    },
-    ClaimNotified {
-        session_id: String,
-        seq: String,
-        reply: Reply<bool>,
-    },
-    FinishNotified {
-        session_id: String,
-        seq: String,
-        discord_msg_id: String,
-        reply: Reply<()>,
-    },
-    UnclaimNotified {
-        session_id: String,
-        seq: String,
-        reply: Reply<()>,
-    },
-    InsertMsgMap {
-        discord_msg_id: String,
-        session_id: String,
-        reply: Reply<()>,
-    },
-    LookupMsgMap {
-        discord_msg_id: String,
-        reply: Reply<Option<(String, Option<i64>)>>,
-    },
-    IsMuted {
-        kind: String,
-        key: String,
-        reply: Reply<bool>,
-    },
-    ToggleMute {
-        kind: String,
-        key: String,
-        reply: Reply<bool>,
-    },
+/// Converts a public method argument into the owned value its [`StoreRequest`]
+/// variant carries. The actor channel is `Send + 'static`, so borrowed
+/// call-site arguments (`&str`, slices) are converted at the method boundary.
+trait StoreArg {
+    /// The owned type stored in the request variant.
+    type Owned;
+    /// Convert the call-site argument into its owned form.
+    fn into_store_arg(self) -> Self::Owned;
+}
+
+impl StoreArg for i64 {
+    type Owned = i64;
+    fn into_store_arg(self) -> Self::Owned {
+        self
+    }
+}
+
+impl StoreArg for u64 {
+    type Owned = u64;
+    fn into_store_arg(self) -> Self::Owned {
+        self
+    }
+}
+
+impl StoreArg for bool {
+    type Owned = bool;
+    fn into_store_arg(self) -> Self::Owned {
+        self
+    }
+}
+
+impl StoreArg for State {
+    type Owned = State;
+    fn into_store_arg(self) -> Self::Owned {
+        self
+    }
+}
+
+impl StoreArg for &str {
+    type Owned = String;
+    fn into_store_arg(self) -> Self::Owned {
+        self.to_owned()
+    }
+}
+
+impl StoreArg for Option<&str> {
+    type Owned = Option<String>;
+    fn into_store_arg(self) -> Self::Owned {
+        self.map(str::to_owned)
+    }
+}
+
+impl StoreArg for Option<i64> {
+    type Owned = Option<i64>;
+    fn into_store_arg(self) -> Self::Owned {
+        self
+    }
+}
+
+impl StoreArg for &[State] {
+    type Owned = Vec<String>;
+    fn into_store_arg(self) -> Self::Owned {
+        self.iter().map(|state| state.as_str().to_owned()).collect()
+    }
+}
+
+impl StoreArg for &[(Column, WriteValue)] {
+    type Owned = Vec<(Column, WriteValue)>;
+    fn into_store_arg(self) -> Self::Owned {
+        self.to_vec()
+    }
+}
+
+/// Declares one store operation and generates its three artifacts in a single
+/// place (SPEC-002 Phase 6, FR-6): the [`StoreRequest`] enum variant, its arm in
+/// [`StoreRequest::dispatch`], and the public [`StoreHandle`] method. Adding an
+/// operation is one declaration.
+///
+/// The operation body is a closure taking the actor's `&mut Connection`; the
+/// actor channel is `Send + 'static`, so borrowed arguments are converted to
+/// their owned forms by [`StoreArg`] at the method boundary.
+macro_rules! store_method {
+    (
+        $enum:ident, $handle:ident;
+        $(
+            $(#[$meta:meta])*
+            $variant:ident as $method:ident
+                ( $($arg:ident : $public:ty => $owned:ty),* $(,)? )
+                -> $reply:ty
+                { $body:expr }
+                ;
+        )*
+    ) => {
+        /// One typed store request (SPEC-002 §4.1, FR-1/FR-2). Each variant
+        /// carries its own response sender, so the actor's message set is
+        /// explicit and the reply type is checked at compile time.
+        enum $enum {
+            $(
+                $variant {
+                    $($arg: $owned,)*
+                    reply: Reply<$reply>,
+                },
+            )*
+        }
+
+        impl $enum {
+            /// Dispatch one request on the actor thread and send its typed reply.
+            #[allow(
+                clippy::too_many_lines,
+                reason = "the dispatcher is a flat, exhaustive match over the store's message set; one arm per operation keeps the whole grammar in one place"
+            )]
+            fn dispatch(self, connection: &mut Connection) {
+                match self {
+                    $(
+                        $enum::$variant { $($arg,)* reply } => {
+                            finish(reply, ($body)(connection))
+                        }
+                    )*
+                }
+            }
+        }
+
+        impl $handle {
+            $(
+                $(#[$meta])*
+                pub async fn $method(
+                    &self,
+                    $($arg: $public),*
+                ) -> Result<$reply, StoreError> {
+                    self.request(|reply| $enum::$variant {
+                        $($arg: $arg.into_store_arg(),)*
+                        reply,
+                    })
+                    .await
+                }
+            )*
+        }
+    };
+}
+
+store_method! {
+    StoreRequest, StoreHandle;
+    /// The lock holder of a directory, if any (P5).
+    LockHolder as lock_holder(dir: &str => String) -> Option<String> {
+        |connection: &mut Connection| -> rusqlite::Result<Option<String>> {
+            connection
+                .query_row(
+                    "SELECT lock_holder FROM project WHERE dir = ?1",
+                    params![dir],
+                    |row| row.get::<_, Option<String>>("lock_holder"),
+                )
+                .optional()
+                .map(Option::flatten)
+        }
+    };
+
+    /// Upsert a project row for `dir` (`work_branch`/`base_sha` are `None` for
+    /// non-git directories).
+    UpsertProject as upsert_project(dir: &str => String, work_branch: Option<&str> => Option<String>, base_sha: Option<&str> => Option<String>) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            connection
+                .execute(
+                    "INSERT INTO project (dir, work_branch, base_sha)
+                     VALUES (?1, ?2, ?3)
+                     ON CONFLICT(dir) DO UPDATE SET
+                        work_branch = excluded.work_branch,
+                        base_sha = excluded.base_sha",
+                    params![dir, work_branch, base_sha],
+                )
+                .map(|_| ())
+        }
+    };
+
+    /// Project by directory.
+    Project as project(dir: &str => String) -> Option<ProjectRow> {
+        |connection: &mut Connection| -> rusqlite::Result<Option<ProjectRow>> {
+            connection
+                .query_row(
+                    "SELECT dir, work_branch, base_sha, active_session_id, lock_holder, lock_since
+                     FROM project WHERE dir = ?1",
+                    params![dir],
+                    project_row,
+                )
+                .optional()
+        }
+    };
+
+    /// Every project that currently holds a lock (for `/status`).
+    LockedProjects as locked_projects() -> Vec<ProjectRow> {
+        |connection: &mut Connection| -> rusqlite::Result<Vec<ProjectRow>> {
+            let mut statement = connection.prepare(
+                "SELECT dir, work_branch, base_sha, active_session_id, lock_holder, lock_since
+                 FROM project WHERE lock_holder IS NOT NULL ORDER BY dir",
+            )?;
+            let rows = statement
+                .query_map([], project_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        }
+    };
+
+    /// Insert a run row; returns its id.
+    InsertRun as insert_run(dir: &str => String, kind: &str => String) -> i64 {
+        |connection: &mut Connection| -> rusqlite::Result<i64> {
+            connection.execute(
+                "INSERT INTO run (dir, kind, created_at) VALUES (?1, ?2, ?3)",
+                params![dir, kind, now_unix()],
+            )?;
+            Ok(connection.last_insert_rowid())
+        }
+    };
+
+    /// Insert a run row carrying an optional plan path (Phase 6).
+    InsertRunWithPlan as insert_run_with_plan(dir: &str => String, kind: &str => String, plan_path: Option<&str> => Option<String>) -> i64 {
+        |connection: &mut Connection| -> rusqlite::Result<i64> {
+            connection.execute(
+                "INSERT INTO run (dir, plan_path, kind, created_at) VALUES (?1, ?2, ?3, ?4)",
+                params![dir, plan_path, kind, now_unix()],
+            )?;
+            Ok(connection.last_insert_rowid())
+        }
+    };
+
+    /// Insert a staged action; returns its id.
+    InsertAction as insert_action(run_id: i64 => i64, channel_id: Option<i64> => Option<i64>, label: &str => String, prompt_sent: &str => String, attempt: i64 => i64) -> i64 {
+        |connection: &mut Connection| -> rusqlite::Result<i64> {
+            connection.execute(
+                "INSERT INTO action (run_id, channel_id, label, prompt_sent, state, attempt)
+                 VALUES (?1, ?2, ?3, ?4, 'staged', ?5)",
+                params![run_id, channel_id, label, prompt_sent, attempt],
+            )?;
+            Ok(connection.last_insert_rowid())
+        }
+    };
+
+    /// Insert the staged successor of a park-redo (CP-P4); returns its id.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one column per argument mirrors the insert; a struct would not reduce the call-site clarity"
+    )]
+    InsertStagedChild as insert_staged_child(run_id: i64 => i64, channel_id: Option<i64> => Option<i64>, label: &str => String, prompt_sent: &str => String, template: &str => String, attempt: i64 => i64, parent_action_id: i64 => i64) -> i64 {
+        |connection: &mut Connection| -> rusqlite::Result<i64> {
+            connection.execute(
+                "INSERT INTO action
+                    (run_id, channel_id, label, prompt_sent, template, state, attempt, parent_action_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'staged', ?6, ?7)",
+                params![
+                    run_id,
+                    channel_id,
+                    label,
+                    prompt_sent,
+                    template,
+                    attempt,
+                    parent_action_id
+                ],
+            )?;
+            Ok(connection.last_insert_rowid())
+        }
+    };
+
+    /// A run row by id.
+    Run as run(id: i64 => i64) -> Option<RunRow> {
+        |connection: &mut Connection| -> rusqlite::Result<Option<RunRow>> {
+            connection
+                .query_row(
+                    "SELECT id, dir, plan_path, kind FROM run WHERE id = ?1",
+                    params![id],
+                    |row| {
+                        Ok(RunRow {
+                            id: row.get("id")?,
+                            dir: row.get("dir")?,
+                            plan_path: row.get("plan_path")?,
+                            kind: row.get("kind")?,
+                        })
+                    },
+                )
+                .optional()
+        }
+    };
+
+    /// An action by id.
+    Action as action(id: i64 => i64) -> Option<ActionRow> {
+        |connection: &mut Connection| -> rusqlite::Result<Option<ActionRow>> {
+            connection
+                .query_row("SELECT * FROM action WHERE id = ?1", params![id], action_row)
+                .optional()
+        }
+    };
+
+    /// Actions currently in any of `states` (boot reconcile, P9 step 5).
+    ActionsInStates as actions_in_states(states: &[State] => Vec<String>) -> Vec<ActionRow> {
+        |connection: &mut Connection| -> rusqlite::Result<Vec<ActionRow>> {
+            if states.is_empty() {
+                return Ok(Vec::new());
+            }
+            let placeholders = vec!["?"; states.len()].join(",");
+            let sql = format!("SELECT * FROM action WHERE state IN ({placeholders}) ORDER BY id");
+            let mut statement = connection.prepare(&sql)?;
+            let rows = statement
+                .query_map(rusqlite::params_from_iter(states.iter()), action_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        }
+    };
+
+    /// Every action belonging to a directory, oldest first (history merge, P8).
+    ActionsForDir as actions_for_dir(dir: &str => String) -> Vec<ActionRow> {
+        |connection: &mut Connection| -> rusqlite::Result<Vec<ActionRow>> {
+            let mut statement = connection.prepare(
+                "SELECT action.* FROM action
+                 JOIN run ON action.run_id = run.id
+                 WHERE run.dir = ?1 ORDER BY action.id",
+            )?;
+            let rows = statement
+                .query_map(params![dir], action_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        }
+    };
+
+    /// The most recent accepted sha in a directory, if any (P7 step 3).
+    LastAcceptSha as last_accept_sha(dir: &str => String) -> Option<String> {
+        |connection: &mut Connection| -> rusqlite::Result<Option<String>> {
+            connection
+                .query_row(
+                    "SELECT action.accept_sha FROM action
+                     JOIN run ON action.run_id = run.id
+                     WHERE run.dir = ?1 AND action.accept_sha IS NOT NULL
+                     ORDER BY action.id DESC LIMIT 1",
+                    params![dir],
+                    |row| row.get::<_, Option<String>>("accept_sha"),
+                )
+                .optional()
+                .map(Option::flatten)
+        }
+    };
+
+    /// The running action that owns `session_id`, if any.
+    RunningForSession as running_for_session(session_id: &str => String) -> Option<ActionRow> {
+        |connection: &mut Connection| -> rusqlite::Result<Option<ActionRow>> {
+            connection
+                .query_row(
+                    "SELECT * FROM action WHERE session_id = ?1 AND state = 'running' ORDER BY id DESC LIMIT 1",
+                    params![session_id],
+                    action_row,
+                )
+                .optional()
+        }
+    };
+
+    /// The running action targeting a directory, if any (the mutex owner).
+    RunningActionForDir as running_action_for_dir(dir: &str => String) -> Option<ActionRow> {
+        |connection: &mut Connection| -> rusqlite::Result<Option<ActionRow>> {
+            connection
+                .query_row(
+                    "SELECT action.* FROM action
+                     JOIN run ON action.run_id = run.id
+                     WHERE run.dir = ?1 AND action.state = 'running'
+                     ORDER BY action.id DESC LIMIT 1",
+                    params![dir],
+                    action_row,
+                )
+                .optional()
+        }
+    };
+
+    /// Record the staging-preview message id on an action (seeds status origin).
+    SetOrigin as set_origin(action_id: i64 => i64, origin: &str => String) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            connection
+                .execute(
+                    "UPDATE action SET origin_msg_id = ?1 WHERE id = ?2 AND origin_msg_id IS NULL",
+                    params![origin, action_id],
+                )
+                .map(|_| ())
+        }
+    };
+
+    /// Confirm the operator included existing dirty changes (FR-27).
+    MarkIncludeExisting as mark_include_existing(action_id: i64 => i64) -> bool {
+        |connection: &mut Connection| -> rusqlite::Result<bool> {
+            let changed = connection.execute(
+                "UPDATE action SET include_existing = 1 WHERE id = ?1 AND state = 'staged'",
+                params![action_id],
+            )?;
+            Ok(changed == 1)
+        }
+    };
+
+    /// A generic CAS: `UPDATE ... SET state=:to <writes> WHERE id=:id AND state=:from`.
+    CasState as cas_state(id: i64 => i64, from: State => State, to: State => State, writes: &[(Column, WriteValue)] => Vec<(Column, WriteValue)>) -> bool {
+        |connection: &mut Connection| -> rusqlite::Result<bool> {
+            cas_inner(connection, id, from, to, &writes, None)
+        }
+    };
+
+    /// A CAS whose `from` may be any of `from_states` (park/discard, §6.4).
+    CasStateFromAny as cas_state_from_any(id: i64 => i64, from_states: &[State] => Vec<String>, to: State => State, writes: &[(Column, WriteValue)] => Vec<(Column, WriteValue)>) -> bool {
+        |connection: &mut Connection| -> rusqlite::Result<bool> {
+            if from_states.is_empty() {
+                return Ok(false);
+            }
+            let placeholders = vec!["?"; from_states.len()].join(",");
+            let extra = format!("state IN ({placeholders})");
+            cas_inner_any(connection, id, &from_states, to, &writes, &extra)
+        }
+    };
+
+    /// The report-delivery CAS (exactly-once dedupe key, P9).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "DB row carriers; each parameter is a column"
+    )]
+    DeliverReport as deliver_report(id: i64 => i64, to: State => State, report_msg_id: &str => String, outcome_kind: &str => String, report_full: Option<&str> => Option<String>, footer_json: &str => String, ended_at: i64 => i64) -> bool {
+        |connection: &mut Connection| -> rusqlite::Result<bool> {
+            let writes = vec![
+                (Column::ReportMessageId, WriteValue::Text(report_msg_id)),
+                (
+                    Column::ReportFull,
+                    WriteValue::Text(report_full.unwrap_or_default()),
+                ),
+                (Column::FooterJson, WriteValue::Text(footer_json)),
+                (Column::OutcomeKind, WriteValue::Text(outcome_kind)),
+                (Column::EndedAt, WriteValue::Int(ended_at)),
+                (Column::LastEventAt, WriteValue::Int(ended_at)),
+            ];
+            cas_inner(
+                connection,
+                id,
+                State::Running,
+                to,
+                &writes,
+                Some("report_msg_id IS NULL"),
+            )
+        }
+    };
+
+    /// The atomic send: staged→running with lock acquisition, session binding,
+    /// and the start record all in one transaction (P5).
+    BeginSend as begin_send(action_id: i64 => i64, dir: &str => String, session_id: &str => String, start_head: Option<&str> => Option<String>, dirty: bool => bool) -> bool {
+        |connection: &mut Connection| -> rusqlite::Result<bool> {
+            let transaction = connection.transaction()?;
+            let now = now_unix();
+            let writes = vec![
+                (Column::SessionId, WriteValue::Text(session_id)),
+                (Column::StartedAt, WriteValue::Int(now)),
+                (Column::LastEventAt, WriteValue::Int(now)),
+                (
+                    Column::StartHead,
+                    start_head.map_or(WriteValue::Null, WriteValue::Text),
+                ),
+                (Column::DirtyAtStart, WriteValue::Int(i64::from(dirty))),
+            ];
+            let changed = cas_inner(
+                &transaction,
+                action_id,
+                State::Staged,
+                State::Running,
+                &writes,
+                None,
+            )?;
+            if changed {
+                // Atomic lock acquisition (P5): take the lock only while free
+                // or already held by this same action id. If the lock is held
+                // by someone else, the whole transition rolls back.
+                let holder = action_id.to_string();
+                let acquired = transaction.execute(
+                    "UPDATE project SET lock_holder = ?1, lock_since = ?2
+                     WHERE dir = ?3 AND (lock_holder IS NULL OR lock_holder = ?1)",
+                    params![holder, now, dir],
+                )?;
+                if acquired == 1 {
+                    transaction.commit()?;
+                    Ok(true)
+                } else {
+                    transaction.rollback()?;
+                    Ok(false)
+                }
+            } else {
+                transaction.rollback()?;
+                Ok(false)
+            }
+        }
+    };
+
+    /// Update `prompt_sent` on a staged action (Edit & send path).
+    RestagePrompt as restage_prompt(id: i64 => i64, prompt: &str => String) -> bool {
+        |connection: &mut Connection| -> rusqlite::Result<bool> {
+            let changed = connection.execute(
+                "UPDATE action SET prompt_sent = ?1 WHERE id = ?2 AND state = 'staged'",
+                params![prompt, id],
+            )?;
+            Ok(changed == 1)
+        }
+    };
+
+    /// Update both `label` and `prompt_sent` on a staged action (P12/P13).
+    RestageLabelPrompt as restage_label_prompt(id: i64 => i64, label: &str => String, prompt: &str => String) -> bool {
+        |connection: &mut Connection| -> rusqlite::Result<bool> {
+            let changed = connection.execute(
+                "UPDATE action SET label = ?1, prompt_sent = ?2 WHERE id = ?3 AND state = 'staged'",
+                params![label, prompt, id],
+            )?;
+            Ok(changed == 1)
+        }
+    };
+
+    /// Record the review-time template choice and the re-rendered prompt (FR-6).
+    SetTemplatePrompt as set_template_prompt(id: i64 => i64, template: &str => String, prompt: &str => String) -> bool {
+        |connection: &mut Connection| -> rusqlite::Result<bool> {
+            let changed = connection.execute(
+                "UPDATE action SET template = ?1, prompt_sent = ?2 WHERE id = ?3 AND state = 'staged'",
+                params![template, prompt, id],
+            )?;
+            Ok(changed == 1)
+        }
+    };
+
+    /// Record a stall ping time (P3/FR-39: one ping per stall episode).
+    SetStallPing as set_stall_ping(id: i64 => i64, ts: i64 => i64) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            connection
+                .execute(
+                    "UPDATE action SET stall_ping_at = ?1 WHERE id = ?2",
+                    params![ts, id],
+                )
+                .map(|_| ())
+        }
+    };
+
+    /// Mark a send attempt as failed and release the directory lock.
+    FailSend as fail_send(id: i64 => i64, dir: &str => String, reason: &str => String) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            let transaction = connection.transaction()?;
+            let changed = transaction.execute(
+                "UPDATE action SET state = 'errored', outcome_kind = 'failed-send',
+                 report_full = ?1, last_event_at = ?2
+                 WHERE id = ?3 AND state = 'running' AND report_msg_id IS NULL",
+                params![reason, now_unix(), id],
+            )?;
+            if changed == 1 {
+                transaction.execute(
+                    "UPDATE project SET lock_holder = NULL, lock_since = NULL WHERE dir = ?1",
+                    params![dir],
+                )?;
+            }
+            transaction.commit()?;
+            Ok(())
+        }
+    };
+
+    /// The last selected/uploaded path for a user (browser + attachment draft).
+    DraftPath as draft_path(user_id: u64 => u64) -> Option<String> {
+        |connection: &mut Connection| -> rusqlite::Result<Option<String>> {
+            connection
+                .query_row(
+                    "SELECT draft_path FROM ui_state WHERE user_id = ?1",
+                    params![user_id.to_string()],
+                    |row| row.get::<_, Option<String>>("draft_path"),
+                )
+                .optional()
+                .map(Option::flatten)
+        }
+    };
+
+    /// Remember the last selected/uploaded path for a user.
+    SetDraftPath as set_draft_path(user_id: u64 => u64, path: &str => String) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            connection
+                .execute(
+                    "INSERT INTO ui_state (user_id, draft_path) VALUES (?1, ?2)
+                     ON CONFLICT(user_id) DO UPDATE SET draft_path = excluded.draft_path",
+                    params![user_id.to_string(), path],
+                )
+                .map(|_| ())
+        }
+    };
+
+    /// Forget the draft path (consumed by a prompt).
+    ClearDraftPath as clear_draft_path(user_id: u64 => u64) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            connection
+                .execute(
+                    "UPDATE ui_state SET draft_path = NULL WHERE user_id = ?1",
+                    params![user_id.to_string()],
+                )
+                .map(|_| ())
+        }
+    };
+
+    /// The remembered cwd for a user (modal prefill); a `set_draft_path`-only
+    /// row leaves `cwd` NULL, so the read is nullable.
+    UiCwd as ui_cwd(user_id: u64 => u64) -> Option<String> {
+        |connection: &mut Connection| -> rusqlite::Result<Option<String>> {
+            connection
+                .query_row(
+                    "SELECT cwd FROM ui_state WHERE user_id = ?1",
+                    params![user_id.to_string()],
+                    |row| row.get::<_, Option<String>>("cwd"),
+                )
+                .optional()
+                .map(Option::flatten)
+        }
+    };
+
+    /// Remember a cwd for a user.
+    SetUiCwd as set_ui_cwd(user_id: u64 => u64, cwd: &str => String) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            connection
+                .execute(
+                    "INSERT INTO ui_state (user_id, cwd) VALUES (?1, ?2)
+                     ON CONFLICT(user_id) DO UPDATE SET cwd = excluded.cwd",
+                    params![user_id.to_string(), cwd],
+                )
+                .map(|_| ())
+        }
+    };
+
+    /// Mark a session as seen (Phase 5 inbox bookkeeping, seeded from Phase 2).
+    UpsertSeen as upsert_seen(session_id: &str => String, directory: Option<&str> => Option<String>) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            connection
+                .execute(
+                    "INSERT INTO session_seen (session_id, dir, first_seen) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(session_id) DO NOTHING",
+                    params![session_id, directory, now_unix()],
+                )
+                .map(|_| ())
+        }
+    };
+
+    /// Set the log cursor for a session (P9 cache only).
+    UpsertCursor as upsert_cursor(session_id: &str => String, seq: u64 => u64) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            connection
+                .execute(
+                    "INSERT INTO session_cursor (session_id, last_seq, updated_at) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(session_id) DO UPDATE SET last_seq = excluded.last_seq, updated_at = excluded.updated_at",
+                    params![session_id, to_i64(seq), now_unix()],
+                )
+                .map(|_| ())
+        }
+    };
+
+    /// The logged cursor for a session, if any.
+    Cursor as cursor(session_id: &str => String) -> Option<CursorRow> {
+        |connection: &mut Connection| -> rusqlite::Result<Option<CursorRow>> {
+            connection
+                .query_row(
+                    "SELECT last_seq FROM session_cursor WHERE session_id = ?1",
+                    params![session_id],
+                    |row| {
+                        row.get::<_, i64>("last_seq").map(|seq| CursorRow {
+                            last_seq: to_u64(seq),
+                        })
+                    },
+                )
+                .optional()
+        }
+    };
+
+    /// The most recent directories (for `/run` modal prefill).
+    RecentDirs as recent_dirs(limit: u64 => u64) -> Vec<String> {
+        |connection: &mut Connection| -> rusqlite::Result<Vec<String>> {
+            let mut statement = connection.prepare(
+                "SELECT dir FROM project ORDER BY (
+                    SELECT MAX(created_at) FROM run WHERE run.dir = project.dir
+                 ) DESC LIMIT ?1",
+            )?;
+            let rows = statement
+                .query_map(params![to_i64(limit)], |row| row.get::<_, String>("dir"))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        }
+    };
+
+    /// Record an audit line (FR-5).
+    Audit as audit(user_id: u64 => u64, verb: &str => String, action_id: Option<i64> => Option<i64>, result: &str => String) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            connection
+                .execute(
+                    "INSERT INTO audit (ts, user_id, verb, action_id, result) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![now_unix(), user_id.to_string(), verb, action_id, result],
+                )
+                .map(|_| ())
+        }
+    };
+
+    /// Number of actions per state (metrics feed).
+    ActionCountsByState as action_counts_by_state() -> Vec<(String, i64)> {
+        |connection: &mut Connection| -> rusqlite::Result<Vec<(String, i64)>> {
+            let mut statement =
+                connection.prepare("SELECT state, COUNT(*) AS n FROM action GROUP BY state")?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>("state")?, row.get::<_, i64>("n")?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        }
+    };
+
+    /// Record a reset intent (CP-R0) and return its id.
+    RecordResetIntent as record_reset_intent(dir: &str => String, target_sha: &str => String, sup_branch: &str => String) -> i64 {
+        |connection: &mut Connection| -> rusqlite::Result<i64> {
+            connection.execute(
+                "INSERT INTO reset_intent (dir, target_sha, sup_branch, step, created_at)
+                 VALUES (?1, ?2, ?3, 0, ?4)",
+                params![dir, target_sha, sup_branch, now_unix()],
+            )?;
+            Ok(connection.last_insert_rowid())
+        }
+    };
+
+    /// Every unfinished reset intent (boot reconcile, P9 step 5).
+    PendingResetIntents as pending_reset_intents() -> Vec<ResetIntentRow> {
+        |connection: &mut Connection| -> rusqlite::Result<Vec<ResetIntentRow>> {
+            let mut statement = connection.prepare(
+                "SELECT id, dir, target_sha, sup_branch, step FROM reset_intent ORDER BY id",
+            )?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok(ResetIntentRow {
+                        id: row.get("id")?,
+                        dir: row.get("dir")?,
+                        target_sha: row.get("target_sha")?,
+                        sup_branch: row.get("sup_branch")?,
+                        step: row.get("step")?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        }
+    };
+
+    /// Advance a reset intent's step (write-ahead; the intent row survives a
+    /// crash so the next boot rolls forward).
+    SetResetStep as set_reset_step(id: i64 => i64, step: i64 => i64) -> bool {
+        |connection: &mut Connection| -> rusqlite::Result<bool> {
+            let changed = connection.execute(
+                "UPDATE reset_intent SET step = ?1 WHERE id = ?2",
+                params![step, id],
+            )?;
+            Ok(changed == 1)
+        }
+    };
+
+    /// Remove a completed reset intent.
+    DeleteResetIntent as delete_reset_intent(id: i64 => i64) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            connection
+                .execute("DELETE FROM reset_intent WHERE id = ?1", params![id])
+                .map(|_| ())
+        }
+    };
+
+    /// Mirror a server-side gate fact into the DB (idempotent by `ext_id`).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "gate columns are a fixed set of carriers; a builder would obscure the insert shape"
+    )]
+    UpsertGate as upsert_gate(ext_id: &str => String, action_id: Option<i64> => Option<i64>, session_id: Option<&str> => Option<String>, root_session_id: Option<&str> => Option<String>, kind: &str => String, payload_json: &str => String, renderable: bool => bool, channel_id: Option<i64> => Option<i64>, now: i64 => i64) -> (i64, bool) {
+        |connection: &mut Connection| -> rusqlite::Result<(i64, bool)> {
+            let transaction = connection.transaction()?;
+            let existing: Option<i64> = transaction
+                .query_row(
+                    "SELECT id FROM gate WHERE ext_id = ?1",
+                    params![ext_id],
+                    |row| row.get("id"),
+                )
+                .optional()?;
+            if let Some(id) = existing {
+                transaction.commit()?;
+                Ok((id, false))
+            } else {
+                let renderable = i64::from(renderable);
+                transaction.execute(
+                    "INSERT INTO gate
+                            (ext_id, action_id, session_id, root_session_id, kind, payload_json,
+                             renderable, state, channel_id, last_ping_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8, ?9)",
+                    params![
+                        ext_id,
+                        action_id,
+                        session_id,
+                        root_session_id,
+                        kind,
+                        payload_json,
+                        renderable,
+                        channel_id,
+                        now
+                    ],
+                )?;
+                let id = transaction.last_insert_rowid();
+                transaction.commit()?;
+                Ok((id, true))
+            }
+        }
+    };
+
+    /// A gate row by local id.
+    Gate as gate(id: i64 => i64) -> Option<GateRow> {
+        |connection: &mut Connection| -> rusqlite::Result<Option<GateRow>> {
+            connection
+                .query_row("SELECT * FROM gate WHERE id = ?1", params![id], gate_row)
+                .optional()
+        }
+    };
+
+    /// Every pending gate row (the re-ping cursor).
+    PendingGates as pending_gates() -> Vec<GateRow> {
+        |connection: &mut Connection| -> rusqlite::Result<Vec<GateRow>> {
+            let mut statement =
+                connection.prepare("SELECT * FROM gate WHERE state = 'pending' ORDER BY id")?;
+            let rows = statement
+                .query_map([], gate_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        }
+    };
+
+    /// The single gate state transition (P4). `answer` is the JSON-encoded
+    /// decision/answer.
+    CasGate as cas_gate(id: i64 => i64, from: &str => String, to: &str => String, answer: Option<&str> => Option<String>) -> bool {
+        |connection: &mut Connection| -> rusqlite::Result<bool> {
+            let changed = connection.execute(
+                "UPDATE gate SET state = ?1, answer = ?2 WHERE id = ?3 AND state = ?4",
+                params![to, answer, id, from],
+            )?;
+            Ok(changed == 1)
+        }
+    };
+
+    /// Record the posted gate message (P10: already-posted gates are never
+    /// re-posted; the nullable guard is the dedupe).
+    SetGateMsg as set_gate_msg(id: i64 => i64, msg_id: &str => String, channel_id: Option<i64> => Option<i64>) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            connection
+                .execute(
+                    "UPDATE gate SET msg_id = ?1, channel_id = ?2 WHERE id = ?3 AND msg_id IS NULL",
+                    params![msg_id, channel_id, id],
+                )
+                .map(|_| ())
+        }
+    };
+
+    /// Advance the re-ping counter and stamp the ping time; returns the new
+    /// count (the caller decides the message after the 6th ping).
+    BumpGatePings as bump_gate_pings(id: i64 => i64, now: i64 => i64) -> i64 {
+        |connection: &mut Connection| -> rusqlite::Result<i64> {
+            connection.execute(
+                "UPDATE gate SET pings = pings + 1, last_ping_at = ?1 WHERE id = ?2",
+                params![now, id],
+            )?;
+            let pings: i64 = connection.query_row(
+                "SELECT pings FROM gate WHERE id = ?1",
+                params![id],
+                |row| row.get("pings"),
+            )?;
+            Ok(pings)
+        }
+    };
+
+    /// Every answered gate with a recorded answer (boot reconcile re-POSTs any
+    /// that are still pending on the server, FR-23).
+    AnsweredGates as answered_gates() -> Vec<GateRow> {
+        |connection: &mut Connection| -> rusqlite::Result<Vec<GateRow>> {
+            let mut statement = connection.prepare(
+                "SELECT * FROM gate WHERE state = 'answered' AND answer IS NOT NULL ORDER BY id",
+            )?;
+            let rows = statement
+                .query_map([], gate_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        }
+    };
+
+    /// Set the blocked substatus on an action (P4: `blocked` is a substatus on
+    /// `running`, never a state).
+    SetActionBlocked as set_action_blocked(action_id: i64 => i64, gate_id: i64 => i64) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            connection
+                .execute(
+                    "UPDATE action SET blocked_gate_id = ?1 WHERE id = ?2",
+                    params![gate_id, action_id],
+                )
+                .map(|_| ())
+        }
+    };
+
+    /// Clear the blocked substatus, but only when this gate is the blocker.
+    ClearActionBlocked as clear_action_blocked(action_id: i64 => i64, gate_id: i64 => i64) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            connection
+                .execute(
+                    "UPDATE action SET blocked_gate_id = NULL WHERE id = ?1 AND blocked_gate_id = ?2",
+                    params![action_id, gate_id],
+                )
+                .map(|_| ())
+        }
+    };
+
+    /// Record the promptable session for a directory (FR-30).
+    SetActiveSession as set_active_session(dir: &str => String, session_id: &str => String) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            connection
+                .execute(
+                    "INSERT INTO project (dir, active_session_id) VALUES (?1, ?2)
+                     ON CONFLICT(dir) DO UPDATE SET active_session_id = excluded.active_session_id",
+                    params![dir, session_id],
+                )
+                .map(|_| ())
+        }
+    };
+
+    /// Take the directory lock on behalf of an *external* (TUI) session (P5).
+    SetExternalLock as set_external_lock(dir: &str => String, session_id: &str => String, since: i64 => i64) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            connection
+                .execute(
+                    "INSERT INTO project (dir, lock_holder, lock_since) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(dir) DO UPDATE SET lock_holder = excluded.lock_holder,
+                                                    lock_since = excluded.lock_since",
+                    params![dir, format!("external:{session_id}"), since],
+                )
+                .map(|_| ())
+        }
+    };
+
+    /// Release a directory lock only if `holder` currently owns it (P5).
+    ReleaseLock as release_lock(dir: &str => String, holder: &str => String) -> bool {
+        |connection: &mut Connection| -> rusqlite::Result<bool> {
+            let changed = connection.execute(
+                "UPDATE project SET lock_holder = NULL, lock_since = NULL
+                 WHERE dir = ?1 AND lock_holder = ?2",
+                params![dir, holder],
+            )?;
+            Ok(changed == 1)
+        }
+    };
+
+    /// Clear the promptable session for a directory (FR-30).
+    RetireActiveSession as retire_active_session(dir: &str => String) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            connection
+                .execute(
+                    "UPDATE project SET active_session_id = NULL WHERE dir = ?1",
+                    params![dir],
+                )
+                .map(|_| ())
+        }
+    };
+
+    /// The directory a seen session is bound to (P14).
+    SessionDir as session_dir(session_id: &str => String) -> Option<String> {
+        |connection: &mut Connection| -> rusqlite::Result<Option<String>> {
+            connection
+                .query_row(
+                    "SELECT dir FROM session_seen WHERE session_id = ?1",
+                    params![session_id],
+                    |row| row.get("dir"),
+                )
+                .optional()
+        }
+    };
+
+    /// Every session the bot owns (bound to an action, or a project's
+    /// promptable session) — the complement of `session_seen` is *external*.
+    KnownBotSessions as known_bot_sessions() -> Vec<String> {
+        |connection: &mut Connection| -> rusqlite::Result<Vec<String>> {
+            let mut statement = connection.prepare(
+                "SELECT session_id FROM action WHERE session_id IS NOT NULL
+                 UNION
+                 SELECT active_session_id FROM project WHERE active_session_id IS NOT NULL",
+            )?;
+            let rows = statement
+                .query_map([], |row| row.get::<_, String>("session_id"))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        }
+    };
+
+    /// Claim a completion under `(session_id, seq)` *before* posting (FR-32/P14).
+    ClaimNotified as claim_notified(session_id: &str => String, seq: &str => String) -> bool {
+        |connection: &mut Connection| -> rusqlite::Result<bool> {
+            let changed = connection.execute(
+                "INSERT OR IGNORE INTO notified (session_id, seq, discord_msg_id)
+                 VALUES (?1, ?2, '')",
+                params![session_id, seq],
+            )?;
+            Ok(changed == 1)
+        }
+    };
+
+    /// Record the posted message id on a claimed notification.
+    FinishNotified as finish_notified(session_id: &str => String, seq: &str => String, discord_msg_id: &str => String) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            connection
+                .execute(
+                    "UPDATE notified SET discord_msg_id = ?1 WHERE session_id = ?2 AND seq = ?3",
+                    params![discord_msg_id, session_id, seq],
+                )
+                .map(|_| ())
+        }
+    };
+
+    /// Give a claimed-but-unposted notification back so the next tick retries.
+    UnclaimNotified as unclaim_notified(session_id: &str => String, seq: &str => String) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            connection
+                .execute(
+                    "DELETE FROM notified WHERE session_id = ?1 AND seq = ?2 AND discord_msg_id = ''",
+                    params![session_id, seq],
+                )
+                .map(|_| ())
+        }
+    };
+
+    /// Record `discord_msg_id → session` so a reply can continue that session
+    /// (P14 / FR-32).
+    InsertMsgMap as insert_msg_map(discord_msg_id: &str => String, session_id: &str => String) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            connection
+                .execute(
+                    "INSERT OR IGNORE INTO msg_map (discord_msg_id, session_id) VALUES (?1, ?2)",
+                    params![discord_msg_id, session_id],
+                )
+                .map(|_| ())
+        }
+    };
+
+    /// Resolve a replied-to Discord message to its session.
+    LookupMsgMap as lookup_msg_map(discord_msg_id: &str => String) -> Option<(String, Option<i64>)> {
+        |connection: &mut Connection| -> rusqlite::Result<Option<(String, Option<i64>)>> {
+            connection
+                .query_row(
+                    "SELECT session_id, action_id FROM msg_map WHERE discord_msg_id = ?1",
+                    params![discord_msg_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>("session_id")?,
+                            row.get::<_, Option<i64>>("action_id")?,
+                        ))
+                    },
+                )
+                .optional()
+        }
+    };
+
+    /// Whether `kind`/`key` is muted (FR-33).
+    IsMuted as is_muted(kind: &str => String, key: &str => String) -> bool {
+        |connection: &mut Connection| -> rusqlite::Result<bool> {
+            let muted = connection
+                .query_row(
+                    "SELECT 1 FROM mute WHERE kind = ?1 AND key = ?2",
+                    params![kind, key],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            Ok(muted)
+        }
+    };
+
+    /// Toggle a mute; returns the new state (`true` = now muted).
+    ToggleMute as toggle_mute(kind: &str => String, key: &str => String) -> bool {
+        |connection: &mut Connection| -> rusqlite::Result<bool> {
+            let transaction = connection.transaction()?;
+            let exists: Option<()> = transaction
+                .query_row(
+                    "SELECT 1 FROM mute WHERE kind = ?1 AND key = ?2",
+                    params![kind, key],
+                    |_| Ok(()),
+                )
+                .optional()?;
+            if exists.is_some() {
+                transaction.execute(
+                    "DELETE FROM mute WHERE kind = ?1 AND key = ?2",
+                    params![kind, key],
+                )?;
+                transaction.commit()?;
+                Ok(false)
+            } else {
+                transaction.execute(
+                    "INSERT INTO mute (kind, key) VALUES (?1, ?2)",
+                    params![kind, key],
+                )?;
+                transaction.commit()?;
+                Ok(true)
+            }
+        }
+    };
+}
+
+impl StoreHandle {
+    /// Actions currently in `running`.
+    pub async fn running_actions(&self) -> Result<Vec<ActionRow>, StoreError> {
+        self.actions_with_state(State::Running).await
+    }
+
+    /// Actions currently in `staged`.
+    pub async fn staged_actions(&self) -> Result<Vec<ActionRow>, StoreError> {
+        self.actions_with_state(State::Staged).await
+    }
+
+    async fn actions_with_state(&self, state: State) -> Result<Vec<ActionRow>, StoreError> {
+        self.actions_in_states(&[state]).await
+    }
 }
 
 /// The actor handle: cheap to clone, no direct connection access.
@@ -561,15 +1339,6 @@ impl StoreHandle {
                 done_rx,
             }),
         })
-    }
-
-    /// The lock holder of a directory, if any (P5).
-    pub async fn lock_holder(&self, dir: &str) -> Result<Option<String>, StoreError> {
-        self.request(|reply| StoreRequest::LockHolder {
-            dir: dir.to_owned(),
-            reply,
-        })
-        .await
     }
 
     /// Send one typed request to the actor and await its typed reply. The
@@ -626,948 +1395,6 @@ fn worker_loop(
 /// Send one typed reply; a closed receiver just means the caller moved on.
 fn finish<T>(reply: Reply<T>, result: rusqlite::Result<T>) {
     let _ = reply.send(result.map_err(StoreError::from));
-}
-
-impl StoreRequest {
-    /// Dispatch one request on the actor thread and send its typed reply
-    /// (FR-2/FR-6: every operation is one enum variant and one match arm).
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the dispatcher is a flat, exhaustive match over the store's message set; one arm per operation keeps the whole grammar in one place"
-    )]
-    fn dispatch(self, connection: &mut Connection) {
-        match self {
-            StoreRequest::LockHolder { dir, reply } => finish(
-                reply,
-                connection
-                    .query_row(
-                        "SELECT lock_holder FROM project WHERE dir = ?1",
-                        params![dir],
-                        |row| row.get::<_, Option<String>>("lock_holder"),
-                    )
-                    .optional()
-                    .map(Option::flatten),
-            ),
-            StoreRequest::UpsertProject {
-                dir,
-                work_branch,
-                base_sha,
-                reply,
-            } => finish(
-                reply,
-                connection
-                    .execute(
-                        "INSERT INTO project (dir, work_branch, base_sha)
-                         VALUES (?1, ?2, ?3)
-                         ON CONFLICT(dir) DO UPDATE SET
-                            work_branch = excluded.work_branch,
-                            base_sha = excluded.base_sha",
-                        params![dir, work_branch, base_sha],
-                    )
-                    .map(|_| ()),
-            ),
-            StoreRequest::Project { dir, reply } => finish(
-                reply,
-                connection
-                    .query_row(
-                        "SELECT dir, work_branch, base_sha, active_session_id, lock_holder, lock_since
-                         FROM project WHERE dir = ?1",
-                        params![dir],
-                        project_row,
-                    )
-                    .optional(),
-            ),
-            StoreRequest::LockedProjects { reply } => finish(
-                reply,
-                (|| -> rusqlite::Result<Vec<ProjectRow>> {
-                    let mut statement = connection.prepare(
-                        "SELECT dir, work_branch, base_sha, active_session_id, lock_holder, lock_since
-                         FROM project WHERE lock_holder IS NOT NULL ORDER BY dir",
-                    )?;
-                    let rows = statement
-                        .query_map([], project_row)?
-                        .collect::<rusqlite::Result<Vec<_>>>()?;
-                    Ok(rows)
-                })(),
-            ),
-            StoreRequest::InsertRun { dir, kind, reply } => finish(
-                reply,
-                (|| -> rusqlite::Result<i64> {
-                    connection.execute(
-                        "INSERT INTO run (dir, kind, created_at) VALUES (?1, ?2, ?3)",
-                        params![dir, kind, now_unix()],
-                    )?;
-                    Ok(connection.last_insert_rowid())
-                })(),
-            ),
-            StoreRequest::InsertRunWithPlan {
-                dir,
-                kind,
-                plan_path,
-                reply,
-            } => finish(
-                reply,
-                (|| -> rusqlite::Result<i64> {
-                    connection.execute(
-                        "INSERT INTO run (dir, plan_path, kind, created_at) VALUES (?1, ?2, ?3, ?4)",
-                        params![dir, plan_path, kind, now_unix()],
-                    )?;
-                    Ok(connection.last_insert_rowid())
-                })(),
-            ),
-            StoreRequest::InsertAction {
-                run_id,
-                channel_id,
-                label,
-                prompt_sent,
-                attempt,
-                reply,
-            } => finish(
-                reply,
-                (|| -> rusqlite::Result<i64> {
-                    connection.execute(
-                        "INSERT INTO action (run_id, channel_id, label, prompt_sent, state, attempt)
-                         VALUES (?1, ?2, ?3, ?4, 'staged', ?5)",
-                        params![run_id, channel_id, label, prompt_sent, attempt],
-                    )?;
-                    Ok(connection.last_insert_rowid())
-                })(),
-            ),
-            StoreRequest::InsertStagedChild {
-                run_id,
-                channel_id,
-                label,
-                prompt_sent,
-                template,
-                attempt,
-                parent_action_id,
-                reply,
-            } => finish(
-                reply,
-                (|| -> rusqlite::Result<i64> {
-                    connection.execute(
-                        "INSERT INTO action
-                            (run_id, channel_id, label, prompt_sent, template, state, attempt, parent_action_id)
-                         VALUES (?1, ?2, ?3, ?4, ?5, 'staged', ?6, ?7)",
-                        params![
-                            run_id,
-                            channel_id,
-                            label,
-                            prompt_sent,
-                            template,
-                            attempt,
-                            parent_action_id
-                        ],
-                    )?;
-                    Ok(connection.last_insert_rowid())
-                })(),
-            ),
-            StoreRequest::Run { id, reply } => finish(
-                reply,
-                connection
-                    .query_row(
-                        "SELECT id, dir, plan_path, kind FROM run WHERE id = ?1",
-                        params![id],
-                        |row| {
-                            Ok(RunRow {
-                                id: row.get("id")?,
-                                dir: row.get("dir")?,
-                                plan_path: row.get("plan_path")?,
-                                kind: row.get("kind")?,
-                            })
-                        },
-                    )
-                    .optional(),
-            ),
-            StoreRequest::Action { id, reply } => finish(
-                reply,
-                connection
-                    .query_row(
-                        "SELECT * FROM action WHERE id = ?1",
-                        params![id],
-                        action_row,
-                    )
-                    .optional(),
-            ),
-            StoreRequest::ActionsInStates { states, reply } => finish(
-                reply,
-                (|| -> rusqlite::Result<Vec<ActionRow>> {
-                    if states.is_empty() {
-                        return Ok(Vec::new());
-                    }
-                    let placeholders = vec!["?"; states.len()].join(",");
-                    let sql =
-                        format!("SELECT * FROM action WHERE state IN ({placeholders}) ORDER BY id");
-                    let mut statement = connection.prepare(&sql)?;
-                    let rows = statement
-                        .query_map(rusqlite::params_from_iter(states.iter()), action_row)?
-                        .collect::<rusqlite::Result<Vec<_>>>()?;
-                    Ok(rows)
-                })(),
-            ),
-            StoreRequest::ActionsForDir { dir, reply } => finish(
-                reply,
-                (|| -> rusqlite::Result<Vec<ActionRow>> {
-                    let mut statement = connection.prepare(
-                        "SELECT action.* FROM action
-                         JOIN run ON action.run_id = run.id
-                         WHERE run.dir = ?1 ORDER BY action.id",
-                    )?;
-                    let rows = statement
-                        .query_map(params![dir], action_row)?
-                        .collect::<rusqlite::Result<Vec<_>>>()?;
-                    Ok(rows)
-                })(),
-            ),
-            StoreRequest::LastAcceptSha { dir, reply } => finish(
-                reply,
-                connection
-                    .query_row(
-                        "SELECT action.accept_sha FROM action
-                         JOIN run ON action.run_id = run.id
-                         WHERE run.dir = ?1 AND action.accept_sha IS NOT NULL
-                         ORDER BY action.id DESC LIMIT 1",
-                        params![dir],
-                        |row| row.get::<_, Option<String>>("accept_sha"),
-                    )
-                    .optional()
-                    .map(Option::flatten),
-            ),
-            StoreRequest::RunningForSession { session_id, reply } => finish(
-                reply,
-                connection
-                    .query_row(
-                        "SELECT * FROM action WHERE session_id = ?1 AND state = 'running' ORDER BY id DESC LIMIT 1",
-                        params![session_id],
-                        action_row,
-                    )
-                    .optional(),
-            ),
-            StoreRequest::RunningActionForDir { dir, reply } => finish(
-                reply,
-                connection
-                    .query_row(
-                        "SELECT action.* FROM action
-                         JOIN run ON action.run_id = run.id
-                         WHERE run.dir = ?1 AND action.state = 'running'
-                         ORDER BY action.id DESC LIMIT 1",
-                        params![dir],
-                        action_row,
-                    )
-                    .optional(),
-            ),
-            StoreRequest::SetOrigin {
-                action_id,
-                origin,
-                reply,
-            } => finish(
-                reply,
-                connection
-                    .execute(
-                        "UPDATE action SET origin_msg_id = ?1 WHERE id = ?2 AND origin_msg_id IS NULL",
-                        params![origin, action_id],
-                    )
-                    .map(|_| ()),
-            ),
-            StoreRequest::MarkIncludeExisting { action_id, reply } => finish(
-                reply,
-                (|| -> rusqlite::Result<bool> {
-                    let changed = connection.execute(
-                        "UPDATE action SET include_existing = 1 WHERE id = ?1 AND state = 'staged'",
-                        params![action_id],
-                    )?;
-                    Ok(changed == 1)
-                })(),
-            ),
-            StoreRequest::CasState {
-                id,
-                from,
-                to,
-                writes,
-                reply,
-            } => finish(reply, cas_inner(connection, id, from, to, &writes, None)),
-            StoreRequest::CasStateFromAny {
-                id,
-                from_states,
-                to,
-                writes,
-                reply,
-            } => finish(
-                reply,
-                (|| -> rusqlite::Result<bool> {
-                    if from_states.is_empty() {
-                        return Ok(false);
-                    }
-                    let placeholders = vec!["?"; from_states.len()].join(",");
-                    let extra = format!("state IN ({placeholders})");
-                    cas_inner_any(connection, id, &from_states, to, &writes, &extra)
-                })(),
-            ),
-            StoreRequest::DeliverReport { id, to, writes, reply } => finish(
-                reply,
-                cas_inner(
-                    connection,
-                    id,
-                    State::Running,
-                    to,
-                    &writes,
-                    Some("report_msg_id IS NULL"),
-                ),
-            ),
-            StoreRequest::BeginSend {
-                action_id,
-                dir,
-                session_id,
-                start_head,
-                dirty,
-                reply,
-            } => finish(
-                reply,
-                (|| -> rusqlite::Result<bool> {
-                    let transaction = connection.transaction()?;
-                    let now = now_unix();
-                    let writes = vec![
-                        (Column::SessionId, WriteValue::Text(session_id)),
-                        (Column::StartedAt, WriteValue::Int(now)),
-                        (Column::LastEventAt, WriteValue::Int(now)),
-                        (
-                            Column::StartHead,
-                            start_head.map_or(WriteValue::Null, WriteValue::Text),
-                        ),
-                        (Column::DirtyAtStart, WriteValue::Int(i64::from(dirty))),
-                    ];
-                    let changed = cas_inner(
-                        &transaction,
-                        action_id,
-                        State::Staged,
-                        State::Running,
-                        &writes,
-                        None,
-                    )?;
-                    if changed {
-                        // Atomic lock acquisition (P5): take the lock only while
-                        // free or already held by this same action id. If the
-                        // lock is held by someone else, the transition rolls back.
-                        let holder = action_id.to_string();
-                        let acquired = transaction.execute(
-                            "UPDATE project SET lock_holder = ?1, lock_since = ?2
-                             WHERE dir = ?3 AND (lock_holder IS NULL OR lock_holder = ?1)",
-                            params![holder, now, dir],
-                        )?;
-                        if acquired == 1 {
-                            transaction.commit()?;
-                            Ok(true)
-                        } else {
-                            transaction.rollback()?;
-                            Ok(false)
-                        }
-                    } else {
-                        transaction.rollback()?;
-                        Ok(false)
-                    }
-                })(),
-            ),
-            StoreRequest::RestagePrompt { id, prompt, reply } => finish(
-                reply,
-                (|| -> rusqlite::Result<bool> {
-                    let changed = connection.execute(
-                        "UPDATE action SET prompt_sent = ?1 WHERE id = ?2 AND state = 'staged'",
-                        params![prompt, id],
-                    )?;
-                    Ok(changed == 1)
-                })(),
-            ),
-            StoreRequest::RestageLabelPrompt {
-                id,
-                label,
-                prompt,
-                reply,
-            } => finish(
-                reply,
-                (|| -> rusqlite::Result<bool> {
-                    let changed = connection.execute(
-                        "UPDATE action SET label = ?1, prompt_sent = ?2 WHERE id = ?3 AND state = 'staged'",
-                        params![label, prompt, id],
-                    )?;
-                    Ok(changed == 1)
-                })(),
-            ),
-            StoreRequest::SetTemplatePrompt {
-                id,
-                template,
-                prompt,
-                reply,
-            } => finish(
-                reply,
-                (|| -> rusqlite::Result<bool> {
-                    let changed = connection.execute(
-                        "UPDATE action SET template = ?1, prompt_sent = ?2 WHERE id = ?3 AND state = 'staged'",
-                        params![template, prompt, id],
-                    )?;
-                    Ok(changed == 1)
-                })(),
-            ),
-            StoreRequest::SetStallPing { id, ts, reply } => finish(
-                reply,
-                connection
-                    .execute(
-                        "UPDATE action SET stall_ping_at = ?1 WHERE id = ?2",
-                        params![ts, id],
-                    )
-                    .map(|_| ()),
-            ),
-            StoreRequest::FailSend { id, dir, reason, reply } => finish(
-                reply,
-                (|| -> rusqlite::Result<()> {
-                    let transaction = connection.transaction()?;
-                    let changed = transaction.execute(
-                        "UPDATE action SET state = 'errored', outcome_kind = 'failed-send',
-                         report_full = ?1, last_event_at = ?2
-                         WHERE id = ?3 AND state = 'running' AND report_msg_id IS NULL",
-                        params![reason, now_unix(), id],
-                    )?;
-                    if changed == 1 {
-                        transaction.execute(
-                            "UPDATE project SET lock_holder = NULL, lock_since = NULL WHERE dir = ?1",
-                            params![dir],
-                        )?;
-                    }
-                    transaction.commit()?;
-                    Ok(())
-                })(),
-            ),
-            StoreRequest::DraftPath { user_id, reply } => finish(
-                reply,
-                connection
-                    .query_row(
-                        "SELECT draft_path FROM ui_state WHERE user_id = ?1",
-                        params![user_id.to_string()],
-                        |row| row.get::<_, Option<String>>("draft_path"),
-                    )
-                    .optional()
-                    .map(Option::flatten),
-            ),
-            StoreRequest::SetDraftPath {
-                user_id,
-                path,
-                reply,
-            } => finish(
-                reply,
-                connection
-                    .execute(
-                        "INSERT INTO ui_state (user_id, draft_path) VALUES (?1, ?2)
-                         ON CONFLICT(user_id) DO UPDATE SET draft_path = excluded.draft_path",
-                        params![user_id.to_string(), path],
-                    )
-                    .map(|_| ()),
-            ),
-            StoreRequest::ClearDraftPath { user_id, reply } => finish(
-                reply,
-                connection
-                    .execute(
-                        "UPDATE ui_state SET draft_path = NULL WHERE user_id = ?1",
-                        params![user_id.to_string()],
-                    )
-                    .map(|_| ()),
-            ),
-            StoreRequest::UiCwd { user_id, reply } => finish(
-                reply,
-                connection
-                    .query_row(
-                        "SELECT cwd FROM ui_state WHERE user_id = ?1",
-                        params![user_id.to_string()],
-                        |row| row.get::<_, Option<String>>("cwd"),
-                    )
-                    .optional()
-                    .map(Option::flatten),
-            ),
-            StoreRequest::SetUiCwd { user_id, cwd, reply } => finish(
-                reply,
-                connection
-                    .execute(
-                        "INSERT INTO ui_state (user_id, cwd) VALUES (?1, ?2)
-                         ON CONFLICT(user_id) DO UPDATE SET cwd = excluded.cwd",
-                        params![user_id.to_string(), cwd],
-                    )
-                    .map(|_| ()),
-            ),
-            StoreRequest::UpsertSeen {
-                session_id,
-                directory,
-                reply,
-            } => finish(
-                reply,
-                connection
-                    .execute(
-                        "INSERT INTO session_seen (session_id, dir, first_seen) VALUES (?1, ?2, ?3)
-                         ON CONFLICT(session_id) DO NOTHING",
-                        params![session_id, directory, now_unix()],
-                    )
-                    .map(|_| ()),
-            ),
-            StoreRequest::UpsertCursor {
-                session_id,
-                seq,
-                reply,
-            } => finish(
-                reply,
-                connection
-                    .execute(
-                        "INSERT INTO session_cursor (session_id, last_seq, updated_at) VALUES (?1, ?2, ?3)
-                         ON CONFLICT(session_id) DO UPDATE SET last_seq = excluded.last_seq, updated_at = excluded.updated_at",
-                        params![session_id, to_i64(seq), now_unix()],
-                    )
-                    .map(|_| ()),
-            ),
-            StoreRequest::Cursor { session_id, reply } => finish(
-                reply,
-                connection
-                    .query_row(
-                        "SELECT last_seq FROM session_cursor WHERE session_id = ?1",
-                        params![session_id],
-                        |row| {
-                            row.get::<_, i64>("last_seq").map(|seq| CursorRow {
-                                last_seq: to_u64(seq),
-                            })
-                        },
-                    )
-                    .optional(),
-            ),
-            StoreRequest::RecentDirs { limit, reply } => finish(
-                reply,
-                (|| -> rusqlite::Result<Vec<String>> {
-                    let mut statement = connection.prepare(
-                        "SELECT dir FROM project ORDER BY (
-                            SELECT MAX(created_at) FROM run WHERE run.dir = project.dir
-                         ) DESC LIMIT ?1",
-                    )?;
-                    let rows = statement
-                        .query_map(params![to_i64(limit)], |row| row.get::<_, String>("dir"))?
-                        .collect::<rusqlite::Result<Vec<_>>>()?;
-                    Ok(rows)
-                })(),
-            ),
-            StoreRequest::Audit {
-                user_id,
-                verb,
-                action_id,
-                result,
-                reply,
-            } => finish(
-                reply,
-                connection
-                    .execute(
-                        "INSERT INTO audit (ts, user_id, verb, action_id, result) VALUES (?1, ?2, ?3, ?4, ?5)",
-                        params![now_unix(), user_id.to_string(), verb, action_id, result],
-                    )
-                    .map(|_| ()),
-            ),
-            StoreRequest::ActionCountsByState { reply } => finish(
-                reply,
-                (|| -> rusqlite::Result<Vec<(String, i64)>> {
-                    let mut statement =
-                        connection.prepare("SELECT state, COUNT(*) AS n FROM action GROUP BY state")?;
-                    let rows = statement
-                        .query_map([], |row| {
-                            Ok((row.get::<_, String>("state")?, row.get::<_, i64>("n")?))
-                        })?
-                        .collect::<rusqlite::Result<Vec<_>>>()?;
-                    Ok(rows)
-                })(),
-            ),
-            StoreRequest::RecordResetIntent {
-                dir,
-                target_sha,
-                sup_branch,
-                reply,
-            } => finish(
-                reply,
-                (|| -> rusqlite::Result<i64> {
-                    connection.execute(
-                        "INSERT INTO reset_intent (dir, target_sha, sup_branch, step, created_at)
-                         VALUES (?1, ?2, ?3, 0, ?4)",
-                        params![dir, target_sha, sup_branch, now_unix()],
-                    )?;
-                    Ok(connection.last_insert_rowid())
-                })(),
-            ),
-            StoreRequest::PendingResetIntents { reply } => finish(
-                reply,
-                (|| -> rusqlite::Result<Vec<ResetIntentRow>> {
-                    let mut statement = connection.prepare(
-                        "SELECT id, dir, target_sha, sup_branch, step FROM reset_intent ORDER BY id",
-                    )?;
-                    let rows = statement
-                        .query_map([], |row| {
-                            Ok(ResetIntentRow {
-                                id: row.get("id")?,
-                                dir: row.get("dir")?,
-                                target_sha: row.get("target_sha")?,
-                                sup_branch: row.get("sup_branch")?,
-                                step: row.get("step")?,
-                            })
-                        })?
-                        .collect::<rusqlite::Result<Vec<_>>>()?;
-                    Ok(rows)
-                })(),
-            ),
-            StoreRequest::SetResetStep { id, step, reply } => finish(
-                reply,
-                (|| -> rusqlite::Result<bool> {
-                    let changed = connection.execute(
-                        "UPDATE reset_intent SET step = ?1 WHERE id = ?2",
-                        params![step, id],
-                    )?;
-                    Ok(changed == 1)
-                })(),
-            ),
-            StoreRequest::DeleteResetIntent { id, reply } => finish(
-                reply,
-                connection
-                    .execute("DELETE FROM reset_intent WHERE id = ?1", params![id])
-                    .map(|_| ()),
-            ),
-            StoreRequest::UpsertGate {
-                ext_id,
-                action_id,
-                session_id,
-                root_session_id,
-                kind,
-                payload_json,
-                renderable,
-                channel_id,
-                now,
-                reply,
-            } => finish(
-                reply,
-                (|| -> rusqlite::Result<(i64, bool)> {
-                    let transaction = connection.transaction()?;
-                    let existing: Option<i64> = transaction
-                        .query_row(
-                            "SELECT id FROM gate WHERE ext_id = ?1",
-                            params![ext_id],
-                            |row| row.get("id"),
-                        )
-                        .optional()?;
-                    if let Some(id) = existing {
-                        transaction.commit()?;
-                        Ok((id, false))
-                    } else {
-                        let renderable = i64::from(renderable);
-                        transaction.execute(
-                            "INSERT INTO gate
-                                    (ext_id, action_id, session_id, root_session_id, kind, payload_json,
-                                     renderable, state, channel_id, last_ping_at)
-                                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8, ?9)",
-                            params![
-                                ext_id,
-                                action_id,
-                                session_id,
-                                root_session_id,
-                                kind,
-                                payload_json,
-                                renderable,
-                                channel_id,
-                                now
-                            ],
-                        )?;
-                        let id = transaction.last_insert_rowid();
-                        transaction.commit()?;
-                        Ok((id, true))
-                    }
-                })(),
-            ),
-            StoreRequest::Gate { id, reply } => finish(
-                reply,
-                connection
-                    .query_row("SELECT * FROM gate WHERE id = ?1", params![id], gate_row)
-                    .optional(),
-            ),
-            StoreRequest::PendingGates { reply } => finish(
-                reply,
-                (|| -> rusqlite::Result<Vec<GateRow>> {
-                    let mut statement = connection
-                        .prepare("SELECT * FROM gate WHERE state = 'pending' ORDER BY id")?;
-                    let rows = statement
-                        .query_map([], gate_row)?
-                        .collect::<rusqlite::Result<Vec<_>>>()?;
-                    Ok(rows)
-                })(),
-            ),
-            StoreRequest::CasGate {
-                id,
-                from,
-                to,
-                answer,
-                reply,
-            } => finish(
-                reply,
-                (|| -> rusqlite::Result<bool> {
-                    let changed = connection.execute(
-                        "UPDATE gate SET state = ?1, answer = ?2 WHERE id = ?3 AND state = ?4",
-                        params![to, answer, id, from],
-                    )?;
-                    Ok(changed == 1)
-                })(),
-            ),
-            StoreRequest::SetGateMsg {
-                id,
-                msg_id,
-                channel_id,
-                reply,
-            } => finish(
-                reply,
-                connection
-                    .execute(
-                        "UPDATE gate SET msg_id = ?1, channel_id = ?2 WHERE id = ?3 AND msg_id IS NULL",
-                        params![msg_id, channel_id, id],
-                    )
-                    .map(|_| ()),
-            ),
-            StoreRequest::BumpGatePings { id, now, reply } => finish(
-                reply,
-                (|| -> rusqlite::Result<i64> {
-                    connection.execute(
-                        "UPDATE gate SET pings = pings + 1, last_ping_at = ?1 WHERE id = ?2",
-                        params![now, id],
-                    )?;
-                    let pings: i64 = connection.query_row(
-                        "SELECT pings FROM gate WHERE id = ?1",
-                        params![id],
-                        |row| row.get("pings"),
-                    )?;
-                    Ok(pings)
-                })(),
-            ),
-            StoreRequest::AnsweredGates { reply } => finish(
-                reply,
-                (|| -> rusqlite::Result<Vec<GateRow>> {
-                    let mut statement = connection.prepare(
-                        "SELECT * FROM gate WHERE state = 'answered' AND answer IS NOT NULL ORDER BY id",
-                    )?;
-                    let rows = statement
-                        .query_map([], gate_row)?
-                        .collect::<rusqlite::Result<Vec<_>>>()?;
-                    Ok(rows)
-                })(),
-            ),
-            StoreRequest::SetActionBlocked {
-                action_id,
-                gate_id,
-                reply,
-            } => finish(
-                reply,
-                connection
-                    .execute(
-                        "UPDATE action SET blocked_gate_id = ?1 WHERE id = ?2",
-                        params![gate_id, action_id],
-                    )
-                    .map(|_| ()),
-            ),
-            StoreRequest::ClearActionBlocked {
-                action_id,
-                gate_id,
-                reply,
-            } => finish(
-                reply,
-                connection
-                    .execute(
-                        "UPDATE action SET blocked_gate_id = NULL WHERE id = ?1 AND blocked_gate_id = ?2",
-                        params![action_id, gate_id],
-                    )
-                    .map(|_| ()),
-            ),
-            StoreRequest::SetActiveSession {
-                dir,
-                session_id,
-                reply,
-            } => finish(
-                reply,
-                connection
-                    .execute(
-                        "INSERT INTO project (dir, active_session_id) VALUES (?1, ?2)
-                         ON CONFLICT(dir) DO UPDATE SET active_session_id = excluded.active_session_id",
-                        params![dir, session_id],
-                    )
-                    .map(|_| ()),
-            ),
-            StoreRequest::SetExternalLock {
-                dir,
-                session_id,
-                since,
-                reply,
-            } => finish(
-                reply,
-                connection
-                    .execute(
-                        "INSERT INTO project (dir, lock_holder, lock_since) VALUES (?1, ?2, ?3)
-                         ON CONFLICT(dir) DO UPDATE SET lock_holder = excluded.lock_holder,
-                                                        lock_since = excluded.lock_since",
-                        params![dir, format!("external:{session_id}"), since],
-                    )
-                    .map(|_| ()),
-            ),
-            StoreRequest::ReleaseLock { dir, holder, reply } => finish(
-                reply,
-                (|| -> rusqlite::Result<bool> {
-                    let changed = connection.execute(
-                        "UPDATE project SET lock_holder = NULL, lock_since = NULL
-                         WHERE dir = ?1 AND lock_holder = ?2",
-                        params![dir, holder],
-                    )?;
-                    Ok(changed == 1)
-                })(),
-            ),
-            StoreRequest::RetireActiveSession { dir, reply } => finish(
-                reply,
-                connection
-                    .execute(
-                        "UPDATE project SET active_session_id = NULL WHERE dir = ?1",
-                        params![dir],
-                    )
-                    .map(|_| ()),
-            ),
-            StoreRequest::SessionDir { session_id, reply } => finish(
-                reply,
-                connection
-                    .query_row(
-                        "SELECT dir FROM session_seen WHERE session_id = ?1",
-                        params![session_id],
-                        |row| row.get("dir"),
-                    )
-                    .optional(),
-            ),
-            StoreRequest::KnownBotSessions { reply } => finish(
-                reply,
-                (|| -> rusqlite::Result<Vec<String>> {
-                    let mut statement = connection.prepare(
-                        "SELECT session_id FROM action WHERE session_id IS NOT NULL
-                         UNION
-                         SELECT active_session_id FROM project WHERE active_session_id IS NOT NULL",
-                    )?;
-                    let rows = statement
-                        .query_map([], |row| row.get::<_, String>("session_id"))?
-                        .collect::<rusqlite::Result<Vec<_>>>()?;
-                    Ok(rows)
-                })(),
-            ),
-            StoreRequest::ClaimNotified {
-                session_id,
-                seq,
-                reply,
-            } => finish(
-                reply,
-                (|| -> rusqlite::Result<bool> {
-                    let changed = connection.execute(
-                        "INSERT OR IGNORE INTO notified (session_id, seq, discord_msg_id)
-                         VALUES (?1, ?2, '')",
-                        params![session_id, seq],
-                    )?;
-                    Ok(changed == 1)
-                })(),
-            ),
-            StoreRequest::FinishNotified {
-                session_id,
-                seq,
-                discord_msg_id,
-                reply,
-            } => finish(
-                reply,
-                connection
-                    .execute(
-                        "UPDATE notified SET discord_msg_id = ?1 WHERE session_id = ?2 AND seq = ?3",
-                        params![discord_msg_id, session_id, seq],
-                    )
-                    .map(|_| ()),
-            ),
-            StoreRequest::UnclaimNotified {
-                session_id,
-                seq,
-                reply,
-            } => finish(
-                reply,
-                connection
-                    .execute(
-                        "DELETE FROM notified WHERE session_id = ?1 AND seq = ?2 AND discord_msg_id = ''",
-                        params![session_id, seq],
-                    )
-                    .map(|_| ()),
-            ),
-            StoreRequest::InsertMsgMap {
-                discord_msg_id,
-                session_id,
-                reply,
-            } => finish(
-                reply,
-                connection
-                    .execute(
-                        "INSERT OR IGNORE INTO msg_map (discord_msg_id, session_id) VALUES (?1, ?2)",
-                        params![discord_msg_id, session_id],
-                    )
-                    .map(|_| ()),
-            ),
-            StoreRequest::LookupMsgMap {
-                discord_msg_id,
-                reply,
-            } => finish(
-                reply,
-                connection
-                    .query_row(
-                        "SELECT session_id, action_id FROM msg_map WHERE discord_msg_id = ?1",
-                        params![discord_msg_id],
-                        |row| {
-                            Ok((
-                                row.get::<_, String>("session_id")?,
-                                row.get::<_, Option<i64>>("action_id")?,
-                            ))
-                        },
-                    )
-                    .optional(),
-            ),
-            StoreRequest::IsMuted { kind, key, reply } => finish(
-                reply,
-                (|| -> rusqlite::Result<bool> {
-                    let muted = connection
-                        .query_row(
-                            "SELECT 1 FROM mute WHERE kind = ?1 AND key = ?2",
-                            params![kind, key],
-                            |_| Ok(()),
-                        )
-                        .optional()?
-                        .is_some();
-                    Ok(muted)
-                })(),
-            ),
-            StoreRequest::ToggleMute { kind, key, reply } => finish(
-                reply,
-                (|| -> rusqlite::Result<bool> {
-                    let transaction = connection.transaction()?;
-                    let exists: Option<()> = transaction
-                        .query_row(
-                            "SELECT 1 FROM mute WHERE kind = ?1 AND key = ?2",
-                            params![kind, key],
-                            |_| Ok(()),
-                        )
-                        .optional()?;
-                    if exists.is_some() {
-                        transaction.execute(
-                            "DELETE FROM mute WHERE kind = ?1 AND key = ?2",
-                            params![kind, key],
-                        )?;
-                        transaction.commit()?;
-                        Ok(false)
-                    } else {
-                        transaction.execute(
-                            "INSERT INTO mute (kind, key) VALUES (?1, ?2)",
-                            params![kind, key],
-                        )?;
-                        transaction.commit()?;
-                        Ok(true)
-                    }
-                })(),
-            ),
-        }
-    }
 }
 
 /// PRAGMAs + schema migrations. Runs exactly once per connection.
@@ -1772,796 +1599,6 @@ impl std::fmt::Debug for StoreHandle {
     }
 }
 
-// == typed operations =======================================================
-
-impl StoreHandle {
-    /// Upsert a project row for `dir`. `work_branch`/`base_sha` are `None` for
-    /// non-git directories.
-    pub async fn upsert_project(
-        &self,
-        dir: &str,
-        work_branch: Option<&str>,
-        base_sha: Option<&str>,
-    ) -> Result<(), StoreError> {
-        self.request(|reply| StoreRequest::UpsertProject {
-            dir: dir.to_owned(),
-            work_branch: work_branch.map(str::to_owned),
-            base_sha: base_sha.map(str::to_owned),
-            reply,
-        })
-        .await
-    }
-
-    /// Project by directory.
-    pub async fn project(&self, dir: &str) -> Result<Option<ProjectRow>, StoreError> {
-        self.request(|reply| StoreRequest::Project {
-            dir: dir.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// Every project that currently holds a lock (for `/status`).
-    pub async fn locked_projects(&self) -> Result<Vec<ProjectRow>, StoreError> {
-        self.request(|reply| StoreRequest::LockedProjects { reply })
-            .await
-    }
-
-    /// Insert a run row; returns its id.
-    pub async fn insert_run(&self, dir: &str, kind: &str) -> Result<i64, StoreError> {
-        self.request(|reply| StoreRequest::InsertRun {
-            dir: dir.to_owned(),
-            kind: kind.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// Insert a staged action; returns its id.
-    pub async fn insert_action(
-        &self,
-        run_id: i64,
-        channel_id: Option<i64>,
-        label: &str,
-        prompt_sent: &str,
-        attempt: i64,
-    ) -> Result<i64, StoreError> {
-        self.request(|reply| StoreRequest::InsertAction {
-            run_id,
-            channel_id,
-            label: label.to_owned(),
-            prompt_sent: prompt_sent.to_owned(),
-            attempt,
-            reply,
-        })
-        .await
-    }
-
-    /// A run row by id.
-    pub async fn run(&self, id: i64) -> Result<Option<RunRow>, StoreError> {
-        self.request(|reply| StoreRequest::Run { id, reply }).await
-    }
-
-    /// Record the staging-preview message id on an action (also seeds the
-    /// origin for the quiet status reactions).
-    pub async fn set_origin(&self, action_id: i64, origin: &str) -> Result<(), StoreError> {
-        self.request(|reply| StoreRequest::SetOrigin {
-            action_id,
-            origin: origin.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// Mark a session as seen (Phase 5 inbox bookkeeping, seeded from Phase 2).
-    pub async fn upsert_seen(
-        &self,
-        session_id: &str,
-        directory: Option<&str>,
-    ) -> Result<(), StoreError> {
-        self.request(|reply| StoreRequest::UpsertSeen {
-            session_id: session_id.to_owned(),
-            directory: directory.map(str::to_owned),
-            reply,
-        })
-        .await
-    }
-
-    /// Confirm the operator chose to include existing dirty changes (FR-27).
-    pub async fn mark_include_existing(&self, action_id: i64) -> Result<bool, StoreError> {
-        self.request(|reply| StoreRequest::MarkIncludeExisting { action_id, reply })
-            .await
-    }
-
-    /// An action by id.
-    pub async fn action(&self, id: i64) -> Result<Option<ActionRow>, StoreError> {
-        self.request(|reply| StoreRequest::Action { id, reply })
-            .await
-    }
-
-    /// Actions currently in `running`.
-    pub async fn running_actions(&self) -> Result<Vec<ActionRow>, StoreError> {
-        self.actions_with_state(State::Running).await
-    }
-
-    /// Actions currently in `staged`.
-    pub async fn staged_actions(&self) -> Result<Vec<ActionRow>, StoreError> {
-        self.actions_with_state(State::Staged).await
-    }
-
-    async fn actions_with_state(&self, state: State) -> Result<Vec<ActionRow>, StoreError> {
-        self.actions_in_states(&[state]).await
-    }
-
-    /// Actions currently in any of `states` (boot reconcile over intermediate
-    /// states uses this — spec P9 step 5).
-    pub async fn actions_in_states(&self, states: &[State]) -> Result<Vec<ActionRow>, StoreError> {
-        let states: Vec<String> = states
-            .iter()
-            .map(|state| state.as_str().to_owned())
-            .collect();
-        self.request(|reply| StoreRequest::ActionsInStates { states, reply })
-            .await
-    }
-
-    /// Every action belonging to a directory, oldest first (history merge, P8).
-    pub async fn actions_for_dir(&self, dir: &str) -> Result<Vec<ActionRow>, StoreError> {
-        self.request(|reply| StoreRequest::ActionsForDir {
-            dir: dir.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// The most recent accepted sha in a directory, if any (park's fallback
-    /// reset target, spec P7 step 3).
-    pub async fn last_accept_sha(&self, dir: &str) -> Result<Option<String>, StoreError> {
-        self.request(|reply| StoreRequest::LastAcceptSha {
-            dir: dir.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// The running action that owns `session_id`, if any.
-    pub async fn running_for_session(
-        &self,
-        session_id: &str,
-    ) -> Result<Option<ActionRow>, StoreError> {
-        self.request(|reply| StoreRequest::RunningForSession {
-            session_id: session_id.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// A generic CAS: `UPDATE ... SET state=:to <writes> WHERE id=:id AND
-    /// state=:from`. Returns whether exactly one row changed (P6).
-    pub async fn cas_state(
-        &self,
-        id: i64,
-        from: State,
-        to: State,
-        writes: &[(Column, WriteValue)],
-    ) -> Result<bool, StoreError> {
-        self.request(|reply| StoreRequest::CasState {
-            id,
-            from,
-            to,
-            writes: writes.to_vec(),
-            reply,
-        })
-        .await
-    }
-
-    /// A CAS whose `from` may be any of `from_states` (park starts from
-    /// reported, errored, or aborted; discard likewise — spec §6.4). Exactly
-    /// one row changes or the caller lost the race.
-    pub async fn cas_state_from_any(
-        &self,
-        id: i64,
-        from_states: &[State],
-        to: State,
-        writes: &[(Column, WriteValue)],
-    ) -> Result<bool, StoreError> {
-        self.request(|reply| StoreRequest::CasStateFromAny {
-            id,
-            from_states: from_states
-                .iter()
-                .map(|state| state.as_str().to_owned())
-                .collect(),
-            to,
-            writes: writes.to_vec(),
-            reply,
-        })
-        .await
-    }
-
-    /// The report-delivery CAS: `running → reported/errored/aborted` **only
-    /// while `report_msg_id IS NULL`** — the exactly-once dedupe key surviving
-    /// the crash gap between Discord POST and this txn (P9).
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "DB row carriers; each parameter is a column"
-    )]
-    pub async fn deliver_report(
-        &self,
-        id: i64,
-        to: State,
-        report_msg_id: &str,
-        outcome_kind: &str,
-        report_full: Option<&str>,
-        footer_json: &str,
-        ended_at: i64,
-    ) -> Result<bool, StoreError> {
-        let writes = vec![
-            (
-                Column::ReportMessageId,
-                WriteValue::Text(report_msg_id.to_owned()),
-            ),
-            (
-                Column::ReportFull,
-                WriteValue::Text(report_full.unwrap_or_default().to_owned()),
-            ),
-            (Column::FooterJson, WriteValue::Text(footer_json.to_owned())),
-            (
-                Column::OutcomeKind,
-                WriteValue::Text(outcome_kind.to_owned()),
-            ),
-            (Column::EndedAt, WriteValue::Int(ended_at)),
-            (Column::LastEventAt, WriteValue::Int(ended_at)),
-        ];
-        self.request(|reply| StoreRequest::DeliverReport {
-            id,
-            to,
-            writes,
-            reply,
-        })
-        .await
-    }
-
-    /// The atomic send: staged→running with the lock acquisition, session
-    /// binding, and the start record all in one transaction (spec P5).
-    pub async fn begin_send(
-        &self,
-        action_id: i64,
-        dir: &str,
-        session_id: &str,
-        start_head: Option<&str>,
-        dirty: bool,
-    ) -> Result<bool, StoreError> {
-        self.request(|reply| StoreRequest::BeginSend {
-            action_id,
-            dir: dir.to_owned(),
-            session_id: session_id.to_owned(),
-            start_head: start_head.map(str::to_owned),
-            dirty,
-            reply,
-        })
-        .await
-    }
-
-    /// Update `prompt_sent` on a staged action (Edit & send path).
-    pub async fn restage_prompt(&self, id: i64, prompt: &str) -> Result<bool, StoreError> {
-        self.request(|reply| StoreRequest::RestagePrompt {
-            id,
-            prompt: prompt.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// Update both `label` and `prompt_sent` on a staged action (the plan pick
-    /// prefills the label, then re-renders the envelope — P12/P13).
-    pub async fn restage_label_prompt(
-        &self,
-        id: i64,
-        label: &str,
-        prompt: &str,
-    ) -> Result<bool, StoreError> {
-        self.request(|reply| StoreRequest::RestageLabelPrompt {
-            id,
-            label: label.to_owned(),
-            prompt: prompt.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// Record the review-time template choice and the re-rendered prompt
-    /// (`fresh`/`resume` toggle, FR-6/P13).
-    pub async fn set_template_prompt(
-        &self,
-        id: i64,
-        template: &str,
-        prompt: &str,
-    ) -> Result<bool, StoreError> {
-        self.request(|reply| StoreRequest::SetTemplatePrompt {
-            id,
-            template: template.to_owned(),
-            prompt: prompt.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// Record a stall ping time (P3/FR-39: one ping per stall episode).
-    pub async fn set_stall_ping(&self, id: i64, ts: i64) -> Result<(), StoreError> {
-        self.request(|reply| StoreRequest::SetStallPing { id, ts, reply })
-            .await
-    }
-
-    /// Insert a run row carrying an optional plan path (Phase 6; the P12 plan is
-    /// input, recorded on the run, never tracked).
-    pub async fn insert_run_with_plan(
-        &self,
-        dir: &str,
-        kind: &str,
-        plan_path: Option<&str>,
-    ) -> Result<i64, StoreError> {
-        self.request(|reply| StoreRequest::InsertRunWithPlan {
-            dir: dir.to_owned(),
-            kind: kind.to_owned(),
-            plan_path: plan_path.map(str::to_owned),
-            reply,
-        })
-        .await
-    }
-
-    /// The last selected/uploaded path for a user (browser + attachment
-    /// draft).
-    pub async fn draft_path(&self, user_id: u64) -> Result<Option<String>, StoreError> {
-        self.request(|reply| StoreRequest::DraftPath { user_id, reply })
-            .await
-    }
-
-    /// Remember the last selected/uploaded path for a user.
-    pub async fn set_draft_path(&self, user_id: u64, path: &str) -> Result<(), StoreError> {
-        self.request(|reply| StoreRequest::SetDraftPath {
-            user_id,
-            path: path.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// Forget the draft path (consumed by a prompt).
-    pub async fn clear_draft_path(&self, user_id: u64) -> Result<(), StoreError> {
-        self.request(|reply| StoreRequest::ClearDraftPath { user_id, reply })
-            .await
-    }
-
-    /// Mark a send attempt as failed: leave `running` without a report and
-    /// release the directory lock.
-    pub async fn fail_send(&self, id: i64, dir: &str, reason: &str) -> Result<(), StoreError> {
-        self.request(|reply| StoreRequest::FailSend {
-            id,
-            dir: dir.to_owned(),
-            reason: reason.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// Set the log cursor for a session (P9 cache only).
-    pub async fn upsert_cursor(&self, session_id: &str, seq: u64) -> Result<(), StoreError> {
-        self.request(|reply| StoreRequest::UpsertCursor {
-            session_id: session_id.to_owned(),
-            seq,
-            reply,
-        })
-        .await
-    }
-
-    /// The logged cursor for a session, if any.
-    pub async fn cursor(&self, session_id: &str) -> Result<Option<CursorRow>, StoreError> {
-        self.request(|reply| StoreRequest::Cursor {
-            session_id: session_id.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// The most recent directories (for `/run` modal prefill).
-    pub async fn recent_dirs(&self, limit: u64) -> Result<Vec<String>, StoreError> {
-        self.request(|reply| StoreRequest::RecentDirs { limit, reply })
-            .await
-    }
-
-    /// The remembered cwd for a user (modal prefill). A row created by
-    /// `set_draft_path` alone leaves `cwd` NULL, so the read is nullable.
-    pub async fn ui_cwd(&self, user_id: u64) -> Result<Option<String>, StoreError> {
-        self.request(|reply| StoreRequest::UiCwd { user_id, reply })
-            .await
-    }
-
-    /// Remember a cwd for a user.
-    pub async fn set_ui_cwd(&self, user_id: u64, cwd: &str) -> Result<(), StoreError> {
-        self.request(|reply| StoreRequest::SetUiCwd {
-            user_id,
-            cwd: cwd.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// Record an audit line (FR-5).
-    pub async fn audit(
-        &self,
-        user_id: u64,
-        verb: &str,
-        action_id: Option<i64>,
-        result: &str,
-    ) -> Result<(), StoreError> {
-        self.request(|reply| StoreRequest::Audit {
-            user_id,
-            verb: verb.to_owned(),
-            action_id,
-            result: result.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// Number of actions per state (metrics feed).
-    pub async fn action_counts_by_state(&self) -> Result<Vec<(String, i64)>, StoreError> {
-        self.request(|reply| StoreRequest::ActionCountsByState { reply })
-            .await
-    }
-
-    /// Insert the staged successor action of a park-redo (spec CP-P4): same
-    /// run, same stored prompt, incremented attempt, parented to the parked
-    /// action. Returns the new id.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "one column per argument mirrors the insert; a struct would not reduce the call-site clarity"
-    )]
-    pub async fn insert_staged_child(
-        &self,
-        run_id: i64,
-        channel_id: Option<i64>,
-        label: &str,
-        prompt_sent: &str,
-        template: &str,
-        attempt: i64,
-        parent_action_id: i64,
-    ) -> Result<i64, StoreError> {
-        self.request(|reply| StoreRequest::InsertStagedChild {
-            run_id,
-            channel_id,
-            label: label.to_owned(),
-            prompt_sent: prompt_sent.to_owned(),
-            template: template.to_owned(),
-            attempt,
-            parent_action_id,
-            reply,
-        })
-        .await
-    }
-
-    /// Release a directory lock only if `holder` currently owns it (P5). A
-    /// stale holder (another action already took over) is a no-op.
-    pub async fn release_lock(&self, dir: &str, holder: &str) -> Result<bool, StoreError> {
-        self.request(|reply| StoreRequest::ReleaseLock {
-            dir: dir.to_owned(),
-            holder: holder.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// Clear the promptable session for a directory (FR-30). Park and reset
-    /// retire the session so a stale session is readable but never prompted.
-    pub async fn retire_active_session(&self, dir: &str) -> Result<(), StoreError> {
-        self.request(|reply| StoreRequest::RetireActiveSession {
-            dir: dir.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// Record a reset intent (CP-R0) and return its id.
-    pub async fn record_reset_intent(
-        &self,
-        dir: &str,
-        target_sha: &str,
-        sup_branch: &str,
-    ) -> Result<i64, StoreError> {
-        self.request(|reply| StoreRequest::RecordResetIntent {
-            dir: dir.to_owned(),
-            target_sha: target_sha.to_owned(),
-            sup_branch: sup_branch.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// Every unfinished reset intent (boot reconcile, P9 step 5).
-    pub async fn pending_reset_intents(&self) -> Result<Vec<ResetIntentRow>, StoreError> {
-        self.request(|reply| StoreRequest::PendingResetIntents { reply })
-            .await
-    }
-
-    /// Advance a reset intent's step (write-ahead; the intent row survives a
-    /// crash so the next boot rolls forward).
-    pub async fn set_reset_step(&self, id: i64, step: i64) -> Result<bool, StoreError> {
-        self.request(|reply| StoreRequest::SetResetStep { id, step, reply })
-            .await
-    }
-
-    /// Remove a completed reset intent.
-    pub async fn delete_reset_intent(&self, id: i64) -> Result<(), StoreError> {
-        self.request(|reply| StoreRequest::DeleteResetIntent { id, reply })
-            .await
-    }
-
-    // == gate lifecycle (Phase 4, spec P4) =====================================
-
-    /// Mirror a server-side gate fact into the DB. Returns the local rowid and
-    /// whether the row was inserted (idempotent by `ext_id`; same fact twice ⇒
-    /// one row, one message, AC-10/FR-23). `now` seeds the re-ping clock so the
-    /// first re-ping is due only after the full interval.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "gate columns are a fixed set of carriers; a builder would obscure the insert shape"
-    )]
-    pub async fn upsert_gate(
-        &self,
-        ext_id: &str,
-        action_id: Option<i64>,
-        session_id: Option<&str>,
-        root_session_id: Option<&str>,
-        kind: &str,
-        payload_json: &str,
-        renderable: bool,
-        channel_id: Option<i64>,
-        now: i64,
-    ) -> Result<(i64, bool), StoreError> {
-        self.request(|reply| StoreRequest::UpsertGate {
-            ext_id: ext_id.to_owned(),
-            action_id,
-            session_id: session_id.map(str::to_owned),
-            root_session_id: root_session_id.map(str::to_owned),
-            kind: kind.to_owned(),
-            payload_json: payload_json.to_owned(),
-            renderable,
-            channel_id,
-            now,
-            reply,
-        })
-        .await
-    }
-
-    /// A gate row by local id.
-    pub async fn gate(&self, id: i64) -> Result<Option<GateRow>, StoreError> {
-        self.request(|reply| StoreRequest::Gate { id, reply }).await
-    }
-
-    /// Every pending gate row (the re-ping cursor).
-    pub async fn pending_gates(&self) -> Result<Vec<GateRow>, StoreError> {
-        self.request(|reply| StoreRequest::PendingGates { reply })
-            .await
-    }
-
-    /// The single gate state transition (P4: one lifecycle, one exactly-once
-    /// reply rule). `answer` is the JSON-encoded decision/answer.
-    pub async fn cas_gate(
-        &self,
-        id: i64,
-        from: &str,
-        to: &str,
-        answer: Option<&str>,
-    ) -> Result<bool, StoreError> {
-        self.request(|reply| StoreRequest::CasGate {
-            id,
-            from: from.to_owned(),
-            to: to.to_owned(),
-            answer: answer.map(str::to_owned),
-            reply,
-        })
-        .await
-    }
-
-    /// Record the posted gate message (P10: already-posted gates are never
-    /// re-posted; the nullable guard is the dedupe).
-    pub async fn set_gate_msg(
-        &self,
-        id: i64,
-        msg_id: &str,
-        channel_id: Option<i64>,
-    ) -> Result<(), StoreError> {
-        self.request(|reply| StoreRequest::SetGateMsg {
-            id,
-            msg_id: msg_id.to_owned(),
-            channel_id,
-            reply,
-        })
-        .await
-    }
-
-    /// Advance the re-ping counter and stamp the ping time; returns the new
-    /// count (the caller decides the message after the 6th ping).
-    pub async fn bump_gate_pings(&self, id: i64, now: i64) -> Result<i64, StoreError> {
-        self.request(|reply| StoreRequest::BumpGatePings { id, now, reply })
-            .await
-    }
-
-    /// Every answered gate with a recorded answer (boot reconcile re-POSTs any
-    /// that are still pending on the server, FR-23).
-    pub async fn answered_gates(&self) -> Result<Vec<GateRow>, StoreError> {
-        self.request(|reply| StoreRequest::AnsweredGates { reply })
-            .await
-    }
-
-    /// Set the blocked substatus on an action (P4: `blocked` is a substatus on
-    /// `running`, never a state).
-    pub async fn set_action_blocked(&self, action_id: i64, gate_id: i64) -> Result<(), StoreError> {
-        self.request(|reply| StoreRequest::SetActionBlocked {
-            action_id,
-            gate_id,
-            reply,
-        })
-        .await
-    }
-
-    /// Clear the blocked substatus, but only when this gate is the blocker
-    /// (a concurrent gate on the same action keeps its block).
-    pub async fn clear_action_blocked(
-        &self,
-        action_id: i64,
-        gate_id: i64,
-    ) -> Result<(), StoreError> {
-        self.request(|reply| StoreRequest::ClearActionBlocked {
-            action_id,
-            gate_id,
-            reply,
-        })
-        .await
-    }
-
-    // == session lifecycle (Phase 5, spec P5/P14/FR-30) =======================
-
-    /// Record the promptable session for a directory (FR-30). `/run` seeds it
-    /// when creating a session; park/reset retire it.
-    pub async fn set_active_session(&self, dir: &str, session_id: &str) -> Result<(), StoreError> {
-        self.request(|reply| StoreRequest::SetActiveSession {
-            dir: dir.to_owned(),
-            session_id: session_id.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// Take the directory lock on behalf of an *external* (TUI) session
-    /// observed busy in the directory (P5 `held(external:<id>)`).
-    pub async fn set_external_lock(
-        &self,
-        dir: &str,
-        session_id: &str,
-        since: i64,
-    ) -> Result<(), StoreError> {
-        self.request(|reply| StoreRequest::SetExternalLock {
-            dir: dir.to_owned(),
-            session_id: session_id.to_owned(),
-            since,
-            reply,
-        })
-        .await
-    }
-
-    /// The running action targeting a directory, if any (the mutex owner).
-    pub async fn running_action_for_dir(&self, dir: &str) -> Result<Option<ActionRow>, StoreError> {
-        self.request(|reply| StoreRequest::RunningActionForDir {
-            dir: dir.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// The directory a seen session is bound to (inbox adoption resolves the
-    /// worktree this way, P14).
-    pub async fn session_dir(&self, session_id: &str) -> Result<Option<String>, StoreError> {
-        self.request(|reply| StoreRequest::SessionDir {
-            session_id: session_id.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// Every session the bot owns (bound to an action, or the promptable
-    /// session of a project) — the complement of `session_seen` is *external*.
-    pub async fn known_bot_sessions(&self) -> Result<Vec<String>, StoreError> {
-        self.request(|reply| StoreRequest::KnownBotSessions { reply })
-            .await
-    }
-
-    /// Claim a completion under `(session_id, seq)` *before* posting. Returns
-    /// `false` when that exact completion was already claimed (the inbox dedupe
-    /// key, FR-32/P14) — the caller must not post. A transient post failure can
-    /// `unclaim` so the next tick retries (never duplicates, retries on loss).
-    pub async fn claim_notified(&self, session_id: &str, seq: &str) -> Result<bool, StoreError> {
-        self.request(|reply| StoreRequest::ClaimNotified {
-            session_id: session_id.to_owned(),
-            seq: seq.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// Record the posted message id on a claimed notification.
-    pub async fn finish_notified(
-        &self,
-        session_id: &str,
-        seq: &str,
-        discord_msg_id: &str,
-    ) -> Result<(), StoreError> {
-        self.request(|reply| StoreRequest::FinishNotified {
-            session_id: session_id.to_owned(),
-            seq: seq.to_owned(),
-            discord_msg_id: discord_msg_id.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// Give a claimed-but-unposted notification back so the next tick retries.
-    pub async fn unclaim_notified(&self, session_id: &str, seq: &str) -> Result<(), StoreError> {
-        self.request(|reply| StoreRequest::UnclaimNotified {
-            session_id: session_id.to_owned(),
-            seq: seq.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// Record `discord_msg_id → session` so a reply to an inbox report can
-    /// continue that session (P14 / FR-32).
-    pub async fn insert_msg_map(
-        &self,
-        discord_msg_id: &str,
-        session_id: &str,
-    ) -> Result<(), StoreError> {
-        self.request(|reply| StoreRequest::InsertMsgMap {
-            discord_msg_id: discord_msg_id.to_owned(),
-            session_id: session_id.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// Resolve a replied-to Discord message to its session.
-    pub async fn lookup_msg_map(
-        &self,
-        discord_msg_id: &str,
-    ) -> Result<Option<(String, Option<i64>)>, StoreError> {
-        self.request(|reply| StoreRequest::LookupMsgMap {
-            discord_msg_id: discord_msg_id.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// Whether `kind`/`key` is muted (FR-33).
-    pub async fn is_muted(&self, kind: &str, key: &str) -> Result<bool, StoreError> {
-        self.request(|reply| StoreRequest::IsMuted {
-            kind: kind.to_owned(),
-            key: key.to_owned(),
-            reply,
-        })
-        .await
-    }
-
-    /// Toggle a mute; returns the new state (`true` = now muted).
-    pub async fn toggle_mute(&self, kind: &str, key: &str) -> Result<bool, StoreError> {
-        self.request(|reply| StoreRequest::ToggleMute {
-            kind: kind.to_owned(),
-            key: key.to_owned(),
-            reply,
-        })
-        .await
-    }
-}
-
 /// The owned SQL value for a store write. rusqlite's own `Value` type implements
 /// `ToSql`, so CAS parameters need neither trait objects nor boxing (SPEC-002
 /// D-8).
@@ -2721,4 +1758,98 @@ fn to_i64(value: u64) -> i64 {
 /// Saturating `i64 → u64` for cursor reads.
 fn to_u64(value: i64) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod macro_tests {
+    //! Proves `store_method!` generates a working enum variant, dispatcher arm,
+    //! and public method from a single declaration (SPEC-002 Phase 6).
+
+    use std::sync::Mutex;
+
+    use rusqlite::{Connection, OptionalExtension, params};
+    use tokio::sync::oneshot;
+
+    use super::{Reply, StoreArg, StoreError, finish};
+
+    /// A minimal in-process handle for the codegen test: `request` dispatches
+    /// synchronously on the calling thread instead of via the actor loop.
+    struct TestHandle {
+        connection: Mutex<Connection>,
+    }
+
+    impl TestHandle {
+        async fn request<T>(
+            &self,
+            make: impl FnOnce(Reply<T>) -> TestRequest,
+        ) -> Result<T, StoreError> {
+            let (reply, reply_rx) = oneshot::channel();
+            {
+                let mut connection = self.connection.lock().expect("lock");
+                make(reply).dispatch(&mut connection);
+            }
+            reply_rx.await.map_err(|_| StoreError::Closed)?
+        }
+    }
+
+    store_method! {
+        TestRequest, TestHandle;
+        /// Count the rows in the scratch table (a new write operation).
+        CountScratch as count_scratch() -> i64 {
+            |connection: &mut Connection| -> rusqlite::Result<i64> {
+                connection.query_row("SELECT COUNT(*) FROM scratch", [], |row| {
+                    row.get::<_, i64>("COUNT(*)")
+                })
+            }
+        };
+
+        /// Read one scratch value by key (a new read operation).
+        ScratchValue as scratch_value(key: &str => String) -> Option<i64> {
+            |connection: &mut Connection| -> rusqlite::Result<Option<i64>> {
+                connection
+                    .query_row(
+                        "SELECT value FROM scratch WHERE key = ?1",
+                        params![key],
+                        |row| row.get::<_, i64>("value"),
+                    )
+                    .optional()
+            }
+        };
+    }
+
+    fn test_handle() -> TestHandle {
+        let connection = Connection::open_in_memory().expect("db");
+        connection
+            .execute_batch("CREATE TABLE scratch (key TEXT, value INTEGER);")
+            .expect("schema");
+        TestHandle {
+            connection: Mutex::new(connection),
+        }
+    }
+
+    #[tokio::test]
+    async fn store_macro_generated() {
+        let handle = test_handle();
+        assert_eq!(handle.count_scratch().await.expect("count"), 0);
+        handle
+            .connection
+            .lock()
+            .expect("lock")
+            .execute("INSERT INTO scratch (key, value) VALUES ('a', 7)", [])
+            .expect("insert");
+        assert_eq!(handle.count_scratch().await.expect("count"), 1);
+    }
+
+    #[tokio::test]
+    async fn store_macro_new_operation() {
+        let handle = test_handle();
+        assert_eq!(handle.scratch_value("a").await.expect("read"), None);
+        handle
+            .connection
+            .lock()
+            .expect("lock")
+            .execute("INSERT INTO scratch (key, value) VALUES ('a', 7)", [])
+            .expect("insert");
+        assert_eq!(handle.scratch_value("a").await.expect("read"), Some(7));
+    }
 }
