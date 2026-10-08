@@ -212,8 +212,9 @@ pub fn headline(outcome: &Outcome, label: &str) -> String {
 }
 
 /// The context the decision buttons need (spec FR-15/FR-26): the action rowid
-/// (for the `custom_id` grammar) and whether the directory is a git repo (a
-/// non-git action degrades to "Mark done", and Park/Reset are disabled).
+/// (for the `custom_id` grammar), whether the directory is a git repo (a
+/// non-git action degrades to "Mark done", and Park/Reset are disabled), and
+/// the follow-up count (a long chain nudges toward Park & redo, FR-18).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReportContext {
     /// The action row id.
@@ -222,11 +223,13 @@ pub struct ReportContext {
     pub is_git: bool,
     /// The operator id, the only mentionable user (FR-3).
     pub operator_id: u64,
+    /// Follow-ups already sent on this attempt chain.
+    pub followups: i64,
 }
 
 /// The decision buttons for a finished action (spec FR-15). Buttons for verbs
 /// whose handlers exist in this build only — no dead buttons. `Follow up`
-/// arrives in Phase 5.
+/// lands in Phase 5.
 pub fn decision_buttons(outcome: &Outcome, context: &ReportContext) -> Vec<ComponentSpec> {
     let id = context.action_id;
     let park = component_button_state(
@@ -234,6 +237,11 @@ pub fn decision_buttons(outcome: &Outcome, context: &ReportContext) -> Vec<Compo
         format!("v1:park:{id}"),
         ButtonKind::Danger,
         !context.is_git,
+    );
+    let followup = component_button(
+        "Follow up",
+        format!("v1:followup:{id}"),
+        ButtonKind::Primary,
     );
     match outcome {
         Outcome::Completed { .. } => vec![
@@ -246,12 +254,16 @@ pub fn decision_buttons(outcome: &Outcome, context: &ReportContext) -> Vec<Compo
                 format!("v1:accept:{id}"),
                 ButtonKind::Success,
             ),
+            followup,
             park,
         ],
-        Outcome::Errored { .. } | Outcome::Aborted | Outcome::Empty => vec![
-            park,
-            component_button("Discard", format!("v1:discard:{id}"), ButtonKind::Secondary),
-        ],
+        Outcome::Errored { .. } | Outcome::Aborted | Outcome::Empty => {
+            vec![
+                followup,
+                park,
+                component_button("Discard", format!("v1:discard:{id}"), ButtonKind::Secondary),
+            ]
+        }
     }
 }
 
@@ -274,6 +286,11 @@ pub fn report(
     if !context.is_git {
         message_text.push_str(
             "\n_non-git directory: **Mark done** records the decision; Park/Reset are disabled._",
+        );
+    }
+    if context.followups >= 2 {
+        message_text.push_str(
+            "\n_this attempt has had several follow-ups — consider **Park & redo** instead (FR-18)._",
         );
     }
     let attachment = if truncated {
@@ -604,6 +621,7 @@ mod tests {
             action_id,
             is_git,
             operator_id: 42,
+            followups: 0,
         }
     }
 
@@ -708,12 +726,59 @@ mod tests {
             },
             &done_context(11, true),
         );
-        assert_eq!(buttons.len(), 2);
+        assert_eq!(buttons.len(), 3);
         assert_eq!(buttons[0].custom_id, "v1:accept:11");
         assert_eq!(buttons[0].label, "Accept");
         assert!(!buttons[0].disabled);
-        assert_eq!(buttons[1].custom_id, "v1:park:11");
-        assert!(!buttons[1].disabled);
+        assert_eq!(buttons[1].custom_id, "v1:followup:11");
+        assert_eq!(buttons[2].custom_id, "v1:park:11");
+        assert!(!buttons[2].disabled);
+    }
+
+    #[test]
+    fn errored_report_carries_followup_park_and_discard() {
+        let buttons = decision_buttons(
+            &Outcome::Errored {
+                error: "boom".to_owned(),
+            },
+            &done_context(13, true),
+        );
+        assert_eq!(buttons.len(), 3);
+        assert_eq!(buttons[0].custom_id, "v1:followup:13");
+        assert_eq!(buttons[1].custom_id, "v1:park:13");
+        assert_eq!(buttons[2].custom_id, "v1:discard:13");
+    }
+
+    #[test]
+    fn reports_nudge_toward_park_after_two_followups() {
+        let done = report(
+            "t",
+            &Outcome::Completed {
+                report: "x".to_owned(),
+            },
+            &Footer::default(),
+            &ReportContext {
+                action_id: 1,
+                is_git: true,
+                operator_id: 42,
+                followups: 2,
+            },
+        );
+        assert!(done.content.contains("Park & redo"), "{}", done.content);
+        let fresh = report(
+            "t",
+            &Outcome::Completed {
+                report: "x".to_owned(),
+            },
+            &Footer::default(),
+            &ReportContext {
+                action_id: 1,
+                is_git: true,
+                operator_id: 42,
+                followups: 1,
+            },
+        );
+        assert!(!fresh.content.contains("several follow-ups"));
     }
 
     #[test]
@@ -737,18 +802,6 @@ mod tests {
             "park disabled for non-git"
         );
         assert!(message.content.contains("non-git"));
-    }
-
-    #[test]
-    fn errored_report_carries_park_and_discard() {
-        let buttons = decision_buttons(
-            &Outcome::Errored {
-                error: "boom".to_owned(),
-            },
-            &done_context(13, true),
-        );
-        assert_eq!(buttons[0].custom_id, "v1:park:13");
-        assert_eq!(buttons[1].custom_id, "v1:discard:13");
     }
 
     fn field(key: &str, kind: FormFieldKind) -> FormField {

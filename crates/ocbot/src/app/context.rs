@@ -48,6 +48,9 @@ pub struct AppContext {
     pub git: Arc<dyn GitPort>,
     /// The injected time source (P4: the re-ping policy is fake-clock tested).
     pub clock: Arc<dyn Clock>,
+    /// How long `/abort` waits for the server to confirm idle before giving up
+    /// (FR-10).
+    pub abort_timeout_secs: u64,
     /// The permission baseline, attached to created sessions only when FR-42
     /// is enabled (D-R6: off by default).
     pub permission_ruleset: Option<Vec<PermissionRule>>,

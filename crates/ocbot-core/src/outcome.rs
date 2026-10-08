@@ -15,6 +15,9 @@ pub struct TokenCounts {
 /// Everything `classify` may look at — the report input (spec A7).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AssistantSnapshot {
+    /// The last assistant message id, when one exists (the inbox dedupe / seq
+    /// surrogate, P14).
+    pub id: Option<String>,
     /// The concatenated assistant text (empty for tool-only endings).
     pub text: String,
     /// Whether the step issued tool calls.
@@ -108,6 +111,7 @@ mod tests {
 
     fn snapshot(text: &str, error: Option<&str>, tool_calls: bool) -> AssistantSnapshot {
         AssistantSnapshot {
+            id: Some("msg_1".to_owned()),
             text: text.to_owned(),
             has_tool_calls: tool_calls,
             error: error.map(str::to_owned),

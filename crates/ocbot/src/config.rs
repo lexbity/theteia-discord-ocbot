@@ -42,6 +42,15 @@ pub struct Config {
     /// The ops channel id (interactions are also allowed in DMs, FR-2).
     #[serde(default)]
     pub ops_channel: Option<u64>,
+    /// Where external (TUI) completions post; defaults to `ops_channel` (P14).
+    #[serde(default)]
+    pub inbox_channel: Option<u64>,
+    /// Inbox root-session poll interval in ms (S-7 locked default 5 s).
+    #[serde(default = "default_inbox_poll")]
+    pub inbox_poll_interval_ms: u64,
+    /// How long `/abort` waits for the server to confirm idle (FR-10).
+    #[serde(default = "default_abort_timeout")]
+    pub abort_timeout_secs: u64,
     /// The operator discord user id (env `ALLOWED_USER_ID` overrides).
     #[serde(default)]
     pub allowed_user_id: Option<u64>,
@@ -83,6 +92,14 @@ fn default_poll() -> u64 {
 
 fn default_gate_poll() -> u64 {
     2_000
+}
+
+fn default_inbox_poll() -> u64 {
+    5_000
+}
+
+fn default_abort_timeout() -> u64 {
+    30
 }
 
 fn default_reping_minutes() -> u64 {
@@ -196,6 +213,18 @@ impl Config {
             errors.push(format!(
                 "perm_reping_minutes must be >= 1, got {}",
                 self.perm_reping_minutes
+            ));
+        }
+        if self.inbox_poll_interval_ms < 100 {
+            errors.push(format!(
+                "inbox_poll_interval_ms must be >= 100, got {}",
+                self.inbox_poll_interval_ms
+            ));
+        }
+        if self.abort_timeout_secs < 1 {
+            errors.push(format!(
+                "abort_timeout_secs must be >= 1, got {}",
+                self.abort_timeout_secs
             ));
         }
 
@@ -403,6 +432,9 @@ typo_key = 1
             db_path: "x.db".to_owned(),
             templates_dir: "templates".to_owned(),
             ops_channel: None,
+            inbox_channel: None,
+            inbox_poll_interval_ms: 10, // too fast
+            abort_timeout_secs: 0,      // too fast
             allowed_user_id: None,
             poll_interval_ms: 10,     // too fast
             gate_poll_interval_ms: 5, // too fast

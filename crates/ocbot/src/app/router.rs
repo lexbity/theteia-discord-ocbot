@@ -56,7 +56,12 @@ async fn plan(ctx: &Arc<AppContext>, source: &InteractionSource) -> Result<AckPl
             "run" => Ok(AckPlan::Modal(
                 handlers::run::begin_modal(ctx, source).await?,
             )),
-            "status" | "history" | "reset" | "release" => Ok(AckPlan::DeferPublic),
+            "prompt" => Ok(AckPlan::Modal(
+                handlers::prompt::prompt_modal(ctx, source).await?,
+            )),
+            "status" | "history" | "reset" | "release" | "abort" | "mute" => {
+                Ok(AckPlan::DeferPublic)
+            }
             other => Err(AppError::UnknownCommand(other.to_owned())),
         },
         SourceKind::Component { custom_id } => {
@@ -106,6 +111,16 @@ async fn plan(ctx: &Arc<AppContext>, source: &InteractionSource) -> Result<AckPl
             } else if let Some(rest) = custom_id.strip_prefix("v1:gate:") {
                 let _ = split_gate_id(rest)?;
                 Ok(AckPlan::DeferUpdate)
+            } else if let Some(id) = custom_id.strip_prefix("v1:followup:") {
+                require_state(
+                    ctx,
+                    parse_action_id(id)?,
+                    &[State::Reported, State::Errored, State::Aborted],
+                )
+                .await?;
+                Ok(AckPlan::Modal(
+                    handlers::followup::followup_modal(ctx, parse_action_id(id)?).await?,
+                ))
             } else if is_deferred_action(custom_id) {
                 Ok(AckPlan::DeferUpdate)
             } else {
@@ -113,11 +128,14 @@ async fn plan(ctx: &Arc<AppContext>, source: &InteractionSource) -> Result<AckPl
             }
         }
         SourceKind::ModalSubmit { custom_id, .. } => {
-            if custom_id == handlers::run::NEW_RUN_MODAL {
+            if custom_id == handlers::run::NEW_RUN_MODAL
+                || custom_id == handlers::prompt::PROMPT_MODAL
+            {
                 Ok(AckPlan::DeferPublic)
             } else if custom_id.starts_with("v1:editgo:")
                 || custom_id.starts_with("v1:acceptgo:")
                 || custom_id.starts_with("v1:formgo:")
+                || custom_id.starts_with("v1:followupgo:")
             {
                 Ok(AckPlan::DeferUpdate)
             } else {
@@ -165,6 +183,14 @@ pub async fn execute(
                 handlers::release::list(ctx, source).await?;
                 Ok(None)
             }
+            "abort" => {
+                handlers::abort::execute(ctx, source).await?;
+                Ok(None)
+            }
+            "mute" => {
+                handlers::mute::execute(ctx, source).await?;
+                Ok(None)
+            }
             other => Err(AppError::UnknownCommand(other.to_owned())),
         },
         SourceKind::Component { custom_id } => {
@@ -199,6 +225,9 @@ pub async fn execute(
                 // A Component `v1:formgo` plans a modal and never executes; a
                 // stale press is a no-op.
                 Err(AppError::AlreadyHandled)
+            } else if custom_id.starts_with("v1:followup:") {
+                // A Component `v1:followup` plans a modal and never executes.
+                Err(AppError::AlreadyHandled)
             } else {
                 Err(AppError::UnknownCustomId(custom_id.to_owned()))
             }
@@ -206,8 +235,19 @@ pub async fn execute(
         SourceKind::ModalSubmit { custom_id, .. } => {
             if custom_id == handlers::run::NEW_RUN_MODAL {
                 handlers::run::execute_newrun(ctx, source).await
+            } else if custom_id == handlers::prompt::PROMPT_MODAL {
+                handlers::prompt::execute_prompt(ctx, source).await
             } else if let Some(id) = custom_id.strip_prefix("v1:editgo:") {
                 handlers::run::execute_editgo(ctx, parse_action_id(id)?, source).await
+            } else if let Some(id) = custom_id.strip_prefix("v1:followupgo:") {
+                let prompt = source.input("prompt").unwrap_or_default();
+                handlers::followup::execute_followup(
+                    ctx,
+                    parse_action_id(id)?,
+                    prompt,
+                    source.user_id,
+                )
+                .await
             } else if let Some(id) = custom_id.strip_prefix("v1:formgo:") {
                 handlers::gate::execute_form_submit(ctx, parse_action_id(id)?, source).await
             } else if let Some(id) = custom_id.strip_prefix("v1:acceptgo:") {

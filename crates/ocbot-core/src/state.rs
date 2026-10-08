@@ -202,6 +202,10 @@ pub enum Column {
     ParkStep,
     /// The accepted commit sha.
     AcceptSha,
+    /// The follow-up count within an attempt chain.
+    FollowUps,
+    /// The exact prompt stored on the action (follow-up replaces it, P13).
+    PromptSent,
 }
 
 impl Column {
@@ -223,6 +227,8 @@ impl Column {
             Column::ParkBranchName => "park_branch_name",
             Column::ParkStep => "park_step",
             Column::AcceptSha => "accept_sha",
+            Column::FollowUps => "followups",
+            Column::PromptSent => "prompt_sent",
         }
     }
 }

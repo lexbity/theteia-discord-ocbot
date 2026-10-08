@@ -129,6 +129,7 @@ impl FakeOpenCode {
     /// Serve a completed PONG snapshot.
     pub fn completed_snapshot() -> AssistantSnapshot {
         AssistantSnapshot {
+            id: Some("msg_pong".to_owned()),
             text: "PONG".to_owned(),
             has_tool_calls: false,
             error: None,
@@ -598,14 +599,18 @@ pub fn context(
         git,
         Arc::new(ocbot::adapters::clock::SystemClock),
         None,
+        DEFAULT_ABORT_TIMEOUT_SECS,
         discord,
         operator,
         ops_channel,
     )
 }
 
+/// The default abort wait (config default).
+pub const DEFAULT_ABORT_TIMEOUT_SECS: u64 = 30;
+
 /// A context builder with the injected clock and optional permission ruleset
-/// (the P4 fake-clock tests use this).
+/// (the P4 fake-clock tests use this; P5 abort tests set the timeout).
 #[expect(
     clippy::too_many_arguments,
     reason = "test harness context builder: every parameter is a deliberate injection"
@@ -616,6 +621,7 @@ pub fn context_with(
     git: Arc<dyn GitPort>,
     clock: Arc<dyn Clock>,
     permission_ruleset: Option<Vec<PermissionRule>>,
+    abort_timeout_secs: u64,
     discord: Arc<dyn DiscordPort>,
     operator: u64,
     ops_channel: Option<u64>,
@@ -625,12 +631,14 @@ pub fn context_with(
         opencode,
         git,
         clock,
+        abort_timeout_secs,
         permission_ruleset,
         discord,
         metrics: Arc::new(Metrics::new()),
         guard: Guard {
             allowed_user_id: operator,
             ops_channel,
+            inbox_channel: None,
         },
         templates: workspace_templates(),
     })

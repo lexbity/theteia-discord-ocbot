@@ -58,6 +58,7 @@ fn to_session(session: &client::SessionInfo) -> PortSession {
 
 fn to_snapshot(message: &client::AssistantMessage) -> AssistantSnapshot {
     AssistantSnapshot {
+        id: (!message.id.is_empty()).then(|| message.id.clone()),
         text: message.text(),
         has_tool_calls: message.has_tool_calls(),
         error: message.error_message().map(str::to_owned),

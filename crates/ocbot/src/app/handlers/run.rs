@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use ocbot_core::ports::Activity;
 use ocbot_core::templates;
 use ocbot_core::{ButtonKind, OutgoingMessage, State, component_button, staged_preview};
 
@@ -208,6 +209,18 @@ async fn send_now(
     action: ActionRow,
     _source: &InteractionSource,
 ) -> Result<Option<String>, AppError> {
+    launch(ctx, action, None).await
+}
+
+/// The shared launch: bind the action to a session (creating one when
+/// `session_override` and the action's own session are absent, FR-31 passes
+/// `location.directory` at create), take the directory lock atomically (P5),
+/// and admit the prompt.
+pub async fn launch(
+    ctx: &Arc<AppContext>,
+    action: ActionRow,
+    session_override: Option<String>,
+) -> Result<Option<String>, AppError> {
     let directory = run_directory(ctx, action.run_id).await?;
     let dir_text = directory.to_string_lossy().into_owned();
 
@@ -219,7 +232,9 @@ async fn send_now(
         )));
     }
 
-    let session_id = if let Some(session) = action.session_id.clone() {
+    let has_bound_session = action.session_id.is_some();
+    let reused_session = session_override.is_some() || has_bound_session;
+    let session_id = if let Some(session) = session_override.or_else(|| action.session_id.clone()) {
         session
     } else {
         let session = ctx
@@ -231,8 +246,18 @@ async fn send_now(
             )
             .await?;
         ctx.store.upsert_seen(&session, Some(&dir_text)).await?;
+        ctx.store.set_active_session(&dir_text, &session).await?;
         session
     };
+
+    // FR-9: never admit into a session that is busy *reusing* it (/prompt,
+    // adoption). A freshly created session is idle by construction, so the
+    // check only guards reused sessions.
+    if reused_session && ctx.opencode.activity(&session_id).await? == Activity::Busy {
+        return Ok(Some(format!(
+            "session {session_id} is busy (FR-9); /abort to stop it or wait"
+        )));
+    }
 
     let start_head = if ctx.git.is_repo(&directory).await? {
         ctx.git.head(&directory).await.ok()
@@ -361,7 +386,7 @@ pub(crate) async fn tree_dirty(ctx: &Arc<AppContext>, directory: &Path) -> Resul
 }
 
 /// Canonicalize a path (rejects nonexistent or non-absolute inputs).
-fn realpath(path: &Path) -> std::io::Result<PathBuf> {
+pub(crate) fn realpath(path: &Path) -> std::io::Result<PathBuf> {
     if !path.is_absolute() {
         return Err(std::io::Error::other("path must be absolute"));
     }

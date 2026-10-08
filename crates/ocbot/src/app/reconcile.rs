@@ -80,7 +80,7 @@ pub async fn reconcile(ctx: &Arc<AppContext>) -> ReconcileReport {
             continue;
         };
         match ctx.opencode.activity(&session_id).await {
-            Ok(Activity::Idle) => match finalize_action(ctx, action).await {
+            Ok(Activity::Idle) => match finalize_action(ctx, action, false).await {
                 Ok(true) => completed += 1,
                 Ok(false) => {}
                 Err(error) => {

@@ -26,6 +26,7 @@ use serenity::builder::{
 use ocbot_core::{ButtonKind, OutgoingMessage};
 
 use crate::app::context::{AppContext, DiscordPort, SendError};
+use crate::app::handlers;
 use crate::app::interaction::{
     AckPlan, InputStyle, InteractionSource, ModalSpec, SourceKind, TextInput,
 };
@@ -373,10 +374,16 @@ impl EventHandler for BotEvents {
         tracing::info!(user = %ready.user.name, "connected to discord");
         for (name, description) in [
             ("run", "Start a prompt run in a directory"),
+            ("prompt", "Send a free-form prompt to a directory's session"),
             ("status", "Bot and server status"),
             ("history", "Action history for the current directory"),
             ("reset", "Reset the directory to a live commit"),
             ("release", "Release a held directory lock"),
+            (
+                "abort",
+                "Interrupt the running action in the current directory",
+            ),
+            ("mute", "Toggle inbox reports for the current directory"),
         ] {
             let command = CreateCommand::new(name).description(description);
             if let Err(error) = ctx.http.create_global_command(&command).await {
@@ -398,6 +405,47 @@ impl EventHandler for BotEvents {
                 respond_now(&self.http, &interaction, Some(&format!("error: {error}"))).await;
             }
             PlanOutcome::Plan(plan) => self.act(&ctx, interaction, source, plan).await,
+        }
+    }
+
+    async fn message(&self, _ctx: Context, message: Message) {
+        // The one plain-message path in the bot (P14): replying to a posted
+        // inbox report continues that session as an adopted action. Every
+        // other message is ignored — the operator surface is interactions.
+        if message.author.id.get() != self.ctx.guard.allowed_user_id || message.author.bot {
+            return;
+        }
+        let Some(reference) = message.referenced_message.clone() else {
+            return;
+        };
+        let channel = message.channel_id.get();
+        let in_scope = message.guild_id.is_none()
+            || self.ctx.guard.ops_channel.is_some_and(|ops| ops == channel)
+            || self
+                .ctx
+                .guard
+                .inbox_channel
+                .is_some_and(|inbox| inbox == channel);
+        if !in_scope {
+            return;
+        }
+        let Ok(Some((session, _))) = self
+            .ctx
+            .store
+            .lookup_msg_map(&reference.id.get().to_string())
+            .await
+        else {
+            return;
+        };
+        let text = message.content.clone();
+        if text.trim().is_empty() {
+            return;
+        }
+        if let Err(error) =
+            handlers::adopt::adopt(&self.ctx, &session, &text, channel, message.author.id.get())
+                .await
+        {
+            tracing::warn!(error = %error, "adoption failed");
         }
     }
 }

@@ -18,6 +18,7 @@ use crate::app::context::{AppContext, DiscordPort};
 use crate::app::doctor;
 use crate::app::gates_loop::GatesLoop;
 use crate::app::guard::Guard;
+use crate::app::inbox::Inbox;
 use crate::app::metrics::{self, Metrics};
 use crate::app::reconcile;
 use crate::app::watcher::Watcher;
@@ -136,12 +137,14 @@ pub async fn start() -> ExitCode {
     let guard = Guard {
         allowed_user_id: operator,
         ops_channel: config.ops_channel,
+        inbox_channel: config.inbox_channel,
     };
     let ctx = Arc::new(AppContext {
         store: store.clone(),
         opencode,
         git,
         clock: Arc::new(SystemClock),
+        abort_timeout_secs: config.abort_timeout_secs,
         permission_ruleset,
         discord: discord_surface,
         metrics: metrics.clone(),
@@ -192,8 +195,19 @@ pub async fn start() -> ExitCode {
         });
     }
 
+    // Inbox loop (P14/S-7): external root sessions are polled every
+    // `inbox_poll_interval_ms`; completions post to the inbox channel.
+    let inbox_interval = Duration::from_millis(config.inbox_poll_interval_ms.max(100));
+    {
+        let ctx = ctx.clone();
+        tokio::spawn(async move {
+            Inbox::new(ctx, inbox_interval).run_forever().await;
+        });
+    }
+
     let intents = serenity::all::GatewayIntents::GUILDS
         | serenity::all::GatewayIntents::GUILD_MESSAGES
+        | serenity::all::GatewayIntents::DIRECT_MESSAGES
         | serenity::all::GatewayIntents::MESSAGE_CONTENT;
     let shard_manager = match start_gateway(&token, intents, ctx.clone()).await {
         Ok(manager) => manager,

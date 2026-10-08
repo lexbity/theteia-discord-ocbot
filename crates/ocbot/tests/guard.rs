@@ -109,12 +109,16 @@ fn all_handler_sources(channel: u64, guild: Option<u64>) -> Vec<InteractionSourc
         slash_named("history", OPERATOR, channel, guild),
         slash_named("reset", OPERATOR, channel, guild),
         slash_named("release", OPERATOR, channel, guild),
+        slash_named("abort", OPERATOR, channel, guild),
+        slash_named("prompt", OPERATOR, channel, guild),
+        slash_named("mute", OPERATOR, channel, guild),
         button(OPERATOR, channel, guild, "v1:send:1", 5),
         button(OPERATOR, channel, guild, "v1:edit:1", 5),
         button(OPERATOR, channel, guild, "v1:runany:1", 5),
         button(OPERATOR, channel, guild, "v1:accept:1", 5),
         button(OPERATOR, channel, guild, "v1:park:1", 5),
         button(OPERATOR, channel, guild, "v1:discard:1", 5),
+        button(OPERATOR, channel, guild, "v1:followup:1", 5),
         button(OPERATOR, channel, guild, "v1:reset:abc", 5),
         button(OPERATOR, channel, guild, "v1:resetgo:abc", 5),
         button(OPERATOR, channel, guild, "v1:releaseq:deadbeef", 5),
@@ -137,6 +141,18 @@ fn all_handler_sources(channel: u64, guild: Option<u64>) -> Vec<InteractionSourc
             vec![("subject", "s"), ("body", "")],
         ),
         modal(OPERATOR, channel, "v1:formgo:1", vec![("note", "x")]),
+        modal(
+            OPERATOR,
+            channel,
+            "v1:followupgo:1",
+            vec![("prompt", "again")],
+        ),
+        modal(
+            OPERATOR,
+            channel,
+            "v1:prompt",
+            vec![("directory", "/tmp/x"), ("prompt", "keep going")],
+        ),
     ]
 }
 
@@ -284,6 +300,7 @@ fn guard_decides_per_fr1_fr2() {
     let guard = Guard {
         allowed_user_id: 42,
         ops_channel: Some(7),
+        inbox_channel: None,
     };
     let source = slash_run(1, 7, None); // wrong user, ops channel
     assert_eq!(guard.decide(&source), Decision::EphemeralDeny);

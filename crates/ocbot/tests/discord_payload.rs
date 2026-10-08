@@ -26,6 +26,7 @@ fn report_context(action_id: i64, is_git: bool) -> ReportContext {
         action_id,
         is_git,
         operator_id: OPERATOR,
+        followups: 0,
     }
 }
 

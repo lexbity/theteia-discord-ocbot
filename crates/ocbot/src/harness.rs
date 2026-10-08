@@ -50,6 +50,7 @@ pub async fn run_from_env() -> Result<(), String> {
         opencode: Arc::new(DeadOpenCode),
         git: Arc::new(GitAdapter::new()),
         clock: Arc::new(crate::adapters::clock::SystemClock),
+        abort_timeout_secs: 30,
         permission_ruleset: None,
         discord: Arc::new(NullDiscord {
             next: std::sync::atomic::AtomicU64::new(1),
@@ -58,6 +59,7 @@ pub async fn run_from_env() -> Result<(), String> {
         guard: Guard {
             allowed_user_id: operator,
             ops_channel: None,
+            inbox_channel: None,
         },
         templates: Templates {
             fresh: String::new(),

@@ -30,6 +30,14 @@ git_timeout_secs = 10
 # gate_poll_interval_ms = 2000
 # perm_reping_minutes = 10
 
+# Inbox (P14): where external completions post (falls back to ops_channel),
+# and the root-session poll interval (S-7 default 5 s).
+# inbox_channel = 123456789012345678
+# inbox_poll_interval_ms = 5000
+
+# `/abort` waits this long for the server to confirm idle before giving up (FR-10).
+# abort_timeout_secs = 30
+
 # FR-42 (off by default): attach config/opencode.permissions.jsonc to each
 # created session. Keep off until S-3 confirms combine semantics (D-R6).
 # per_session_ruleset = false

@@ -9,6 +9,7 @@ pub mod error;
 pub mod gates_loop;
 pub mod guard;
 pub mod handlers;
+pub mod inbox;
 pub mod interaction;
 pub mod locks;
 pub mod metrics;

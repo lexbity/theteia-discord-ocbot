@@ -52,6 +52,7 @@ async fn reping_runs_on_the_cadence_and_stops_after_six() {
         Arc::new(FakeGit::inert()),
         Arc::new(clock.clone()),
         None,
+        30,
         Arc::new(discord.clone()),
         OPERATOR,
         Some(CHANNEL),

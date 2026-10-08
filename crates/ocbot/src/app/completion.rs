@@ -17,16 +17,19 @@ use crate::app::error::AppError;
 
 /// Attempt to finalize a running action whose session went idle.
 ///
-/// Returns `true` when a report was delivered, `false` when the action is
-/// blocked by a pending gate (and stays `running`).
-pub async fn finalize_action(ctx: &Arc<AppContext>, action: &ActionRow) -> Result<bool, AppError> {
+/// `abort_requested` forces the `Aborted` classification (FR-10: the abort path
+/// finalizes only after the server confirms idle). Returns `true` when a report
+/// was delivered, `false` when the action is blocked by a pending gate (and
+/// stays `running`).
+pub async fn finalize_action(
+    ctx: &Arc<AppContext>,
+    action: &ActionRow,
+    abort_requested: bool,
+) -> Result<bool, AppError> {
     let Some(session_id) = action.session_id.clone() else {
         // No session ever got bound; nothing to do.
         return Ok(false);
     };
-    // P9: an already-set delivery marker means a report already went out; the
-    // `running` state with a marker is the interrupted crash-window shape and
-    // must never produce a second report ("if report_msg_id set ⇒ no post").
     // P9: an already-set delivery marker means a report already went out; the
     // `running` state with a marker is the interrupted crash-window shape and
     // must never produce a second report ("if report_msg_id set ⇒ no post").
@@ -39,7 +42,7 @@ pub async fn finalize_action(ctx: &Arc<AppContext>, action: &ActionRow) -> Resul
     }
 
     let snapshot = ctx.opencode.last_assistant(&session_id).await?;
-    let classification = classify(snapshot.as_ref(), false, false);
+    let classification = classify(snapshot.as_ref(), abort_requested, false);
     let (outcome, target): (Outcome, State) = match classification {
         outcome::Classification::Blocked => return Ok(false),
         outcome::Classification::Outcome(outcome) => match outcome {
@@ -80,6 +83,7 @@ async fn build_and_deliver(
         action_id: action.id,
         is_git: action_is_git(ctx, action).await,
         operator_id: ctx.guard.allowed_user_id,
+        followups: action.followups,
     };
     let message = report(&action.label, outcome, &footer, &context);
     let channel = action.channel_id;

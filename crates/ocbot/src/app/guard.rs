@@ -22,11 +22,15 @@ pub struct Guard {
     pub allowed_user_id: u64,
     /// The ops channel (DMs with the operator are always allowed).
     pub ops_channel: Option<u64>,
+    /// The inbox channel for external completions; also an allowed location
+    /// (P14). Falls back to `ops_channel` when unset.
+    pub inbox_channel: Option<u64>,
 }
 
 impl Guard {
     /// The only guard function. Order matters: user identity first (FR-1),
-    /// then location (FR-2).
+    /// then location (FR-2; DMs, the ops channel, and the inbox channel are
+    /// the allowed surfaces).
     pub fn decide(&self, source: &InteractionSource) -> Decision {
         if source.user_id != self.allowed_user_id {
             return Decision::EphemeralDeny;
@@ -40,7 +44,18 @@ impl Guard {
         {
             return Decision::Allow;
         }
+        if self
+            .inbox_channel
+            .is_some_and(|channel| source.channel_id == channel)
+        {
+            return Decision::Allow;
+        }
         Decision::Ignore
+    }
+
+    /// The channel external completions post to.
+    pub fn inbox(&self) -> Option<u64> {
+        self.inbox_channel.or(self.ops_channel)
     }
 }
 
@@ -67,6 +82,7 @@ mod tests {
         let guard = Guard {
             allowed_user_id: 42,
             ops_channel: Some(7),
+            inbox_channel: None,
         };
         assert_eq!(guard.decide(&source(42, 99, true)), Decision::Allow);
         assert_eq!(guard.decide(&source(42, 7, false)), Decision::Allow);
@@ -77,6 +93,7 @@ mod tests {
         let guard = Guard {
             allowed_user_id: 42,
             ops_channel: Some(7),
+            inbox_channel: None,
         };
         assert_eq!(guard.decide(&source(1, 99, true)), Decision::EphemeralDeny);
         assert_eq!(guard.decide(&source(1, 7, false)), Decision::EphemeralDeny);
@@ -87,6 +104,7 @@ mod tests {
         let guard = Guard {
             allowed_user_id: 42,
             ops_channel: Some(7),
+            inbox_channel: None,
         };
         assert_eq!(guard.decide(&source(42, 8, false)), Decision::Ignore);
     }
@@ -96,6 +114,7 @@ mod tests {
         let guard = Guard {
             allowed_user_id: 42,
             ops_channel: None,
+            inbox_channel: None,
         };
         assert_eq!(guard.decide(&source(42, 5, true)), Decision::Allow);
         assert_eq!(guard.decide(&source(42, 5, false)), Decision::Ignore);

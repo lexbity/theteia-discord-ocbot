@@ -1383,6 +1383,236 @@ impl StoreHandle {
         })
         .await
     }
+
+    // == session lifecycle (Phase 5, spec P5/P14/FR-30) =======================
+
+    /// Record the promptable session for a directory (FR-30). `/run` seeds it
+    /// when creating a session; park/reset retire it.
+    pub async fn set_active_session(&self, dir: &str, session_id: &str) -> Result<(), StoreError> {
+        let dir = dir.to_owned();
+        let session_id = session_id.to_owned();
+        self.call(move |connection| {
+            connection.execute(
+                "INSERT INTO project (dir, active_session_id) VALUES (?1, ?2)
+                 ON CONFLICT(dir) DO UPDATE SET active_session_id = excluded.active_session_id",
+                params![dir, session_id],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Take the directory lock on behalf of an *external* (TUI) session
+    /// observed busy in the directory (P5 `held(external:<id>)`).
+    pub async fn set_external_lock(
+        &self,
+        dir: &str,
+        session_id: &str,
+        since: i64,
+    ) -> Result<(), StoreError> {
+        let dir = dir.to_owned();
+        let holder = format!("external:{session_id}");
+        self.call(move |connection| {
+            connection.execute(
+                "INSERT INTO project (dir, lock_holder, lock_since) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(dir) DO UPDATE SET lock_holder = excluded.lock_holder,
+                                                lock_since = excluded.lock_since",
+                params![dir, holder, since],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// The running action targeting a directory, if any (the mutex owner).
+    pub async fn running_action_for_dir(&self, dir: &str) -> Result<Option<ActionRow>, StoreError> {
+        let dir = dir.to_owned();
+        self.call(move |connection| {
+            connection
+                .query_row(
+                    "SELECT action.* FROM action
+                     JOIN run ON action.run_id = run.id
+                     WHERE run.dir = ?1 AND action.state = 'running'
+                     ORDER BY action.id DESC LIMIT 1",
+                    params![dir],
+                    action_row,
+                )
+                .optional()
+        })
+        .await
+    }
+
+    /// The directory a seen session is bound to (inbox adoption resolves the
+    /// worktree this way, P14).
+    pub async fn session_dir(&self, session_id: &str) -> Result<Option<String>, StoreError> {
+        let session_id = session_id.to_owned();
+        self.call(move |connection| {
+            connection
+                .query_row(
+                    "SELECT dir FROM session_seen WHERE session_id = ?1",
+                    params![session_id],
+                    |row| row.get(0),
+                )
+                .optional()
+        })
+        .await
+    }
+
+    /// Every session the bot owns (bound to an action, or the promptable
+    /// session of a project) — the complement of `session_seen` is *external*.
+    pub async fn known_bot_sessions(&self) -> Result<Vec<String>, StoreError> {
+        self.call(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT session_id FROM action WHERE session_id IS NOT NULL
+                 UNION
+                 SELECT active_session_id FROM project WHERE active_session_id IS NOT NULL",
+            )?;
+            let rows = statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await
+    }
+
+    /// Claim a completion under `(session_id, seq)` *before* posting. Returns
+    /// `false` when that exact completion was already claimed (the inbox dedupe
+    /// key, FR-32/P14) — the caller must not post. A transient post failure can
+    /// `unclaim` so the next tick retries (never duplicates, retries on loss).
+    pub async fn claim_notified(&self, session_id: &str, seq: &str) -> Result<bool, StoreError> {
+        let session_id = session_id.to_owned();
+        let seq = seq.to_owned();
+        self.call(move |connection| {
+            let changed = connection.execute(
+                "INSERT OR IGNORE INTO notified (session_id, seq, discord_msg_id)
+                 VALUES (?1, ?2, '')",
+                params![session_id, seq],
+            )?;
+            Ok(changed == 1)
+        })
+        .await
+    }
+
+    /// Record the posted message id on a claimed notification.
+    pub async fn finish_notified(
+        &self,
+        session_id: &str,
+        seq: &str,
+        discord_msg_id: &str,
+    ) -> Result<(), StoreError> {
+        let session_id = session_id.to_owned();
+        let seq = seq.to_owned();
+        let discord_msg_id = discord_msg_id.to_owned();
+        self.call(move |connection| {
+            connection.execute(
+                "UPDATE notified SET discord_msg_id = ?1 WHERE session_id = ?2 AND seq = ?3",
+                params![discord_msg_id, session_id, seq],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Give a claimed-but-unposted notification back so the next tick retries.
+    pub async fn unclaim_notified(&self, session_id: &str, seq: &str) -> Result<(), StoreError> {
+        let session_id = session_id.to_owned();
+        let seq = seq.to_owned();
+        self.call(move |connection| {
+            connection.execute(
+                "DELETE FROM notified WHERE session_id = ?1 AND seq = ?2 AND discord_msg_id = ''",
+                params![session_id, seq],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Record `discord_msg_id → session` so a reply to an inbox report can
+    /// continue that session (P14 / FR-32).
+    pub async fn insert_msg_map(
+        &self,
+        discord_msg_id: &str,
+        session_id: &str,
+    ) -> Result<(), StoreError> {
+        let discord_msg_id = discord_msg_id.to_owned();
+        let session_id = session_id.to_owned();
+        self.call(move |connection| {
+            connection.execute(
+                "INSERT OR IGNORE INTO msg_map (discord_msg_id, session_id) VALUES (?1, ?2)",
+                params![discord_msg_id, session_id],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Resolve a replied-to Discord message to its session.
+    pub async fn lookup_msg_map(
+        &self,
+        discord_msg_id: &str,
+    ) -> Result<Option<(String, Option<i64>)>, StoreError> {
+        let discord_msg_id = discord_msg_id.to_owned();
+        self.call(move |connection| {
+            connection
+                .query_row(
+                    "SELECT session_id, action_id FROM msg_map WHERE discord_msg_id = ?1",
+                    params![discord_msg_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?)),
+                )
+                .optional()
+        })
+        .await
+    }
+
+    /// Whether `kind`/`key` is muted (FR-33).
+    pub async fn is_muted(&self, kind: &str, key: &str) -> Result<bool, StoreError> {
+        let kind = kind.to_owned();
+        let key = key.to_owned();
+        self.call(move |connection| {
+            let muted = connection
+                .query_row(
+                    "SELECT 1 FROM mute WHERE kind = ?1 AND key = ?2",
+                    params![kind, key],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            Ok(muted)
+        })
+        .await
+    }
+
+    /// Toggle a mute; returns the new state (`true` = now muted).
+    pub async fn toggle_mute(&self, kind: &str, key: &str) -> Result<bool, StoreError> {
+        let kind = kind.to_owned();
+        let key = key.to_owned();
+        self.call(move |connection| {
+            let transaction = connection.transaction()?;
+            let exists: Option<()> = transaction
+                .query_row(
+                    "SELECT 1 FROM mute WHERE kind = ?1 AND key = ?2",
+                    params![kind, key],
+                    |_| Ok(()),
+                )
+                .optional()?;
+            if exists.is_some() {
+                transaction.execute(
+                    "DELETE FROM mute WHERE kind = ?1 AND key = ?2",
+                    params![kind, key],
+                )?;
+                transaction.commit()?;
+                Ok(false)
+            } else {
+                transaction.execute(
+                    "INSERT INTO mute (kind, key) VALUES (?1, ?2)",
+                    params![kind, key],
+                )?;
+                transaction.commit()?;
+                Ok(true)
+            }
+        })
+        .await
+    }
 }
 
 /// Shared CAS implementation. `extra_condition` adds a guard to the `WHERE`.

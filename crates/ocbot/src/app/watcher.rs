@@ -46,7 +46,7 @@ impl Watcher {
                 continue;
             };
             match self.ctx.opencode.activity(&session_id).await {
-                Ok(Activity::Idle) => match finalize_action(&self.ctx, action).await {
+                Ok(Activity::Idle) => match finalize_action(&self.ctx, action, false).await {
                     Ok(_) => {}
                     Err(error) => {
                         tracing::error!(action = action.id, error = %error, "finalize failed");
