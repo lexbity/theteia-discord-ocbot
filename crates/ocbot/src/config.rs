@@ -18,6 +18,10 @@ pub const ENV_SECRETS_FILE: &str = "OCBOT_SECRETS_FILE";
 pub const ENV_ALLOWED_USER_ID: &str = "ALLOWED_USER_ID";
 /// Environment variable disabling the loopback-only guard (FR-4).
 pub const ENV_ALLOW_NON_LOOPBACK: &str = "ALLOW_NON_LOOPBACK";
+/// Env variable overriding the per-session ruleset default (FR-42).
+pub const ENV_PER_SESSION_RULESET: &str = "PER_SESSION_RULESET";
+/// The default permission-baseline path, unless `permissions_file` is set.
+pub const DEFAULT_PERMISSIONS_FILE: &str = "config/opencode.permissions.jsonc";
 /// Environment variable with the Discord bot token.
 pub const ENV_DISCORD_TOKEN: &str = "DISCORD_TOKEN";
 /// Environment variable with the opencode server password.
@@ -44,6 +48,19 @@ pub struct Config {
     /// Watcher poll interval in ms (S-2 locked default).
     #[serde(default = "default_poll")]
     pub poll_interval_ms: u64,
+    /// Gate-lifecycle poll interval in ms (P4 default 2 s).
+    #[serde(default = "default_gate_poll")]
+    pub gate_poll_interval_ms: u64,
+    /// Re-ping cadence in minutes for unanswered gates (P4 default 10).
+    #[serde(default = "default_reping_minutes")]
+    pub perm_reping_minutes: u64,
+    /// Attach the permission baseline to every created session (FR-42; the
+    /// feature ships off until S-3 confirms combine semantics — D-R6).
+    #[serde(default)]
+    pub per_session_ruleset: bool,
+    /// The path of the shipped FR-21 permission baseline (doctor, FR-40).
+    #[serde(default = "default_permissions_file")]
+    pub permissions_file: String,
     /// Loopback metrics bind address.
     #[serde(default = "default_metrics")]
     pub metrics_bind: String,
@@ -62,6 +79,18 @@ fn default_templates() -> String {
 
 fn default_poll() -> u64 {
     2_000
+}
+
+fn default_gate_poll() -> u64 {
+    2_000
+}
+
+fn default_reping_minutes() -> u64 {
+    10
+}
+
+fn default_permissions_file() -> String {
+    DEFAULT_PERMISSIONS_FILE.to_owned()
 }
 
 fn default_metrics() -> String {
@@ -157,6 +186,18 @@ impl Config {
                 self.poll_interval_ms
             ));
         }
+        if self.gate_poll_interval_ms < 100 {
+            errors.push(format!(
+                "gate_poll_interval_ms must be >= 100, got {}",
+                self.gate_poll_interval_ms
+            ));
+        }
+        if self.perm_reping_minutes < 1 {
+            errors.push(format!(
+                "perm_reping_minutes must be >= 1, got {}",
+                self.perm_reping_minutes
+            ));
+        }
 
         let operator = self.allowed_user_id.or_else(|| {
             std::env::var(ENV_ALLOWED_USER_ID)
@@ -183,6 +224,15 @@ impl Config {
                 .ok()
                 .and_then(|value| value.parse().ok())
         })
+    }
+
+    /// Whether the per-session ruleset (FR-42) is active: the config flag or
+    /// the `PER_SESSION_RULESET` environment override set to `true`. Defaults
+    /// to off (D-R6) until S-3 confirms opencode *combines* rulesets.
+    pub fn ruleset_enabled(&self) -> bool {
+        self.per_session_ruleset
+            || std::env::var(ENV_PER_SESSION_RULESET)
+                .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
     }
 }
 
@@ -354,7 +404,11 @@ typo_key = 1
             templates_dir: "templates".to_owned(),
             ops_channel: None,
             allowed_user_id: None,
-            poll_interval_ms: 10, // too fast
+            poll_interval_ms: 10,     // too fast
+            gate_poll_interval_ms: 5, // too fast
+            perm_reping_minutes: 0,   // too fast
+            per_session_ruleset: false,
+            permissions_file: "config/opencode.permissions.jsonc".to_owned(),
             metrics_bind: String::new(),
             git_timeout_secs: 10,
         };

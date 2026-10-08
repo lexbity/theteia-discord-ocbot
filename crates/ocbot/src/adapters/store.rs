@@ -148,6 +148,41 @@ pub struct ResetIntentRow {
     pub step: i64,
 }
 
+/// One gate lifecycle row (spec P4): a server-side *fact* (permission or form)
+/// mirrored into the DB with its Discord message and answer state. `state` is
+/// `pending | answered` — the single shared state machine for both kinds.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GateRow {
+    /// Local rowid (`custom_ids` reference this, never external ids, §6.6).
+    pub id: i64,
+    /// The server-side gate id (`per_*` / `frm_*`).
+    pub ext_id: Option<String>,
+    /// The attributed (root) action, when one is running.
+    pub action_id: Option<i64>,
+    /// The session that owns the gate.
+    pub session_id: Option<String>,
+    /// The root session the gate was attributed through (FR-24).
+    pub root_session_id: Option<String>,
+    /// `permission` or `form`.
+    pub kind: String,
+    /// The verbatim wire payload (D-R5 surface-only rendering).
+    pub payload_json: String,
+    /// Whether the gate is interactive (renderable forms / permissions).
+    pub renderable: bool,
+    /// The lifecycle state.
+    pub state: String,
+    /// The JSON-encoded decision (`"once"`) or form answer object, when set.
+    pub answer: Option<String>,
+    /// The posted gate-message id (edits don't notify, P10).
+    pub msg_id: Option<String>,
+    /// The channel the gate message lives in.
+    pub channel_id: Option<i64>,
+    /// Re-ping count.
+    pub pings: i64,
+    /// Last re-ping time.
+    pub last_ping_at: Option<i64>,
+}
+
 type Job = Box<dyn FnOnce(&mut Connection) -> rusqlite::Result<Box<dyn Any + Send>> + Send>;
 type Request = (
     Job,
@@ -292,7 +327,7 @@ fn configure_and_migrate(connection: &mut Connection) -> Result<(), StoreError> 
     Ok(())
 }
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
     connection
@@ -308,15 +343,18 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
     if current >= SCHEMA_VERSION {
         return Ok(());
     }
-    // Forward-only, stepwise: a v1 database gets V2 only, an empty database gets
-    // V1 then V2. Applying V1 to an existing v1 database would fail on the
-    // already-present tables.
+    // Forward-only, stepwise: an older database gets exactly the migrations it
+    // is missing; re-running an already-applied migration would fail on the
+    // existing objects.
     let transaction = connection.transaction()?;
     if current < 1 {
         transaction.execute_batch(MIGRATION_V1)?;
     }
     if current < 2 {
         transaction.execute_batch(MIGRATION_V2)?;
+    }
+    if current < 3 {
+        transaction.execute_batch(MIGRATION_V3)?;
     }
     transaction.execute(
         "INSERT INTO schema_version (v) VALUES (?1)",
@@ -454,6 +492,12 @@ CREATE TABLE reset_intent (
   step INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL
 );
+";
+
+/// v3 — the gate lifecycle (Phase 4) needs to know where a gate's message was
+/// posted so replies and re-pings can edit it (P10: edits don't notify).
+const MIGRATION_V3: &str = "
+ALTER TABLE gate ADD COLUMN channel_id INTEGER;
 ";
 
 impl std::fmt::Debug for StoreHandle {
@@ -1154,6 +1198,191 @@ impl StoreHandle {
         })
         .await
     }
+
+    // == gate lifecycle (Phase 4, spec P4) =====================================
+
+    /// Mirror a server-side gate fact into the DB. Returns the local rowid and
+    /// whether the row was inserted (idempotent by `ext_id`; same fact twice ⇒
+    /// one row, one message, AC-10/FR-23). `now` seeds the re-ping clock so the
+    /// first re-ping is due only after the full interval.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "gate columns are a fixed set of carriers; a builder would obscure the insert shape"
+    )]
+    pub async fn upsert_gate(
+        &self,
+        ext_id: &str,
+        action_id: Option<i64>,
+        session_id: Option<&str>,
+        root_session_id: Option<&str>,
+        kind: &str,
+        payload_json: &str,
+        renderable: bool,
+        channel_id: Option<i64>,
+        now: i64,
+    ) -> Result<(i64, bool), StoreError> {
+        let ext = ext_id.to_owned();
+        let kind = kind.to_owned();
+        let payload = payload_json.to_owned();
+        let session = session_id.map(str::to_owned);
+        let root = root_session_id.map(str::to_owned);
+        self.call(move |connection| {
+            let transaction = connection.transaction()?;
+            let existing: Option<i64> = transaction
+                .query_row(
+                    "SELECT id FROM gate WHERE ext_id = ?1",
+                    params![ext],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if let Some(id) = existing {
+                transaction.commit()?;
+                Ok((id, false))
+            } else {
+                let renderable = i64::from(renderable);
+                transaction.execute(
+                    "INSERT INTO gate
+                            (ext_id, action_id, session_id, root_session_id, kind, payload_json,
+                             renderable, state, channel_id, last_ping_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8, ?9)",
+                    params![
+                        ext, action_id, session, root, kind, payload, renderable, channel_id, now
+                    ],
+                )?;
+                let id = transaction.last_insert_rowid();
+                transaction.commit()?;
+                Ok((id, true))
+            }
+        })
+        .await
+    }
+
+    /// A gate row by local id.
+    pub async fn gate(&self, id: i64) -> Result<Option<GateRow>, StoreError> {
+        self.call(move |connection| {
+            connection
+                .query_row("SELECT * FROM gate WHERE id = ?1", params![id], gate_row)
+                .optional()
+        })
+        .await
+    }
+
+    /// Every pending gate row (the re-ping cursor).
+    pub async fn pending_gates(&self) -> Result<Vec<GateRow>, StoreError> {
+        self.call(|connection| {
+            let mut statement =
+                connection.prepare("SELECT * FROM gate WHERE state = 'pending' ORDER BY id")?;
+            let rows = statement
+                .query_map([], gate_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await
+    }
+
+    /// The single gate state transition (P4: one lifecycle, one exactly-once
+    /// reply rule). `answer` is the JSON-encoded decision/answer.
+    pub async fn cas_gate(
+        &self,
+        id: i64,
+        from: &str,
+        to: &str,
+        answer: Option<&str>,
+    ) -> Result<bool, StoreError> {
+        let from = from.to_owned();
+        let to = to.to_owned();
+        let answer = answer.map(str::to_owned);
+        self.call(move |connection| {
+            let changed = connection.execute(
+                "UPDATE gate SET state = ?1, answer = ?2 WHERE id = ?3 AND state = ?4",
+                params![to, answer, id, from],
+            )?;
+            Ok(changed == 1)
+        })
+        .await
+    }
+
+    /// Record the posted gate message (P10: already-posted gates are never
+    /// re-posted; the nullable guard is the dedupe).
+    pub async fn set_gate_msg(
+        &self,
+        id: i64,
+        msg_id: &str,
+        channel_id: Option<i64>,
+    ) -> Result<(), StoreError> {
+        let msg_id = msg_id.to_owned();
+        self.call(move |connection| {
+            connection.execute(
+                "UPDATE gate SET msg_id = ?1, channel_id = ?2 WHERE id = ?3 AND msg_id IS NULL",
+                params![msg_id, channel_id, id],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Advance the re-ping counter and stamp the ping time; returns the new
+    /// count (the caller decides the message after the 6th ping).
+    pub async fn bump_gate_pings(&self, id: i64, now: i64) -> Result<i64, StoreError> {
+        self.call(move |connection| {
+            connection.execute(
+                "UPDATE gate SET pings = pings + 1, last_ping_at = ?1 WHERE id = ?2",
+                params![now, id],
+            )?;
+            let pings: i64 = connection.query_row(
+                "SELECT pings FROM gate WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )?;
+            Ok(pings)
+        })
+        .await
+    }
+
+    /// Every answered gate with a recorded answer (boot reconcile re-POSTs any
+    /// that are still pending on the server, FR-23).
+    pub async fn answered_gates(&self) -> Result<Vec<GateRow>, StoreError> {
+        self.call(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT * FROM gate WHERE state = 'answered' AND answer IS NOT NULL ORDER BY id",
+            )?;
+            let rows = statement
+                .query_map([], gate_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await
+    }
+
+    /// Set the blocked substatus on an action (P4: `blocked` is a substatus on
+    /// `running`, never a state).
+    pub async fn set_action_blocked(&self, action_id: i64, gate_id: i64) -> Result<(), StoreError> {
+        self.call(move |connection| {
+            connection.execute(
+                "UPDATE action SET blocked_gate_id = ?1 WHERE id = ?2",
+                params![gate_id, action_id],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Clear the blocked substatus, but only when this gate is the blocker
+    /// (a concurrent gate on the same action keeps its block).
+    pub async fn clear_action_blocked(
+        &self,
+        action_id: i64,
+        gate_id: i64,
+    ) -> Result<(), StoreError> {
+        self.call(move |connection| {
+            connection.execute(
+                "UPDATE action SET blocked_gate_id = NULL WHERE id = ?1 AND blocked_gate_id = ?2",
+                params![action_id, gate_id],
+            )?;
+            Ok(())
+        })
+        .await
+    }
 }
 
 /// Shared CAS implementation. `extra_condition` adds a guard to the `WHERE`.
@@ -1274,6 +1503,25 @@ fn action_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ActionRow> {
         ended_at: row.get(25)?,
         last_event_at: row.get(26)?,
         stall_ping_at: row.get(27)?,
+    })
+}
+
+fn gate_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GateRow> {
+    Ok(GateRow {
+        id: row.get(0)?,
+        ext_id: row.get(1)?,
+        action_id: row.get(2)?,
+        session_id: row.get(3)?,
+        root_session_id: row.get(4)?,
+        kind: row.get(5)?,
+        payload_json: row.get(6)?,
+        renderable: row.get::<_, i64>(7)? != 0,
+        state: row.get(8)?,
+        answer: row.get(9)?,
+        msg_id: row.get(10)?,
+        pings: row.get(11)?,
+        last_ping_at: row.get(12)?,
+        channel_id: row.get(13)?,
     })
 }
 

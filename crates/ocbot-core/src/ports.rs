@@ -55,45 +55,50 @@ pub enum Activity {
     Busy,
 }
 
-/// The concrete nature of a pending gate.
-#[derive(Debug, Clone, PartialEq)]
-pub enum GateKind {
-    /// A permission request naming a tool and its patterns.
-    Permission {
-        /// The tool / verb, e.g. `bash`.
-        action: String,
-        /// The resources/patterns requested.
-        resources: Vec<String>,
-    },
-    /// A form asking structured questions.
-    Form {
-        /// The form title/question.
-        title: String,
-        /// The number of fields (the bot decides renderability later).
-        field_count: usize,
-    },
+/// The gate vocabulary lives in [`crate::gates`]; this re-export keeps the
+/// port contract spelled the same way it has been since Phase 0.
+pub use crate::gates::{GateDecision, GateKind, GateRequest};
+
+/// The effect of one permission rule in an opencode ruleset (wire enum
+/// `Permission.Effect`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PermissionEffect {
+    /// Allow matching requests without asking.
+    Allow,
+    /// Deny matching requests.
+    Deny,
+    /// Ask the operator each time.
+    Ask,
 }
 
-/// A pending gate: permissions and forms, unified (spec P4).
-#[derive(Debug, Clone, PartialEq)]
-pub struct GateRequest {
-    /// The server-side gate id.
-    pub id: String,
-    /// The owning session id, when known.
-    pub session_id: Option<String>,
-    /// The gate kind.
-    pub kind: GateKind,
+impl PermissionEffect {
+    /// The wire spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PermissionEffect::Allow => "allow",
+            PermissionEffect::Deny => "deny",
+            PermissionEffect::Ask => "ask",
+        }
+    }
 }
 
-/// A permission decision (wire values pinned in Phase 0: `once`/`always`/`reject`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GateDecision {
-    /// Allow this once.
-    Once,
-    /// Remember and always allow.
-    Always,
-    /// Deny.
-    Reject,
+/// One rule of a per-session permission ruleset (spec FR-42; the shape the
+/// server's `Session.CreateInput.permissions` expects).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PermissionRule {
+    /// The action/tool, e.g. `bash`, `read`, `write`.
+    pub action: String,
+    /// The resource pattern, e.g. `git push*` or `**.ssh**`.
+    pub resource: String,
+    /// The effect.
+    pub effect: PermissionEffect,
+}
+
+/// The injected time source for the re-ping policy (fake-clock-testable, P4).
+pub trait Clock: Send + Sync {
+    /// Current unix seconds.
+    fn now(&self) -> i64;
 }
 
 /// One row of `git log`.
@@ -126,11 +131,13 @@ pub trait OpenCodePort: Send + Sync {
     async fn list_sessions(&self, root_only: bool) -> Result<Vec<PortSession>, OcError>;
     /// Liveness of one session.
     async fn activity(&self, session_id: &str) -> Result<Activity, OcError>;
-    /// Create a session bound to a directory (spec A6).
+    /// Create a session bound to a directory (spec A6). `permissions` attaches a
+    /// per-session ruleset at creation (FR-42; `None` when the feature is off).
     async fn create_session(
         &self,
         directory: &Path,
         title: Option<&str>,
+        permissions: Option<&[PermissionRule]>,
     ) -> Result<SessionId, OcError>;
     /// Durably admit a prompt; returns on admission, not completion (P9).
     async fn send_prompt(&self, session_id: &str, text: &str) -> Result<PromptAdmission, OcError>;
@@ -146,6 +153,13 @@ pub trait OpenCodePort: Send + Sync {
         session_id: &str,
         gate_id: &str,
         decision: GateDecision,
+    ) -> Result<(), OcError>;
+    /// Reply to a pending form with a `{ key: value }` answer map (FR-41).
+    async fn reply_form(
+        &self,
+        session_id: &str,
+        form_id: &str,
+        answer: serde_json::Value,
     ) -> Result<(), OcError>;
 }
 

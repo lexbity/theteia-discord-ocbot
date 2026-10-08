@@ -20,6 +20,7 @@ struct Inner {
     reports_delivered: AtomicU64,
     opencode_up: AtomicU64,
     locks_held: AtomicU64,
+    gate_pending: AtomicU64,
     actions_by_state: [AtomicU64; 10],
     idle_buckets: [AtomicU64; 7],
 }
@@ -37,6 +38,7 @@ impl Metrics {
                 reports_delivered: AtomicU64::new(0),
                 opencode_up: AtomicU64::new(0),
                 locks_held: AtomicU64::new(0),
+                gate_pending: AtomicU64::new(0),
                 actions_by_state: [const { AtomicU64::new(0) }; 10],
                 idle_buckets: [const { AtomicU64::new(0) }; 7],
             }),
@@ -95,6 +97,13 @@ impl Metrics {
         self.inner.locks_held.store(count, Ordering::Relaxed);
     }
 
+    /// Pending-gate gauge (driven by the gate loop, P4).
+    pub fn set_gate_pending(&self, count: usize) {
+        self.inner
+            .gate_pending
+            .store(u64::try_from(count).unwrap_or(0), Ordering::Relaxed);
+    }
+
     /// Render the Prometheus text format (modelines + family blocks).
     pub fn render_text(&self) -> String {
         let inner = &self.inner;
@@ -126,6 +135,10 @@ impl Metrics {
             "ocbot_lock_age_seconds {}",
             inner.locks_held.load(Ordering::Relaxed)
         ));
+        counters.push(format!(
+            "ocbot_gate_pending {}",
+            inner.gate_pending.load(Ordering::Relaxed)
+        ));
         let mut buckets = String::new();
         for (index, upper) in IDLE_BUCKETS_SECS.iter().enumerate() {
             let count = inner.idle_buckets[index].load(Ordering::Relaxed);
@@ -144,6 +157,7 @@ impl Metrics {
              # TYPE ocbot_denied_interactions_total counter\n\
              # TYPE ocbot_opencode_up gauge\n\
              # TYPE ocbot_lock_age_seconds gauge\n\
+             # TYPE ocbot_gate_pending gauge\n\
              # HELP ocbot_idle_to_report_seconds Idle to report latency.\n\
              # TYPE ocbot_idle_to_report_seconds histogram\n{buckets}",
             counters = counters.join("\n"),

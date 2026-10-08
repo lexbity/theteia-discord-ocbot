@@ -6,10 +6,11 @@ use std::path::Path;
 
 use async_trait::async_trait;
 use ocbot_core::error::OcError as CoreOcError;
+use ocbot_core::gates::{FormField, FormFieldKind, FormOption};
 use ocbot_core::outcome::{AssistantSnapshot, TokenCounts};
 use ocbot_core::ports::{
-    Activity, GateDecision, GateKind, GateRequest, OpenCodePort, PortSession, PromptAdmission,
-    ServerFacts, SessionId,
+    Activity, GateDecision, GateKind, GateRequest, OpenCodePort, PermissionEffect, PermissionRule,
+    PortSession, PromptAdmission, ServerFacts, SessionId,
 };
 use opencode_v2_client as client;
 
@@ -77,16 +78,75 @@ fn to_gate(gate: &client::GateRequest) -> GateRequest {
         client::GateKind::Permission(request) => GateKind::Permission {
             action: request.action.clone(),
             resources: request.resources.clone(),
+            message: request.message.clone(),
         },
         client::GateKind::Form(form) => GateKind::Form {
             title: form.title.clone(),
-            field_count: form.fields.len(),
+            fields: form.fields.iter().map(to_field).collect(),
         },
+    };
+    let payload = match &gate.kind {
+        client::GateKind::Permission(request) => serde_json::to_value(request),
+        client::GateKind::Form(form) => serde_json::to_value(form),
     };
     GateRequest {
         id: gate.id.clone(),
         session_id: gate.session_id.clone(),
         kind,
+        payload: payload.unwrap_or(serde_json::Value::Null),
+    }
+}
+
+/// Map a wire form field onto the core vocabulary; the `Other` catch-all keeps
+/// an unknown field from ever panicking deserialization (P16).
+fn to_field(field: &client::FormField) -> FormField {
+    let (key, label, kind) = match field {
+        client::FormField::String(value) if !value.options.is_empty() => (
+            value.key.clone(),
+            value.title.clone(),
+            FormFieldKind::Choice(to_options(&value.options)),
+        ),
+        client::FormField::String(value) => {
+            (value.key.clone(), value.title.clone(), FormFieldKind::Text)
+        }
+        client::FormField::Number(value) | client::FormField::Integer(value) => {
+            (value.key.clone(), value.title.clone(), FormFieldKind::Text)
+        }
+        client::FormField::Boolean(value) => (
+            value.key.clone(),
+            value.title.clone(),
+            FormFieldKind::Boolean,
+        ),
+        client::FormField::Multiselect(value) => (
+            value.key.clone(),
+            value.title.clone(),
+            FormFieldKind::Multiselect(to_options(&value.options)),
+        ),
+        client::FormField::External(value) => (
+            value.key.clone(),
+            None,
+            FormFieldKind::External(value.url.clone()),
+        ),
+        client::FormField::Other => (String::new(), None, FormFieldKind::Unknown),
+    };
+    FormField { key, label, kind }
+}
+
+fn to_options(options: &[client::FormOption]) -> Vec<FormOption> {
+    options
+        .iter()
+        .map(|option| FormOption {
+            value: option.value.clone(),
+            label: option.label.clone(),
+        })
+        .collect()
+}
+
+fn to_effect(effect: PermissionEffect) -> client::PermissionEffect {
+    match effect {
+        PermissionEffect::Allow => client::PermissionEffect::Allow,
+        PermissionEffect::Deny => client::PermissionEffect::Deny,
+        PermissionEffect::Ask => client::PermissionEffect::Ask,
     }
 }
 
@@ -121,10 +181,25 @@ impl OpenCodePort for OpenCodeAdapter {
         &self,
         directory: &Path,
         title: Option<&str>,
+        permissions: Option<&[PermissionRule]>,
     ) -> Result<SessionId, CoreOcError> {
+        let rules: Option<Vec<client::PermissionRule>> = permissions.map(|rules| {
+            rules
+                .iter()
+                .map(|rule| client::PermissionRule {
+                    action: rule.action.clone(),
+                    resource: rule.resource.clone(),
+                    effect: to_effect(rule.effect),
+                })
+                .collect()
+        });
         let session = self
             .inner
-            .create_session(Some(&directory.display().to_string()), title)
+            .create_session_with(
+                Some(&directory.display().to_string()),
+                title,
+                rules.as_deref(),
+            )
             .await
             .map_err(map_error)?;
         Ok(session.id)
@@ -182,6 +257,18 @@ impl OpenCodePort for OpenCodeAdapter {
         };
         self.inner
             .reply_permission(session_id, gate_id, decision)
+            .await
+            .map_err(map_error)
+    }
+
+    async fn reply_form(
+        &self,
+        session_id: &str,
+        form_id: &str,
+        answer: serde_json::Value,
+    ) -> Result<(), CoreOcError> {
+        self.inner
+            .reply_form(session_id, form_id, answer)
             .await
             .map_err(map_error)
     }

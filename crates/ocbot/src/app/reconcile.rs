@@ -15,6 +15,7 @@ use ocbot_core::ports::Activity;
 
 use crate::app::completion::finalize_action;
 use crate::app::context::AppContext;
+use crate::app::gates_loop;
 use crate::app::handlers::{accept, park, reset};
 
 /// What the reconcile pass observed.
@@ -48,6 +49,17 @@ pub async fn reconcile(ctx: &Arc<AppContext>) -> ReconcileReport {
                 repaired,
             };
         }
+    }
+
+    // Gates are server facts that must be mirrored before any completion sweep
+    // (P9 step 4): a fresh gate blocks its session from reporting, and a
+    // locally-answered gate that is still remote-pending is re-POSTed once per
+    // boot (FR-23).
+    if let Err(error) = gates_loop::sync(ctx).await {
+        tracing::warn!(error = %error, "reconcile: gate sync failed");
+    }
+    if let Err(error) = gates_loop::repost_answered(ctx).await {
+        tracing::warn!(error = %error, "reconcile: gate re-POST failed");
     }
 
     let actions = match ctx.store.running_actions().await {

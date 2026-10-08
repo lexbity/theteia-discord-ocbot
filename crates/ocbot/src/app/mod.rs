@@ -4,7 +4,9 @@
 pub mod completion;
 pub mod context;
 pub mod crashpoint;
+pub mod doctor;
 pub mod error;
+pub mod gates_loop;
 pub mod guard;
 pub mod handlers;
 pub mod interaction;

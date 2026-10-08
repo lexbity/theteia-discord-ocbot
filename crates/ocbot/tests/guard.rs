@@ -120,6 +120,9 @@ fn all_handler_sources(channel: u64, guild: Option<u64>) -> Vec<InteractionSourc
         button(OPERATOR, channel, guild, "v1:releaseq:deadbeef", 5),
         button(OPERATOR, channel, guild, "v1:release:deadbeef", 5),
         button(OPERATOR, channel, guild, "v1:page:history:0", 5),
+        button(OPERATOR, channel, guild, "v1:gate:1:once", 5),
+        button(OPERATOR, channel, guild, "v1:formpick:1:a", 5),
+        button(OPERATOR, channel, guild, "v1:formgo:1", 5),
         modal(
             OPERATOR,
             channel,
@@ -133,6 +136,7 @@ fn all_handler_sources(channel: u64, guild: Option<u64>) -> Vec<InteractionSourc
             "v1:acceptgo:1",
             vec![("subject", "s"), ("body", "")],
         ),
+        modal(OPERATOR, channel, "v1:formgo:1", vec![("note", "x")]),
     ]
 }
 

@@ -9,17 +9,20 @@ use std::time::Duration;
 
 use opencode_v2_client::Client as OpenCodeClient;
 
+use crate::adapters::clock::SystemClock;
 use crate::adapters::discord::{DiscordAdapter, shared_http, start_gateway};
 use crate::adapters::git::GitAdapter;
 use crate::adapters::opencode::OpenCodeAdapter;
 use crate::adapters::store::StoreHandle;
 use crate::app::context::{AppContext, DiscordPort};
+use crate::app::doctor;
+use crate::app::gates_loop::GatesLoop;
 use crate::app::guard::Guard;
 use crate::app::metrics::{self, Metrics};
 use crate::app::reconcile;
 use crate::app::watcher::Watcher;
 use crate::config::{Config, Secrets, config_path};
-use ocbot_core::ports::{GitPort, OpenCodePort};
+use ocbot_core::ports::{GitPort, OpenCodePort, PermissionRule};
 
 /// The tokio entry invoked by `main`. Returns the process exit code.
 #[expect(
@@ -92,6 +95,36 @@ pub async fn start() -> ExitCode {
         }
     };
 
+    // Doctor, FR-40 part (c): the shipped permission baseline must parse as a
+    // v2 ruleset and cover the FR-21 dangerous families as `ask`. A bad
+    // baseline is a configuration fault, so it exits 2 (distinct from the
+    // version fault in part (b), which exits 1).
+    let baseline = match doctor::Baseline::load(Path::new(&config.permissions_file)) {
+        Ok(baseline) => baseline,
+        Err(errors) => {
+            for error in &errors {
+                tracing::error!(error = %error, "permission baseline rejected");
+            }
+            return ExitCode::from(2);
+        }
+    };
+    let permission_ruleset = if config.ruleset_enabled() {
+        tracing::info!("FR-42 active: attaching the baseline to created sessions");
+        Some(
+            baseline
+                .rules
+                .iter()
+                .map(|rule| PermissionRule {
+                    action: rule.action.clone(),
+                    resource: rule.resource.clone(),
+                    effect: rule.effect,
+                })
+                .collect(),
+        )
+    } else {
+        None
+    };
+
     let metrics = Arc::new(Metrics::new());
     let git: Arc<dyn GitPort> = Arc::new(GitAdapter::with_bin(
         "git",
@@ -108,6 +141,8 @@ pub async fn start() -> ExitCode {
         store: store.clone(),
         opencode,
         git,
+        clock: Arc::new(SystemClock),
+        permission_ruleset,
         discord: discord_surface,
         metrics: metrics.clone(),
         guard,
@@ -140,6 +175,20 @@ pub async fn start() -> ExitCode {
         let ctx = ctx.clone();
         tokio::spawn(async move {
             Watcher::new(ctx, interval).run_forever().await;
+        });
+    }
+
+    // Gate lifecycle loop (P4): sync server gate facts and re-ping unanswered
+    // gates on the injected clock.
+    let gate_interval = Duration::from_millis(config.gate_poll_interval_ms.max(100));
+    let reping_secs =
+        i64::try_from(config.perm_reping_minutes.saturating_mul(60)).unwrap_or(i64::MAX);
+    {
+        let ctx = ctx.clone();
+        tokio::spawn(async move {
+            GatesLoop::new(ctx, gate_interval, reping_secs)
+                .run_forever()
+                .await;
         });
     }
 

@@ -96,6 +96,16 @@ async fn plan(ctx: &Arc<AppContext>, source: &InteractionSource) -> Result<AckPl
                 )
                 .await?;
                 Ok(AckPlan::DeferUpdate)
+            } else if let Some(id) = custom_id.strip_prefix("v1:formgo:") {
+                // The "Answer form" button: the plan is a single store read that
+                // decides the modal (a gone/answered gate is a no-op).
+                match handlers::gate::form_modal(ctx, parse_action_id(id)?).await? {
+                    Some(spec) => Ok(AckPlan::Modal(spec)),
+                    None => Ok(AckPlan::DeferEphemeral),
+                }
+            } else if let Some(rest) = custom_id.strip_prefix("v1:gate:") {
+                let _ = split_gate_id(rest)?;
+                Ok(AckPlan::DeferUpdate)
             } else if is_deferred_action(custom_id) {
                 Ok(AckPlan::DeferUpdate)
             } else {
@@ -105,7 +115,10 @@ async fn plan(ctx: &Arc<AppContext>, source: &InteractionSource) -> Result<AckPl
         SourceKind::ModalSubmit { custom_id, .. } => {
             if custom_id == handlers::run::NEW_RUN_MODAL {
                 Ok(AckPlan::DeferPublic)
-            } else if custom_id.starts_with("v1:editgo:") || custom_id.starts_with("v1:acceptgo:") {
+            } else if custom_id.starts_with("v1:editgo:")
+                || custom_id.starts_with("v1:acceptgo:")
+                || custom_id.starts_with("v1:formgo:")
+            {
                 Ok(AckPlan::DeferUpdate)
             } else {
                 Err(AppError::UnknownCustomId(custom_id.to_owned()))
@@ -116,9 +129,15 @@ async fn plan(ctx: &Arc<AppContext>, source: &InteractionSource) -> Result<AckPl
 
 /// Custom ids whose plan is a plain deferral (all work is in the execute pass).
 fn is_deferred_action(custom_id: &str) -> bool {
-    ["v1:reset:", "v1:resetgo:", "v1:releaseq:", "v1:release:"]
-        .iter()
-        .any(|prefix| custom_id.starts_with(prefix))
+    [
+        "v1:reset:",
+        "v1:resetgo:",
+        "v1:releaseq:",
+        "v1:release:",
+        "v1:formpick:",
+    ]
+    .iter()
+    .any(|prefix| custom_id.starts_with(prefix))
         || custom_id.starts_with("v1:page:history:")
 }
 
@@ -170,6 +189,16 @@ pub async fn execute(
             } else if let Some(page) = custom_id.strip_prefix("v1:page:history:") {
                 handlers::history::page(ctx, source, parse_page(page)?).await?;
                 Ok(None)
+            } else if let Some(rest) = custom_id.strip_prefix("v1:gate:") {
+                let (id, decision) = split_gate_id(rest)?;
+                handlers::gate::execute_permission_reply(ctx, id, decision, source.user_id).await
+            } else if let Some(rest) = custom_id.strip_prefix("v1:formpick:") {
+                let (id, value) = parse_form_pick(rest)?;
+                handlers::gate::execute_form_pick(ctx, id, &value, source.user_id).await
+            } else if custom_id.starts_with("v1:formgo:") {
+                // A Component `v1:formgo` plans a modal and never executes; a
+                // stale press is a no-op.
+                Err(AppError::AlreadyHandled)
             } else {
                 Err(AppError::UnknownCustomId(custom_id.to_owned()))
             }
@@ -179,6 +208,8 @@ pub async fn execute(
                 handlers::run::execute_newrun(ctx, source).await
             } else if let Some(id) = custom_id.strip_prefix("v1:editgo:") {
                 handlers::run::execute_editgo(ctx, parse_action_id(id)?, source).await
+            } else if let Some(id) = custom_id.strip_prefix("v1:formgo:") {
+                handlers::gate::execute_form_submit(ctx, parse_action_id(id)?, source).await
             } else if let Some(id) = custom_id.strip_prefix("v1:acceptgo:") {
                 let subject = source.input("subject").unwrap_or_default();
                 let body = source.input("body").unwrap_or_default();
@@ -207,6 +238,27 @@ fn parse_page(raw: &str) -> Result<usize, AppError> {
     raw.trim()
         .parse()
         .map_err(|_| AppError::UnknownCustomId(format!("bad page {raw:?}")))
+}
+
+/// Parse `<action_rowid>:<decision>` for a permission-gate button.
+fn split_gate_id(raw: &str) -> Result<(i64, &str), AppError> {
+    let (id, decision) = raw
+        .rsplit_once(':')
+        .ok_or_else(|| AppError::UnknownCustomId(format!("bad gate id {raw:?}")))?;
+    if !["once", "always", "reject"].contains(&decision) {
+        return Err(AppError::UnknownCustomId(format!(
+            "bad gate decision {raw:?}"
+        )));
+    }
+    Ok((parse_action_id(id)?, decision))
+}
+
+/// Parse `<gate_rowid>:<option-value>` for a single-choice form button.
+fn parse_form_pick(raw: &str) -> Result<(i64, String), AppError> {
+    let (id, value) = raw
+        .split_once(':')
+        .ok_or_else(|| AppError::UnknownCustomId(format!("bad form pick {raw:?}")))?;
+    Ok((parse_action_id(id)?, value.to_owned()))
 }
 
 /// Load an action and assert it is in one of `allowed`; a state mismatch is a

@@ -1,0 +1,16 @@
+// ocbot's shipped permission baseline (FR-21 / D-1).
+//
+// v2 format (pinned by S-1): an *ordered* array of Permission.Rule entries
+// { "action", "resource", "effect" }. Order matters: the first matching rule
+// wins. The dangerous families MUST stay `ask` so prompt-injected commands hit
+// a human (P1/R-3); `ocbot --doctor` (FR-40) refuses to start if any is
+// missing or malformed.
+{
+  "permissions": [
+    { "action": "bash", "resource": "git push*", "effect": "ask" },
+    { "action": "bash", "resource": "sudo*", "effect": "ask" },
+    { "action": "bash", "resource": "rm -rf*", "effect": "ask" },
+    { "action": "read", "resource": "~/.ssh/**", "effect": "ask" },
+    { "action": "write", "resource": "~/.ssh/**", "effect": "ask" }
+  ]
+}

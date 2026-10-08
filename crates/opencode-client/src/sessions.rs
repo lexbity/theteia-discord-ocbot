@@ -144,6 +144,31 @@ pub struct ActiveSession {
     pub kind: String,
 }
 
+/// The effect of one permission rule in an opencode ruleset (wire enum
+/// `Permission.Effect`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PermissionEffect {
+    /// Allow matching without asking.
+    Allow,
+    /// Deny matching.
+    Deny,
+    /// Ask each time.
+    Ask,
+}
+
+/// One rule of the per-session permission ruleset (FR-42 /
+/// `Session.CreateInput.permissions`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PermissionRule {
+    /// The action/tool, e.g. `bash`, `read`, `write`.
+    pub action: String,
+    /// The resource pattern, e.g. `git push*`.
+    pub resource: String,
+    /// The effect.
+    pub effect: PermissionEffect,
+}
+
 /// The request body of `POST /api/session`.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct CreateSession {
@@ -152,6 +177,9 @@ pub struct CreateSession {
     /// Optional title.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Optional per-session permission ruleset (FR-42).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<Vec<PermissionRule>>,
 }
 
 impl CreateSession {
@@ -162,6 +190,7 @@ impl CreateSession {
                 directory: directory.into(),
             },
             title: None,
+            permissions: None,
         }
     }
 }
@@ -202,6 +231,16 @@ impl Client {
         directory: Option<&str>,
         title: Option<&str>,
     ) -> Result<SessionInfo, OcError> {
+        self.create_session_with(directory, title, None).await
+    }
+
+    /// Create a session with an optional per-session permission ruleset (FR-42).
+    pub async fn create_session_with(
+        &self,
+        directory: Option<&str>,
+        title: Option<&str>,
+        permissions: Option<&[PermissionRule]>,
+    ) -> Result<SessionInfo, OcError> {
         let mut body = CreateSession::default();
         if let Some(directory) = directory {
             body.location = LocationRef {
@@ -209,6 +248,16 @@ impl Client {
             };
         }
         body.title = title.map(str::to_owned);
+        body.permissions = permissions.map(|rules| {
+            rules
+                .iter()
+                .map(|rule| PermissionRule {
+                    action: rule.action.clone(),
+                    resource: rule.resource.clone(),
+                    effect: rule.effect,
+                })
+                .collect()
+        });
         let response: Data<SessionInfo> = self.post(paths::SESSION, &body).await?;
         Ok(response.data)
     }
@@ -269,5 +318,43 @@ mod tests {
         assert_eq!(session.id, "ses_z");
         assert_eq!(session.directory(), None);
         assert!(session.is_root());
+    }
+
+    #[test]
+    fn create_session_omits_permissions_unless_provided() {
+        use super::{CreateSession, LocationRef, PermissionEffect, PermissionRule};
+
+        fn body(permissions: Option<&[PermissionRule]>) -> serde_json::Value {
+            let request = CreateSession {
+                location: LocationRef {
+                    directory: "/tmp/x".to_owned(),
+                },
+                title: None,
+                permissions: permissions.map(<[PermissionRule]>::to_vec),
+            };
+            serde_json::to_value(&request).expect("serialize")
+        }
+
+        let plain = body(None);
+        assert!(
+            !plain
+                .as_object()
+                .expect("object")
+                .contains_key("permissions"),
+            "no ruleset field when FR-42 is off: {plain}"
+        );
+
+        let rules = [PermissionRule {
+            action: "bash".to_owned(),
+            resource: "git push*".to_owned(),
+            effect: PermissionEffect::Ask,
+        }];
+        let with_rules = body(Some(&rules));
+        let permissions = with_rules["permissions"].as_array().expect("array").clone();
+        assert_eq!(
+            permissions[0],
+            serde_json::json!({ "action": "bash", "resource": "git push*", "effect": "ask" }),
+            "the wire shape of Permission.Rule"
+        );
     }
 }

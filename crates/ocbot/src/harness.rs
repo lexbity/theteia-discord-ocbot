@@ -49,6 +49,8 @@ pub async fn run_from_env() -> Result<(), String> {
         store: store.clone(),
         opencode: Arc::new(DeadOpenCode),
         git: Arc::new(GitAdapter::new()),
+        clock: Arc::new(crate::adapters::clock::SystemClock),
+        permission_ruleset: None,
         discord: Arc::new(NullDiscord {
             next: std::sync::atomic::AtomicU64::new(1),
         }),
@@ -149,6 +151,7 @@ impl OpenCodePort for DeadOpenCode {
         &self,
         _directory: &Path,
         _title: Option<&str>,
+        _permissions: Option<&[ocbot_core::ports::PermissionRule]>,
     ) -> Result<SessionId, OcError> {
         Ok("ses_harness".to_owned())
     }
@@ -181,6 +184,15 @@ impl OpenCodePort for DeadOpenCode {
         _session_id: &str,
         _gate_id: &str,
         _decision: GateDecision,
+    ) -> Result<(), OcError> {
+        Ok(())
+    }
+
+    async fn reply_form(
+        &self,
+        _session_id: &str,
+        _form_id: &str,
+        _answer: serde_json::Value,
     ) -> Result<(), OcError> {
         Ok(())
     }

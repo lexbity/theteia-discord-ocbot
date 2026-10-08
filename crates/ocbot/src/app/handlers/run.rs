@@ -224,7 +224,11 @@ async fn send_now(
     } else {
         let session = ctx
             .opencode
-            .create_session(&directory, Some(&action.label))
+            .create_session(
+                &directory,
+                Some(&action.label),
+                ctx.permission_ruleset.as_deref(),
+            )
             .await?;
         ctx.store.upsert_seen(&session, Some(&dir_text)).await?;
         session

@@ -87,7 +87,7 @@ async fn slow_git_times_out_and_gets_killed() {
     // A "git" that sleeps forever (fake, scripted). The adapter must time out
     // and kill it within the configured budget (R-9).
     let fake = tmp.path().join("fake-git");
-    std::fs::write(&fake, "#!/bin/sh\nsleep 30\nexit 0\n").expect("write fake git");
+    std::fs::write(&fake, "#!/bin/sh\nsleep 300\nexit 0\n").expect("write fake git");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -96,14 +96,29 @@ async fn slow_git_times_out_and_gets_killed() {
         std::fs::set_permissions(&fake, permissions).expect("chmod");
     }
 
-    let slow_git = GitAdapter::with_bin(fake, Duration::from_millis(300));
+    let slow_git = GitAdapter::with_bin(fake, Duration::from_millis(400));
     let repo = tmp.path().join("r3");
     std::fs::create_dir_all(&repo).expect("mkdir");
-    let error = slow_git
-        .diff_stat(&repo, "HEAD")
-        .await
-        .expect_err("must time out");
-    assert!(matches!(error, GitError::Timeout { .. }), "error: {error}");
+    // A freshly written script can transiently fail `exec` with ETXTBSY when
+    // test binaries run under heavy parallel load (a harness artifact, not an
+    // adapter bug). The claim under test is the *timeout*; a transient spawn
+    // collision is retried, never accepted as the outcome.
+    let mut attempt = 0;
+    loop {
+        assert!(attempt < 3, "three transient spawn collisions in a row");
+        attempt += 1;
+        let error = slow_git
+            .diff_stat(&repo, "HEAD")
+            .await
+            .expect_err("must time out");
+        match error {
+            GitError::Timeout { .. } => break,
+            GitError::Spawn { .. } => {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            other @ GitError::Command { .. } => panic!("expected timeout, got {other}"),
+        }
+    }
 }
 
 #[tokio::test]

@@ -40,8 +40,8 @@ pub use messages::{
 };
 pub use prompt::{Admission, InterruptResult};
 pub use sessions::{
-    ActiveSession, Activity, CacheUsage, CreateSession, LocationRef, SessionInfo, SessionTime,
-    TokenUsage,
+    ActiveSession, Activity, CacheUsage, CreateSession, LocationRef, PermissionEffect,
+    PermissionRule, SessionInfo, SessionTime, TokenUsage,
 };
 
 use std::time::Duration;

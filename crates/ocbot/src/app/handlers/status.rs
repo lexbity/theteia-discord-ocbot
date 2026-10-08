@@ -27,8 +27,10 @@ pub async fn execute(ctx: &Arc<AppContext>, source: &InteractionSource) -> Resul
 
     let running = ctx.store.running_actions().await?;
     let locks = ctx.store.locked_projects().await?;
+    let pending_gates = ctx.store.pending_gates().await?;
     ctx.metrics
         .set_locks_held(u64::try_from(locks.len()).unwrap_or(u64::MAX));
+    ctx.metrics.set_gate_pending(pending_gates.len());
 
     let now = now_unix();
     let mut content = String::from("**ocbot status**\n");
@@ -61,6 +63,17 @@ pub async fn execute(ctx: &Arc<AppContext>, source: &InteractionSource) -> Resul
             lock.dir,
             lock.lock_holder.as_deref().unwrap_or("?"),
             lock.lock_since.unwrap_or_default(),
+        );
+    }
+
+    let _ = writeln!(content, "pending gates: {}", pending_gates.len());
+    for gate in &pending_gates {
+        let _ = writeln!(
+            content,
+            "  · #{} {} — session {}",
+            gate.id,
+            gate.kind,
+            gate.session_id.as_deref().unwrap_or("?"),
         );
     }
 

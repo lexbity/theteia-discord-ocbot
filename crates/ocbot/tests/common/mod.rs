@@ -19,8 +19,8 @@ use async_trait::async_trait;
 
 use ocbot_core::outcome::{AssistantSnapshot, TokenCounts};
 use ocbot_core::ports::{
-    Activity, GateDecision, GateRequest, GitPort, HookFailure, OpenCodePort, PortSession,
-    PromptAdmission, ServerFacts, SessionId,
+    Activity, Clock, GateDecision, GateRequest, GitPort, HookFailure, OpenCodePort, PermissionRule,
+    PortSession, PromptAdmission, ServerFacts, SessionId,
 };
 use ocbot_core::{GitError, OcError, OutgoingMessage};
 
@@ -51,6 +51,8 @@ pub enum Call {
     PendingGates,
     /// `reply_gate(session, gate, decision)`
     ReplyGate(String, String, GateDecision),
+    /// `reply_form(session, form, answer)`
+    ReplyForm(String, String, serde_json::Value),
     /// git: `is_repo(dir)`
     GitIsRepo(String),
     /// git: `head(dir)`
@@ -84,8 +86,15 @@ pub struct FakeOpenCodeInner {
     pub activities: HashMap<String, Activity>,
     pub snapshots: HashMap<String, AssistantSnapshot>,
     pub gates: Vec<GateRequest>,
+    pub sessions: Vec<PortSession>,
     pub sessions_created: Vec<String>,
     pub unreachable: bool,
+    /// When set, `reply_gate`/`reply_form` return this many transport failures
+    /// first (retry test).
+    pub transport_failures_remaining: u64,
+    /// When set, `reply_gate`/`reply_form` answer with an "unknown request"
+    /// 404 (FR-23 success path).
+    pub reply_404: bool,
 }
 
 /// A `Clone`-able fake opencode port.
@@ -132,6 +141,27 @@ impl FakeOpenCode {
             }),
         }
     }
+
+    /// Script the pending gates served to `pending_gates`.
+    pub fn set_gates(&self, gates: Vec<GateRequest>) {
+        self.inner().gates = gates;
+    }
+
+    /// Script the session list served to `list_sessions` (gate attribution).
+    pub fn set_sessions(&self, sessions: Vec<PortSession>) {
+        self.inner().sessions = sessions;
+    }
+
+    /// Make the next `transport_failures_remaining` replies fail with a
+    /// transport error (tests the FR-23 retry).
+    pub fn fail_next_replies(&self, failures: u64) {
+        self.inner().transport_failures_remaining = failures;
+    }
+
+    /// Make replies answer "unknown request" (404) — the FR-23 success path.
+    pub fn reply_unknown(&self) {
+        self.inner().reply_404 = true;
+    }
 }
 
 impl Default for FakeOpenCode {
@@ -155,7 +185,14 @@ impl OpenCodePort for FakeOpenCode {
 
     async fn list_sessions(&self, root_only: bool) -> Result<Vec<PortSession>, OcError> {
         self.inner().calls.push(Call::ListSessions(root_only));
-        Ok(Vec::new())
+        let sessions = self.inner().sessions.clone();
+        if root_only {
+            return Ok(sessions
+                .into_iter()
+                .filter(|session| session.parent_id.is_none())
+                .collect());
+        }
+        Ok(sessions)
     }
 
     async fn activity(&self, session_id: &str) -> Result<Activity, OcError> {
@@ -174,6 +211,7 @@ impl OpenCodePort for FakeOpenCode {
         &self,
         directory: &Path,
         title: Option<&str>,
+        _permissions: Option<&[PermissionRule]>,
     ) -> Result<SessionId, OcError> {
         let dir = directory.display().to_string();
         self.inner()
@@ -225,6 +263,37 @@ impl OpenCodePort for FakeOpenCode {
             gate_id.to_owned(),
             decision,
         ));
+        self.fail_or_404()
+    }
+
+    async fn reply_form(
+        &self,
+        session_id: &str,
+        form_id: &str,
+        answer: serde_json::Value,
+    ) -> Result<(), OcError> {
+        self.inner().calls.push(Call::ReplyForm(
+            session_id.to_owned(),
+            form_id.to_owned(),
+            answer,
+        ));
+        self.fail_or_404()
+    }
+}
+
+impl FakeOpenCode {
+    fn fail_or_404(&self) -> Result<(), OcError> {
+        let mut inner = self.inner();
+        if inner.transport_failures_remaining > 0 {
+            inner.transport_failures_remaining -= 1;
+            return Err(OcError::Transport("flaky transport".to_owned()));
+        }
+        if inner.reply_404 {
+            return Err(OcError::Api {
+                status: 404,
+                message: "unknown request".to_owned(),
+            });
+        }
         Ok(())
     }
 }
@@ -523,10 +592,40 @@ pub fn context(
     operator: u64,
     ops_channel: Option<u64>,
 ) -> Arc<AppContext> {
+    context_with(
+        store,
+        opencode,
+        git,
+        Arc::new(ocbot::adapters::clock::SystemClock),
+        None,
+        discord,
+        operator,
+        ops_channel,
+    )
+}
+
+/// A context builder with the injected clock and optional permission ruleset
+/// (the P4 fake-clock tests use this).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "test harness context builder: every parameter is a deliberate injection"
+)]
+pub fn context_with(
+    store: StoreHandle,
+    opencode: Arc<dyn OpenCodePort>,
+    git: Arc<dyn GitPort>,
+    clock: Arc<dyn Clock>,
+    permission_ruleset: Option<Vec<PermissionRule>>,
+    discord: Arc<dyn DiscordPort>,
+    operator: u64,
+    ops_channel: Option<u64>,
+) -> Arc<AppContext> {
     Arc::new(AppContext {
         store,
         opencode,
         git,
+        clock,
+        permission_ruleset,
         discord,
         metrics: Arc::new(Metrics::new()),
         guard: Guard {
@@ -535,6 +634,32 @@ pub fn context(
         },
         templates: workspace_templates(),
     })
+}
+
+/// A scriptable clock for the re-ping policy tests (P4).
+#[derive(Clone)]
+pub struct FakeClock {
+    now: Arc<std::sync::Mutex<i64>>,
+}
+
+impl FakeClock {
+    /// Start the fake at a fixed unix timestamp.
+    pub fn at(epoch_secs: i64) -> Self {
+        Self {
+            now: Arc::new(std::sync::Mutex::new(epoch_secs)),
+        }
+    }
+
+    /// Advance the fake clock.
+    pub fn advance(&self, secs: i64) {
+        *self.now.lock().expect("clock lock") += secs;
+    }
+}
+
+impl Clock for FakeClock {
+    fn now(&self) -> i64 {
+        *self.now.lock().expect("clock lock")
+    }
 }
 
 /// Raw `git status --porcelain` output (test-only diagnostic).
@@ -620,6 +745,133 @@ pub async fn seed_reported(
         "running → reported"
     );
     Seeded { run_id, action_id }
+}
+
+/// Seed an action still in `running` (gate attribution targets running
+/// actions; a blocked action must stay `running`).
+pub async fn seed_running(
+    store: &ocbot::adapters::store::StoreHandle,
+    dir: &str,
+    work_branch: Option<&str>,
+    base_sha: Option<&str>,
+    channel: u64,
+    label: &str,
+    session: &str,
+) -> Seeded {
+    store
+        .upsert_project(dir, work_branch, base_sha)
+        .await
+        .expect("upsert project");
+    let run_id = store.insert_run(dir, "free").await.expect("run");
+    let action_id = store
+        .insert_action(
+            run_id,
+            Some(i64::try_from(channel).expect("channel fits i64")),
+            label,
+            "prompt",
+            1,
+        )
+        .await
+        .expect("action");
+    assert!(
+        store
+            .begin_send(action_id, dir, session, base_sha, false)
+            .await
+            .expect("send"),
+        "begin_send takes the lock"
+    );
+    Seeded { run_id, action_id }
+}
+
+/// A permission gate with a plausible verbatim payload.
+pub fn permission_gate(
+    id: &str,
+    session: Option<&str>,
+    action: &str,
+    resources: &[&str],
+) -> ocbot_core::GateRequest {
+    let payload = serde_json::json!({
+        "id": id,
+        "sessionID": session,
+        "action": action,
+        "resources": resources,
+        "save": ["once"],
+        "message": null,
+        "metadata": {}
+    });
+    ocbot_core::GateRequest {
+        id: id.to_owned(),
+        session_id: session.map(str::to_owned),
+        kind: ocbot_core::GateKind::Permission {
+            action: action.to_owned(),
+            resources: resources
+                .iter()
+                .map(|resource| (*resource).to_owned())
+                .collect(),
+            message: None,
+        },
+        payload,
+    }
+}
+
+/// A free-text form field.
+pub fn text_field(key: &str, label: Option<&str>) -> ocbot_core::FormField {
+    ocbot_core::FormField {
+        key: key.to_owned(),
+        label: label.map(str::to_owned),
+        kind: ocbot_core::FormFieldKind::Text,
+    }
+}
+
+/// A single-choice form field.
+pub fn choice_field(key: &str, values: &[(&str, &str)]) -> ocbot_core::FormField {
+    ocbot_core::FormField {
+        key: key.to_owned(),
+        label: None,
+        kind: ocbot_core::FormFieldKind::Choice(
+            values
+                .iter()
+                .map(|(value, label)| ocbot_core::FormOption {
+                    value: (*value).to_owned(),
+                    label: (*label).to_owned(),
+                })
+                .collect(),
+        ),
+    }
+}
+
+/// A yes/no form field.
+pub fn boolean_field(key: &str) -> ocbot_core::FormField {
+    ocbot_core::FormField {
+        key: key.to_owned(),
+        label: None,
+        kind: ocbot_core::FormFieldKind::Boolean,
+    }
+}
+
+/// A form gate with a verbatim payload carrying the typed fields.
+pub fn form_gate(
+    id: &str,
+    session: &str,
+    title: &str,
+    fields: Vec<ocbot_core::FormField>,
+) -> ocbot_core::GateRequest {
+    let payload = serde_json::json!({
+        "id": id,
+        "sessionID": session,
+        "title": title,
+        "metadata": {},
+        "fields": fields
+    });
+    ocbot_core::GateRequest {
+        id: id.to_owned(),
+        session_id: Some(session.to_owned()),
+        kind: ocbot_core::GateKind::Form {
+            title: title.to_owned(),
+            fields,
+        },
+        payload,
+    }
 }
 
 /// Initialize a git repo with one commit and return its path.

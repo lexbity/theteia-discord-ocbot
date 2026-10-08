@@ -126,4 +126,19 @@ fi
 probe "G11-command" 'std::process::Command' 'let c = std::process::Command::new("git");'
 probe "G11-node" 'child_process' 'const c = child_process.spawn("git");'
 
+# --- Phase 4 appended gates (spec Part 2, Phase 4) -------------------------
+# G12: FR-21 floor — the shipped baseline guards the dangerous families.
+for needle in "git push" "sudo" "rm -rf" ".ssh"; do
+  if ! grep -q "$needle" config/opencode.permissions.jsonc; then
+    fail "G12: baseline is missing the $needle guard (FR-21)"
+  fi
+  probe "G12" "$needle" "resource: \"$needle*\","
+done
+
+# G13: FR-42 ships default-off (D-R6); an on-by-default is a config fault.
+if grep -rn "PER_SESSION_RULESET=true\|per_session_ruleset = true" crates/ 2>/dev/null; then
+  fail "G13: FR-42 per-session ruleset must stay default-off (D-R6)"
+fi
+probe "G13" "per_session_ruleset = true" 'per_session_ruleset = true'
+
 echo "gates: OK"

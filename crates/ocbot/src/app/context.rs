@@ -6,7 +6,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use ocbot_core::OutgoingMessage;
-use ocbot_core::ports::{GitPort, OpenCodePort};
+use ocbot_core::ports::{Clock, GitPort, OpenCodePort, PermissionRule};
 
 use crate::adapters::store::StoreHandle;
 use crate::app::guard::Guard;
@@ -46,6 +46,11 @@ pub struct AppContext {
     pub opencode: Arc<dyn OpenCodePort>,
     /// The git port (adapter in prod, fake in tests).
     pub git: Arc<dyn GitPort>,
+    /// The injected time source (P4: the re-ping policy is fake-clock tested).
+    pub clock: Arc<dyn Clock>,
+    /// The permission baseline, attached to created sessions only when FR-42
+    /// is enabled (D-R6: off by default).
+    pub permission_ruleset: Option<Vec<PermissionRule>>,
     /// The Discord message surface.
     pub discord: Arc<dyn DiscordPort>,
     /// Metrics registry.

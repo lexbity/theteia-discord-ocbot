@@ -25,3 +25,12 @@ metrics_bind = "127.0.0.1:9464"
 
 # Per-command git timeout (R-9).
 git_timeout_secs = 10
+
+# Gate lifecycle: poll interval and re-ping cadence for unanswered gates (P4).
+# gate_poll_interval_ms = 2000
+# perm_reping_minutes = 10
+
+# FR-42 (off by default): attach config/opencode.permissions.jsonc to each
+# created session. Keep off until S-3 confirms combine semantics (D-R6).
+# per_session_ruleset = false
+# permissions_file = "config/opencode.permissions.jsonc"
