@@ -105,7 +105,12 @@ jobs:
       - run: >-
           cargo mutants
           --file crates/ocbot-core/src/state.rs
-          --file crates/ocbot-core/src/render.rs
+          --file crates/ocbot-core/src/render/mod.rs
+          --file crates/ocbot-core/src/render/report.rs
+          --file crates/ocbot-core/src/render/gate.rs
+          --file crates/ocbot-core/src/render/browser.rs
+          --file crates/ocbot-core/src/render/redact.rs
+          --file crates/ocbot-core/src/render/label.rs
           --file crates/ocbot-core/src/history.rs
           --file crates/ocbot-core/src/plan.rs
           --file crates/ocbot-core/src/paths.rs

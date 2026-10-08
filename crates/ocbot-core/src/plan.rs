@@ -13,6 +13,8 @@
 
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 
+use crate::render::collapse_whitespace;
+
 /// Default minimum heading depth included in the picker (spec P12: 2–3).
 pub const DEFAULT_HEADING_MIN: u32 = 2;
 /// Default maximum heading depth included in the picker (spec P12: 2–3).
@@ -196,24 +198,6 @@ fn clean_item(raw: &str) -> String {
         .find_map(|marker| trimmed.strip_prefix(marker))
         .map_or(trimmed, str::trim_start);
     collapse_whitespace(without_checkbox)
-}
-
-/// Collapse every whitespace run to a single space and trim the ends.
-fn collapse_whitespace(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut pending_space = false;
-    for ch in text.chars() {
-        if ch.is_whitespace() {
-            pending_space = !out.is_empty();
-        } else {
-            if pending_space {
-                out.push(' ');
-            }
-            pending_space = false;
-            out.push(ch);
-        }
-    }
-    out
 }
 
 #[cfg(test)]
