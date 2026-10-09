@@ -11,6 +11,7 @@
 //! git — by dependency graph, not by discipline.
 
 pub mod error;
+pub mod events;
 pub mod gates;
 pub mod history;
 pub mod outcome;
@@ -22,6 +23,10 @@ pub mod state;
 pub mod templates;
 
 pub use error::{FsError, GitError, OcError};
+pub use events::{
+    HintKind, OcEvent, ReadOutcome, TAXONOMY, TaxonomyRow, WakeInput, WakeKey, WakeOutput,
+    WakePolicy, WakeState, classify_event,
+};
 pub use gates::{
     FormField, FormFieldKind, FormOption, FormPlaybook, GateDecision, GateKind, GateRequest,
     MAX_FORM_FIELDS, form_playbook, form_renderable,
