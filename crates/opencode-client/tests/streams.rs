@@ -54,7 +54,7 @@ async fn durable_log_stream_parses_the_head_marker_then_ends() {
 }
 
 #[tokio::test]
-async fn global_event_stream_parses_durable_positions_and_skips_heartbeats() {
+async fn global_event_stream_yields_typed_frames_and_skips_heartbeats() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/event"))
@@ -65,17 +65,26 @@ async fn global_event_stream_parses_durable_positions_and_skips_heartbeats() {
     let client = Client::new(&server.uri(), "secret").expect("client");
     let mut stream = client.subscribe_events().await.expect("stream opens");
 
-    let connected = stream.next().await.expect("event").expect("decodes");
-    assert_eq!(connected.kind, "server.connected");
+    let connected = stream.next_frame().await.expect("frame").expect("decodes");
+    assert_eq!(connected.event, "server.connected");
+    assert_eq!(connected.session_id, None, "global kind is unkeyed");
 
     // The heartbeat comment frame between events must be skipped.
-    let enqueued = stream.next().await.expect("event").expect("decodes");
-    assert_eq!(enqueued.kind, "session.inbox.enqueued");
-    assert!(enqueued.created.is_some(), "created timestamp parsed");
-    let durable = enqueued.durable.expect("durable position");
-    assert_eq!(durable.aggregate_id, "ses_ee76bda2dffexMwBaYTKuT51Me");
-    assert_eq!(durable.seq, 11);
-    assert_eq!(durable.version, Some(1));
+    let enqueued = stream.next_frame().await.expect("frame").expect("decodes");
+    assert_eq!(enqueued.event, "session.inbox.enqueued");
+    assert_eq!(
+        enqueued.session_id,
+        Some("ses_ee76bda2dffexMwBaYTKuT51Me".to_owned())
+    );
+    // The full lifecycle drains to a clean end, every frame keyed by the
+    // session, heartbeats skipped.
+    while let Ok(Some(frame)) = stream.next_frame().await {
+        assert_eq!(
+            frame.session_id,
+            Some("ses_ee76bda2dffexMwBaYTKuT51Me".to_owned())
+        );
+    }
+    assert_eq!(stream.decode_failures(), 0, "fixture decodes cleanly");
 }
 
 /// S-10 fixture (SPEC-003 W0): every frame kind of the scripted spike run
@@ -95,8 +104,12 @@ async fn scripted_event_fixture_decodes_every_observed_kind() {
     let mut stream = client.subscribe_events().await.expect("stream opens");
 
     let mut kinds = Vec::new();
-    while let Some(Ok(event)) = stream.next().await {
-        kinds.push(event.kind);
+    let mut keyed = 0;
+    while let Ok(Some(frame)) = stream.next_frame().await {
+        if frame.session_id.is_some() {
+            keyed += 1;
+        }
+        kinds.push(frame.event);
     }
     assert_eq!(kinds.first().map(String::as_str), Some("server.connected"));
     for expected in [
@@ -113,6 +126,7 @@ async fn scripted_event_fixture_decodes_every_observed_kind() {
             "events_scripted.sse missing {expected}"
         );
     }
+    assert!(keyed > 0, "session kinds carry their session key");
 }
 
 /// S-10 quiet fixture: a connect frame followed only by heartbeat comments
@@ -130,12 +144,13 @@ async fn quiet_event_fixture_yields_only_the_connect_frame() {
     let client = Client::new(&server.uri(), "secret").expect("client");
     let mut stream = client.subscribe_events().await.expect("stream opens");
 
-    let connected = stream.next().await.expect("event").expect("decodes");
-    assert_eq!(connected.kind, "server.connected");
+    let connected = stream.next_frame().await.expect("frame").expect("decodes");
+    assert_eq!(connected.event, "server.connected");
     assert!(
-        stream.next().await.is_none(),
+        stream.next_frame().await.expect("clean end").is_none(),
         "heartbeats are skipped; the stream ends cleanly"
     );
+    assert_eq!(stream.decode_failures(), 0);
 }
 
 #[tokio::test]
@@ -204,4 +219,110 @@ async fn event_stream_reports_a_non_success_status_with_a_non_json_body() {
         }
         other => panic!("expected Api, got {other:?}"),
     }
+}
+
+// --- adversarial battery (SPEC-003 W2, P-24): garbage is skipped or counted,
+// never fatal, never a panic. ------------------------------------------------
+
+/// One adversarial body served on `/api/event`; returns what the typed stream
+/// yields and how many decode failures it counted.
+async fn adversarial_stream_yields(body: String) -> (Vec<opencode_v2_client::EventFrame>, u64) {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/event"))
+        .respond_with(sse(body))
+        .mount(&server)
+        .await;
+    let client = Client::new(&server.uri(), "secret").expect("client");
+    let mut stream = client.subscribe_events().await.expect("stream opens");
+    let mut frames = Vec::new();
+    while let Ok(Some(frame)) = stream.next_frame().await {
+        frames.push(frame);
+    }
+    (frames, stream.decode_failures())
+}
+
+#[tokio::test]
+async fn truncated_json_is_counted_and_skipped() {
+    let (frames, failures) = adversarial_stream_yields(
+        "data: {\"type\":\"session.created\",\"data\":{\"sessionID\":\"ses_a\"}\n\n\
+         data: {\"type\":\"session.deleted\",\"data\":{\"sessionID\":\"ses_a\"}}\n\n"
+            .to_owned(),
+    )
+    .await;
+    assert_eq!(frames.len(), 1, "only the well-formed frame yields");
+    assert_eq!(frames[0].event, "session.deleted");
+    assert_eq!(failures, 1, "the truncated frame counted exactly once");
+}
+
+#[tokio::test]
+async fn data_without_a_discriminator_is_counted_and_skipped() {
+    let (frames, failures) = adversarial_stream_yields(
+        "data: {\"created\":1791504777105}\n\n\
+         data: {\"type\":\"server.connected\",\"data\":{}}\n\n"
+            .to_owned(),
+    )
+    .await;
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0].event, "server.connected");
+    assert_eq!(failures, 1);
+}
+
+#[tokio::test]
+async fn an_sse_event_field_substitutes_for_a_missing_discriminator() {
+    let (frames, failures) =
+        adversarial_stream_yields("event: custom.kind\ndata: {}\n\n".to_owned()).await;
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0].event, "custom.kind");
+    assert_eq!(failures, 0, "a discriminator via the SSE field is valid");
+}
+
+#[tokio::test]
+async fn an_event_field_with_no_data_at_all_yields_the_kind() {
+    let (frames, failures) = adversarial_stream_yields("event: bare.kind\n\n".to_owned()).await;
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0].event, "bare.kind");
+    assert_eq!(frames[0].session_id, None);
+    assert_eq!(failures, 0);
+}
+
+#[tokio::test]
+async fn empty_data_lines_are_plain_heartbeats() {
+    let (frames, failures) =
+        adversarial_stream_yields(": keep-alive\n\ndata: \n\n".to_owned()).await;
+    assert!(frames.is_empty());
+    assert_eq!(failures, 0, "silence is not corruption");
+}
+
+#[tokio::test]
+async fn garbage_between_good_frames_never_kills_the_connection() {
+    let (frames, failures) = adversarial_stream_yields(
+        "data: one\n\ndata: []\n\ndata: {\"type\":\"a\"}\n\ndata: null\n\ndata: {\"type\":\"b\"}\n\n"
+            .to_owned(),
+    )
+    .await;
+    assert_eq!(
+        frames
+            .iter()
+            .map(|frame| frame.event.as_str())
+            .collect::<Vec<_>>(),
+        vec!["a", "b"]
+    );
+    assert_eq!(failures, 3);
+}
+
+#[tokio::test]
+async fn decode_failures_accumulate_past_the_drift_burst_threshold() {
+    let mut body = String::new();
+    for _ in 0..40 {
+        body.push_str("data: not json\n\n");
+    }
+    let (frames, failures) = adversarial_stream_yields(body).await;
+    assert!(frames.is_empty());
+    assert_eq!(failures, 40);
+    assert!(
+        failures > u64::from(opencode_v2_client::DECODE_BURST_RECONNECT),
+        "the burst threshold ({}) is crossed by 40 garbage frames",
+        opencode_v2_client::DECODE_BURST_RECONNECT
+    );
 }

@@ -9,7 +9,7 @@ suite.
 
 | opencode server version | vendored spec | fixture set | client version |
 |---|---|---|---|
-| `2.0.24` | `spec/openapi-2.0.24.json` (117 paths / 141 ops, OpenAPI 3.1) | `fixtures/v2/2.0.24/` (20 files) | `0.1.0` |
+| `2.0.24` | `spec/openapi-2.0.24.json` (117 paths / 141 ops, OpenAPI 3.1) | `fixtures/v2/2.0.24/` (19 files) | `0.1.0` |
 
 **Toolchain pin:** `rust-toolchain.toml` → `1.98.1` (bumps only at phase
 boundaries).
@@ -31,14 +31,15 @@ boundaries).
 | `GET /api/form` | merged in `Client::pending_gates` |
 | `POST /api/session/{id}/form/{fid}/reply` | `Client::reply_form` |
 | `GET /api/experimental/session/{id}/log` | `Client::log_after` (SSE; sync-marker only in 2.0.24 — see SPIKE-0) |
-| `GET /api/event` | `Client::subscribe_events` (volatile SSE; unconsumed as of 2.0.24 pin; doorbell contract under SPEC-003, taxonomy in `devdocs/compat/EVENTS.md`) |
+| `GET /api/event` | `Client::subscribe_events` → typed tolerant `EventFrame` headers (`src/events.rs`); bodies never retained; undecodable frames counted and skipped (P-24); doorbell contract under SPEC-003, taxonomy in `devdocs/compat/EVENTS.md` |
 
 The drift test (`tests/drift.rs`) fails CI if any of these paths disappears
 from the vendored spec (AC-15).
 
 ## Upgrading the pin
 
-1. Update `PINNED_SERVER_VERSION` and this table.
+1. Update the **Current pin** table (it is the pin record since W2; there is
+   no separate version const).
 2. Replace `spec/openapi-2.0.24.json` with the new version's spec; rename to
    `openapi-<version>.json` and update `tests/common/mod.rs` paths.
 3. Re-record fixtures under `fixtures/v2/<version>/` with the spike.

@@ -19,6 +19,7 @@
 #![forbid(unsafe_code)]
 
 mod error;
+mod events;
 mod gates;
 mod info;
 mod log;
@@ -27,13 +28,16 @@ mod prompt;
 mod sessions;
 
 pub use error::OcError;
+pub use events::{
+    DECODE_BURST_RECONNECT, DECODE_BURST_WINDOW_MS, EventFrame, EventStream, SseFrame,
+};
 pub use gates::{
     FormBooleanField, FormExternalField, FormField, FormInfo, FormMultiselectField,
     FormNumberField, FormOption, FormStringField, GateDecision, GateKind, GateRequest,
     PermissionRequest,
 };
 pub use info::{ServerCapabilities, ServerInfo, ServerPaths, ensure_supported};
-pub use log::{Durable, Event, EventStream, LogEntry, LogStream, SseFrame};
+pub use log::{LogEntry, LogStream};
 pub use messages::{
     AssistantMessage, ContentPart, Finish, IdleMessage, Message, StructuredError, TimeInfo,
     UserMessage,
@@ -54,9 +58,6 @@ pub const AUTH_USERNAME: &str = "opencode";
 
 /// Default per-request timeout, in seconds.
 pub const DEFAULT_TIMEOUT_SECS: u64 = 10;
-
-/// The opencode server version Phase 0 pinned all fixtures against.
-pub const PINNED_SERVER_VERSION: &str = "2.0.24";
 
 /// A thin HTTP client for the opencode v2 API.
 ///

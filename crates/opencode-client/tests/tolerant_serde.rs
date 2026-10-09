@@ -39,6 +39,7 @@ fn deserialize_all(json: &str) {
     let _: Result<CacheUsage, _> = serde_json::from_str(json);
     let _: Result<ActiveSession, _> = serde_json::from_str(json);
     let _: Result<InterruptResult, _> = serde_json::from_str(json);
+    let _: Result<EventFrame, _> = serde_json::from_str(json);
 }
 
 /// Arbitrary raw strings (mostly not even JSON) must never panic.

@@ -192,7 +192,7 @@ mod s10 {
     use std::time::UNIX_EPOCH;
 
     use futures_util::StreamExt;
-    use opencode_v2_client::{AUTH_USERNAME, Activity, Client, Event, GateDecision, OcError};
+    use opencode_v2_client::{AUTH_USERNAME, Activity, Client, GateDecision, OcError};
 
     use super::{S10_QUIET_SECS, env};
 
@@ -211,19 +211,6 @@ mod s10 {
             now_ms(),
             session_id.unwrap_or("-")
         );
-    }
-
-    /// Extract the session key of an event: the payload's `sessionID`,
-    /// falling back to the durable aggregate id.
-    fn session_id_of(event: &Event) -> Option<&str> {
-        let payload = event.data.get("data").unwrap_or(&event.data);
-        if let Some(id) = payload.get("sessionID").and_then(|value| value.as_str()) {
-            return Some(id);
-        }
-        event
-            .durable
-            .as_ref()
-            .map(|durable| durable.aggregate_id.as_str())
     }
 
     /// One phase marker row (`unix_ms \t phase \t name`) into `markers.tsv`.
@@ -255,7 +242,7 @@ mod s10 {
             };
             loop {
                 let next = tokio::select! {
-                    item = stream.next() => item,
+                    item = stream.next_frame() => item,
                     () = tokio::time::sleep(Duration::from_millis(100)) => {
                         if stop.load(Ordering::Relaxed) {
                             return;
@@ -264,17 +251,21 @@ mod s10 {
                     }
                 };
                 match next {
-                    Some(Ok(event)) => {
-                        let bytes = event.data.to_string().len();
-                        log_frame(&event.kind, session_id_of(&event), bytes);
+                    Ok(Some(frame)) => {
+                        let bytes = frame.event.len()
+                            + frame
+                                .session_id
+                                .as_ref()
+                                .map_or(0, std::string::String::len);
+                        log_frame(&frame.event, frame.session_id.as_deref(), bytes);
                         if let Ok(mut counts) = counts.lock() {
-                            *counts.entry(event.kind.clone()).or_default() += 1;
+                            *counts.entry(frame.event.clone()).or_default() += 1;
                         }
                     }
-                    Some(Err(error)) => {
-                        println!("[transcript] decode error: {error}");
+                    Err(error) => {
+                        println!("[transcript] transport error: {error}");
                     }
-                    None => {
+                    Ok(None) => {
                         println!("[transcript] stream ended; resubscribing");
                         tokio::time::sleep(Duration::from_millis(500)).await;
                         break;

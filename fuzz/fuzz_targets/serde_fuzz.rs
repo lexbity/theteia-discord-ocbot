@@ -38,4 +38,5 @@ fuzz_target!(|data: &[u8]| {
     let _: Result<CacheUsage, _> = serde_json::from_str(utf8);
     let _: Result<ActiveSession, _> = serde_json::from_str(utf8);
     let _: Result<InterruptResult, _> = serde_json::from_str(utf8);
+    let _: Result<EventFrame, _> = serde_json::from_str(utf8);
 });
