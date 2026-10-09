@@ -47,6 +47,28 @@ impl HealthMonitor {
     }
 }
 
+/// Post one transition announcement to the ops/inbox channel. The shared
+/// edge-triggered post path (FR-38's reachability and SPEC-003 P-28's stream
+/// down/recovery both land here — one dedupe pattern, one post door).
+pub async fn announce(ctx: &Arc<AppContext>, up: bool, down_message: String, up_message: String) {
+    let Some(channel) = ctx.guard.inbox() else {
+        // No configured surface: the transition is still remembered by the
+        // caller's monitor, so a later recovery does not re-announce.
+        tracing::warn!(up, "health transition with no configured channel");
+        return;
+    };
+    let content = if up { up_message } else { down_message };
+    let message = OutgoingMessage {
+        content,
+        attachment: None,
+        components: Vec::new(),
+        mentioned_users: vec![ctx.guard.allowed_user_id],
+    };
+    if let Err(error) = ctx.discord.post(channel, &message).await {
+        tracing::warn!(error = %error, up, "health transition post failed");
+    }
+}
+
 /// Update the reachability gauge and, on a transition, post a single message to
 /// the ops/inbox channel. Returns whether a transition was announced.
 pub async fn record(ctx: &Arc<AppContext>, up: bool) -> Result<bool, AppError> {
@@ -54,24 +76,13 @@ pub async fn record(ctx: &Arc<AppContext>, up: bool) -> Result<bool, AppError> {
     if ctx.health.observe(up).is_none() {
         return Ok(false);
     }
-    let Some(channel) = ctx.guard.inbox() else {
-        // No configured surface: the transition is still remembered, so a later
-        // recovery does not re-announce the outage.
-        tracing::warn!(up, "health transition with no configured channel");
-        return Ok(true);
-    };
-    let content = if up {
-        "✅ opencode is reachable again".to_owned()
-    } else {
-        "⚠️ opencode is unreachable — new sends are paused until it returns (FR-38)".to_owned()
-    };
-    let message = OutgoingMessage {
-        content,
-        attachment: None,
-        components: Vec::new(),
-        mentioned_users: vec![ctx.guard.allowed_user_id],
-    };
-    ctx.discord.post(channel, &message).await?;
+    announce(
+        ctx,
+        up,
+        "⚠️ opencode is unreachable — new sends are paused until it returns (FR-38)".to_owned(),
+        "✅ opencode is reachable again".to_owned(),
+    )
+    .await;
     tracing::info!(up, "opencode reachability transition announced");
     Ok(true)
 }

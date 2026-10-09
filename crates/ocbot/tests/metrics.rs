@@ -102,7 +102,14 @@ async fn endpoint_exposes_every_family_after_a_scripted_scenario() {
     registry.set_locks_held(1);
     registry.set_lock_age_seconds(42);
     registry.set_log_lag_seconds(7);
-    registry.inc_stream_reconnect();
+    registry.inc_stream_reconnect("idle");
+    registry.set_stream_state(2);
+    registry.add_stream_live_ms(1500);
+    registry.inc_frame("session.reasoning.delta", true);
+    registry.inc_frame("mystery.kind", false);
+    registry.inc_frames_decode_failures_by(2);
+    registry.inc_frames_dropped();
+    registry.inc_probe_failure("watcher");
     registry.set_opencode_up(true);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -130,6 +137,14 @@ async fn endpoint_exposes_every_family_after_a_scripted_scenario() {
         "ocbot_lock_age_seconds",
         "ocbot_log_lag_seconds",
         "ocbot_stream_reconnects_total",
+        "ocbot_stream_reconnects_total{reason=\"idle\"}",
+        "ocbot_stream_state",
+        "ocbot_stream_live_seconds_total",
+        "ocbot_frames_total{kind=\"session.reasoning.delta\",mapped=\"true\"}",
+        "ocbot_frames_total{kind=\"mystery.kind\",mapped=\"false\"}",
+        "ocbot_frames_decode_failures_total",
+        "ocbot_frames_dropped_total",
+        "ocbot_probe_failures_total{loop=\"watcher\"}",
     ] {
         assert!(response.contains(needle), "missing metric family {needle}");
     }

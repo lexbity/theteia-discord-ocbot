@@ -14,9 +14,9 @@ use crate::adapters::clock::SystemClock;
 use crate::adapters::discord::{DiscordAdapter, shared_http, start_gateway};
 use crate::adapters::fs::FsAdapter;
 use crate::adapters::git::GitAdapter;
-use crate::adapters::opencode::OpenCodeAdapter;
+use crate::adapters::opencode::{OpenCodeAdapter, OpenCodeEventSource};
 use crate::adapters::store::StoreHandle;
-use crate::app::context::{AppContext, DiscordPort};
+use crate::app::context::{AppContext, DiscordPort, EventSource};
 use crate::app::degraded::HealthMonitor;
 use crate::app::doctor;
 use crate::app::gates_loop::GatesLoop;
@@ -26,6 +26,7 @@ use crate::app::logging;
 use crate::app::metrics::{self, Metrics};
 use crate::app::ops::OpsLoop;
 use crate::app::reconcile;
+use crate::app::supervisor::Supervisor;
 use crate::app::watcher::Watcher;
 use crate::config::{Config, Secrets, config_path};
 use ocbot_core::Redactor;
@@ -166,7 +167,8 @@ pub async fn start() -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let opencode: Arc<dyn OpenCodePort> = Arc::new(OpenCodeAdapter::new(client));
+    let client = Arc::new(client);
+    let opencode: Arc<dyn OpenCodePort> = Arc::new(OpenCodeAdapter::new(client.clone()));
     let discord_surface: Arc<dyn DiscordPort> =
         Arc::new(DiscordAdapter::new(shared_http(&token, operator), operator));
     let guard = Guard {
@@ -196,6 +198,12 @@ pub async fn start() -> ExitCode {
     if let Ok(counts) = store.action_counts_by_state().await {
         metrics.seed_actions(&counts);
     }
+
+    // Event-stream supervisor (SPEC-003 W3): behind `[events].enabled`; in
+    // pure-poll mode no task exists and no connection is attempted (FR-43).
+    let events_source: Arc<dyn EventSource> =
+        Arc::new(OpenCodeEventSource::new(client.clone(), metrics.clone()));
+    Supervisor::spawn_if_enabled(ctx.clone(), events_source, &config.events);
 
     let metrics_bind = config.metrics_bind.clone();
     {

@@ -105,6 +105,51 @@ pub struct Config {
     /// Regexes scrubbed from the inline report path (R-12).
     #[serde(default = "default_redact_patterns")]
     pub redact_patterns: Vec<String>,
+    /// The event-stream supervisor (SPEC-003 §4.7 `[events]`).
+    #[serde(default = "default_events")]
+    pub events: EventsConfig,
+}
+
+/// The `[events]` block: the stream supervisor's knobs (SPEC-003 §4.7). The
+/// `[wake]`/`[fallback]` blocks land in W4/W5; the final default surface is
+/// inverted once in W5 (P-30/P-31).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, default = "default_events")]
+pub struct EventsConfig {
+    /// false ⇒ pure-poll mode: no supervisor task, zero connection attempts.
+    pub enabled: bool,
+    /// Frame silence longer than this declares the connection dead (P-22);
+    /// S-10 measured heartbeats at h ≈ 14-30 s, so the recommended value is
+    /// the 20 s floor, not the §4.7 placeholder.
+    pub idle_deadline_secs: u64,
+    /// Reconnect backoff floor.
+    pub backoff_min_ms: u64,
+    /// Reconnect backoff ceiling (growth is exponential with ±20 % jitter).
+    pub backoff_max_ms: u64,
+    /// Down at least this long ⇒ exactly one Discord post; recovery ⇒ one.
+    pub announce_after_secs: u64,
+    /// Reconciles are coalesced to at most one per this interval (P-23).
+    pub reconcile_min_interval_secs: u64,
+}
+
+/// Serde default: the §4.7 spec defaults (the stream is on by default in W3+).
+fn default_events() -> EventsConfig {
+    EventsConfig::spec_defaults()
+}
+
+/// §4.7 defaults; S-10's heartbeat evidence pins `idle_deadline_secs` to 25.
+impl EventsConfig {
+    /// The spec defaults (§4.7, with the W0-retuned idle deadline).
+    pub fn spec_defaults() -> Self {
+        Self {
+            enabled: true,
+            idle_deadline_secs: 25,
+            backoff_min_ms: 1_000,
+            backoff_max_ms: 30_000,
+            announce_after_secs: 60,
+            reconcile_min_interval_secs: 5,
+        }
+    }
 }
 
 fn default_db() -> String {
@@ -336,6 +381,31 @@ impl Config {
             errors.push(format!("redact_patterns: {error}"));
         }
 
+        if self.events.idle_deadline_secs < 5 {
+            errors.push(format!(
+                "events.idle_deadline_secs must be >= 5, got {}",
+                self.events.idle_deadline_secs
+            ));
+        }
+        if self.events.backoff_min_ms > self.events.backoff_max_ms {
+            errors.push(format!(
+                "events.backoff_min_ms ({}) must not exceed events.backoff_max_ms ({})",
+                self.events.backoff_min_ms, self.events.backoff_max_ms
+            ));
+        }
+        if self.events.announce_after_secs < 1 {
+            errors.push(format!(
+                "events.announce_after_secs must be >= 1, got {}",
+                self.events.announce_after_secs
+            ));
+        }
+        if self.events.reconcile_min_interval_secs < 1 {
+            errors.push(format!(
+                "events.reconcile_min_interval_secs must be >= 1, got {}",
+                self.events.reconcile_min_interval_secs
+            ));
+        }
+
         let operator = self.allowed_user_id.or_else(|| {
             std::env::var(ENV_ALLOWED_USER_ID)
                 .ok()
@@ -510,7 +580,7 @@ use std::os::unix::fs::PermissionsExt;
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, Secrets, default_redact_patterns, is_loopback};
+    use super::{Config, EventsConfig, Secrets, default_redact_patterns, is_loopback};
     use url::Url;
 
     const GOOD: &str = r#"
@@ -568,6 +638,7 @@ typo_key = 1
             stall_minutes: 45,
             ops_poll_interval_ms: 30_000,
             redact_patterns: default_redact_patterns(),
+            events: EventsConfig::spec_defaults(),
         };
         let errors = config.validate().expect_err("multiple errors");
         assert!(errors.len() >= 3, "errors: {errors:?}");
@@ -645,6 +716,44 @@ typo_key = 1
         config.allow_freeform_paths = enabled;
         assert!(config.ruleset_enabled());
         assert!(config.freeform_paths());
+    }
+
+    #[test]
+    fn events_block_defaults_to_the_spec_surface() {
+        let config = Config::parse(GOOD).expect("parses");
+        assert!(config.events.enabled, "the doorbell ships enabled (§4.7)");
+        assert_eq!(config.events.idle_deadline_secs, 25);
+        assert_eq!(config.events.backoff_min_ms, 1_000);
+        assert_eq!(config.events.backoff_max_ms, 30_000);
+        assert_eq!(config.events.announce_after_secs, 60);
+        assert_eq!(config.events.reconcile_min_interval_secs, 5);
+    }
+
+    #[test]
+    fn events_block_overrides_and_rejects_unknown_keys() {
+        let config = Config::parse(
+            "opencode_url = \"http://127.0.0.1:8080\"\n[events]\nenabled = false\nidle_deadline_secs = 20\n",
+        )
+        .expect("parses");
+        assert!(!config.events.enabled, "pure-poll mode is configurable");
+        assert_eq!(config.events.idle_deadline_secs, 20);
+        let bad = Config::parse(
+            "opencode_url = \"http://127.0.0.1:8080\"\n[events]\nenabled_lies = true\n",
+        );
+        assert!(bad.is_err(), "unknown [events] keys are loud errors (P-30)");
+    }
+
+    #[test]
+    fn events_block_validates_its_own_invariants() {
+        let mut config = Config::parse(
+            "opencode_url = \"http://127.0.0.1:8080\"\n[events]\nbackoff_min_ms = 5000\nbackoff_max_ms = 1000\nidle_deadline_secs = 1\n",
+        )
+        .expect("parses");
+        config.events.announce_after_secs = 0;
+        let errors = config.validate().expect_err("bad [events] tuning");
+        assert!(errors.iter().any(|e| e.contains("backoff_min_ms")));
+        assert!(errors.iter().any(|e| e.contains("idle_deadline_secs")));
+        assert!(errors.iter().any(|e| e.contains("announce_after_secs")));
     }
 
     #[test]

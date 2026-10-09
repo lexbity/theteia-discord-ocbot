@@ -109,9 +109,9 @@ async fn a_restart_delivers_the_report_exactly_once() {
     let first_report;
     {
         let store = StoreHandle::open(&db).expect("open B");
-        let opencode = OpenCodeAdapter::new(
+        let opencode = OpenCodeAdapter::new(Arc::new(
             opencode_v2_client::Client::new(&server.uri(), "secret").expect("client"),
-        );
+        ));
         let discord = FakeDiscord::new();
         let ctx = context(
             store.clone(),
@@ -137,9 +137,9 @@ async fn a_restart_delivers_the_report_exactly_once() {
     // Phase C: another restart finds the delivery marker and posts nothing.
     {
         let store = StoreHandle::open(&db).expect("open C");
-        let opencode = OpenCodeAdapter::new(
+        let opencode = OpenCodeAdapter::new(Arc::new(
             opencode_v2_client::Client::new(&server.uri(), "secret").expect("client"),
-        );
+        ));
         let discord = FakeDiscord::new();
         let ctx = context(
             store.clone(),

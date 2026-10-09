@@ -88,9 +88,9 @@ async fn one_hundred_reports_stay_under_the_p95_budget() {
         .await;
 
     let store = ocbot::adapters::store::StoreHandle::open_in_memory().expect("store");
-    let opencode = OpenCodeAdapter::new(
+    let opencode = OpenCodeAdapter::new(Arc::new(
         opencode_v2_client::Client::new(&server.uri(), "secret").expect("client"),
-    );
+    ));
     let discord = FakeDiscord::new();
     let ctx = common::context(
         store.clone(),

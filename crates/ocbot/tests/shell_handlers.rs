@@ -301,8 +301,8 @@ async fn watcher_skips_busy_sessions_and_counts_probe_failures() {
     assert!(
         ctx.metrics
             .render_text()
-            .contains("ocbot_stream_reconnects_total 1"),
-        "one reconnect observed"
+            .contains("ocbot_probe_failures_total{loop=\"watcher\"} 1"),
+        "one probe failure observed (D-11: honestly labeled)"
     );
     assert!(discord.posts().is_empty(), "nothing posted");
 }

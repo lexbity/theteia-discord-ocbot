@@ -3,9 +3,12 @@
 //! and replacing the client never touches handlers).
 
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use async_trait::async_trait;
 use ocbot_core::error::OcError as CoreOcError;
+use ocbot_core::events::{OcEvent, classify_event};
 use ocbot_core::gates::{FormField, FormFieldKind, FormOption};
 use ocbot_core::outcome::{AssistantSnapshot, TokenCounts};
 use ocbot_core::ports::{
@@ -13,16 +16,21 @@ use ocbot_core::ports::{
     PortSession, PromptAdmission, ServerFacts, SessionId,
 };
 use opencode_v2_client as client;
+use tokio::sync::{mpsc, watch};
 
-/// Maps the standalone client onto the core port contract.
+use crate::app::context::{EventSource, FRAME_CHANNEL_CAPACITY, StreamHandle, StreamItem};
+use crate::app::metrics::Metrics;
+
+/// Maps the standalone client onto the core port contract. The client is
+/// shared with the event source (one HTTP client, two surfaces).
 #[derive(Debug)]
 pub struct OpenCodeAdapter {
-    inner: client::Client,
+    inner: Arc<client::Client>,
 }
 
 impl OpenCodeAdapter {
     /// Wrap a configured client.
-    pub fn new(inner: client::Client) -> Self {
+    pub fn new(inner: Arc<client::Client>) -> Self {
         Self { inner }
     }
 }
@@ -272,5 +280,77 @@ impl OpenCodePort for OpenCodeAdapter {
             .reply_form(session_id, form_id, answer)
             .await
             .map_err(map_error)
+    }
+}
+
+/// The production [`EventSource`]: opens one `subscribe_events` connection per
+/// [`EventSource::connect`] and pumps it into a bounded channel with
+/// `try_send` + drop-count (§4.6: a dropped hint is safe by P-19; the pump
+/// MUST NOT apply backpressure to the read loop).
+pub struct OpenCodeEventSource {
+    client: Arc<client::Client>,
+    metrics: Arc<Metrics>,
+}
+
+impl OpenCodeEventSource {
+    /// Build the event source over the shared client.
+    pub fn new(client: Arc<client::Client>, metrics: Arc<Metrics>) -> Self {
+        Self { client, metrics }
+    }
+}
+
+#[async_trait]
+impl EventSource for OpenCodeEventSource {
+    async fn connect(&self) -> Result<StreamHandle, CoreOcError> {
+        let mut stream = self.client.subscribe_events().await.map_err(map_error)?;
+        let (tx, rx) = mpsc::channel::<StreamItem>(FRAME_CHANNEL_CAPACITY);
+        let (stop_tx, stop_rx) = watch::channel(false);
+        let handle_stop_rx = stop_rx.clone();
+        let decode_failures = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let dropped_frames = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let pump_decode = Arc::clone(&decode_failures);
+        let pump_dropped = Arc::clone(&dropped_frames);
+        let metrics = self.metrics.clone();
+        tokio::spawn(async move {
+            let mut stop_rx = stop_rx;
+            loop {
+                let item = tokio::select! {
+                    frame = stream.next_frame() => match frame {
+                        Ok(Some(frame)) => frame,
+                        Ok(None) => {
+                            let _ = tx.send(StreamItem::Closed).await;
+                            return;
+                        }
+                        Err(error) => {
+                            tracing::warn!(error = %error, "event stream transport error");
+                            let _ = tx.send(StreamItem::Closed).await;
+                            return;
+                        }
+                    },
+                    _ = stop_rx.changed() => return,
+                };
+                pump_decode.store(stream.decode_failures(), Ordering::Relaxed);
+                // Frames are counted by kind with their taxonomy mapping
+                // (§4.9: `mapped=false` makes taxonomy drift live-visible).
+                let mapped =
+                    classify_event(&item.event, item.session_id.as_deref()) != OcEvent::Unkeyed;
+                metrics.inc_frame(&item.event, mapped);
+                match tx.try_send(StreamItem::Frame(item)) {
+                    Ok(()) => {}
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        pump_dropped.fetch_add(1, Ordering::Relaxed);
+                        metrics.inc_frames_dropped();
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => return,
+                }
+            }
+        });
+        Ok(StreamHandle::new(
+            rx,
+            stop_tx,
+            handle_stop_rx,
+            decode_failures,
+            dropped_frames,
+        ))
     }
 }

@@ -67,9 +67,9 @@ async fn live_spine_against_real_server() {
     common::commit_all(&repo, "initial");
 
     let store = ocbot::adapters::store::StoreHandle::open_in_memory().expect("store");
-    let opencode: Arc<dyn OpenCodePort> = Arc::new(OpenCodeAdapter::new(
+    let opencode: Arc<dyn OpenCodePort> = Arc::new(OpenCodeAdapter::new(Arc::new(
         opencode_v2_client::Client::new(&server_url, &password).expect("client"),
-    ));
+    )));
     let discord = FakeDiscord::new();
     let ctx = context(
         store.clone(),

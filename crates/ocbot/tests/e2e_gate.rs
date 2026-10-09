@@ -101,9 +101,9 @@ async fn permission_gate_round_trips_over_the_real_client() {
         &session,
     )
     .await;
-    let opencode: Arc<dyn OpenCodePort> = Arc::new(OpenCodeAdapter::new(
+    let opencode: Arc<dyn OpenCodePort> = Arc::new(OpenCodeAdapter::new(Arc::new(
         opencode_v2_client::Client::new(&server.uri(), "secret").expect("client"),
-    ));
+    )));
     let discord = FakeDiscord::new();
     let ctx = context(
         store.clone(),

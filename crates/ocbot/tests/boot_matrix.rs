@@ -159,3 +159,20 @@ async fn a_v2_server_with_a_bad_baseline_exits_two() {
     let status = run_binary(&config, SECRETS, UNSET);
     assert_eq!(status.code(), Some(2), "baseline fault is exit 2 (FR-40c)");
 }
+
+// --- SPEC-003 W3: the [events] block is parsed at boot (P-30: loud errors) --
+
+#[test]
+fn an_unknown_events_key_exits_one() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let config = write_config(dir.path(), "http://127.0.0.1:9", &shipped_baseline());
+    let mut text = std::fs::read_to_string(&config).expect("config");
+    text.push_str("\n[events]\nenabled_lies = true\n");
+    std::fs::write(&config, text).expect("rewrite config");
+    let status = run_binary(&config, &[], UNSET);
+    assert_eq!(
+        status.code(),
+        Some(1),
+        "an unknown [events] key is a load-time error (P-30)"
+    );
+}

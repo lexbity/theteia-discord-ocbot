@@ -1059,3 +1059,123 @@ pub fn commit_all(repo: &Path, message: &str) -> String {
         .expect("git rev-parse");
     String::from_utf8_lossy(&head.stdout).trim().to_owned()
 }
+
+// --- SPEC-003 W3: the fake event source -------------------------------------
+
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use ocbot::app::context::{EventSource, StreamHandle, StreamItem};
+use opencode_v2_client::EventFrame;
+
+/// Fake event source: records every `connect`, hands out real channel-backed
+/// handles, and exposes the test seams — [`push_frame`](Self::push_frame),
+/// [`drop_connection`](Self::drop_connection),
+/// [`garbage_burst`](Self::garbage_burst) — that the supervisor tests script
+/// failure modes through.
+#[derive(Default)]
+pub struct FakeEventSource {
+    connects: AtomicU64,
+    inner: std::sync::Mutex<Option<FakeConnection>>,
+}
+
+struct FakeConnection {
+    tx: tokio::sync::mpsc::Sender<StreamItem>,
+    stop_tx: tokio::sync::watch::Sender<bool>,
+    decode_failures: Arc<AtomicU64>,
+    dropped_frames: Arc<AtomicU64>,
+}
+
+impl FakeEventSource {
+    /// Build an empty fake.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// How many times `connect` was called (reconnect assertions).
+    pub fn connect_count(&self) -> u64 {
+        self.connects.load(Ordering::Relaxed)
+    }
+
+    /// Push one frame into the live connection (waits for capacity).
+    pub async fn push_frame(&self, frame: EventFrame) {
+        let tx = self
+            .inner
+            .lock()
+            .expect("lock")
+            .as_ref()
+            .map(|c| c.tx.clone())
+            .expect("a live connection");
+        let _ = tx.send(StreamItem::Frame(frame)).await;
+    }
+
+    /// Close the live connection: `next_item` yields `Closed`/`None`.
+    pub fn drop_connection(&self) {
+        self.inner.lock().expect("lock").take();
+    }
+
+    /// Simulate `n` undecodable frames on the live connection (the pump
+    /// mirrors the client's decode-failure counter).
+    pub fn garbage_burst(&self, n: u64) {
+        let inner = self.inner.lock().expect("lock");
+        let connection = inner.as_ref().expect("a live connection");
+        connection.decode_failures.fetch_add(n, Ordering::Relaxed);
+    }
+
+    /// The live connection's decode-failure counter, read at the source.
+    pub fn decode_failures(&self) -> u64 {
+        self.inner
+            .lock()
+            .expect("lock")
+            .as_ref()
+            .map_or(0, |c| c.decode_failures.load(Ordering::Relaxed))
+    }
+
+    /// Frames dropped by the live connection's pump channel.
+    pub fn dropped_frames(&self) -> u64 {
+        self.inner
+            .lock()
+            .expect("lock")
+            .as_ref()
+            .map_or(0, |c| c.dropped_frames.load(Ordering::Relaxed))
+    }
+
+    /// Stop the live connection's pump (what `StreamHandle::stop` does).
+    pub fn stop_connection(&self) {
+        if let Some(connection) = self.inner.lock().expect("lock").as_ref() {
+            let _ = connection.stop_tx.send(true);
+        }
+    }
+}
+
+#[async_trait]
+impl EventSource for FakeEventSource {
+    async fn connect(&self) -> Result<StreamHandle, OcError> {
+        self.connects.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = tokio::sync::mpsc::channel(1024);
+        let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+        let handle_stop_tx = stop_tx.clone();
+        let decode_failures = Arc::new(AtomicU64::new(0));
+        let dropped_frames = Arc::new(AtomicU64::new(0));
+        *self.inner.lock().expect("lock") = Some(FakeConnection {
+            tx: tx.clone(),
+            stop_tx,
+            decode_failures: Arc::clone(&decode_failures),
+            dropped_frames: Arc::clone(&dropped_frames),
+        });
+        Ok(StreamHandle::new(
+            rx,
+            handle_stop_tx,
+            stop_rx,
+            decode_failures,
+            dropped_frames,
+        ))
+    }
+}
+
+/// Convenience: a session-keyed frame.
+pub fn session_frame(session_id: &str) -> EventFrame {
+    EventFrame {
+        event: "session.execution.started".to_owned(),
+        session_id: Some(session_id.to_owned()),
+    }
+}

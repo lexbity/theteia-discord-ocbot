@@ -11,6 +11,7 @@
 )]
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use ocbot::adapters::opencode::OpenCodeAdapter;
 use ocbot_core::error::OcError;
@@ -96,7 +97,7 @@ async fn adapter(fail_status: Option<u16>) -> (MockServer, OpenCodeAdapter) {
         .mount(&server)
         .await;
     let client = opencode_v2_client::Client::new(&server.uri(), "secret").expect("client");
-    (server, OpenCodeAdapter::new(client))
+    (server, OpenCodeAdapter::new(Arc::new(client)))
 }
 
 #[tokio::test]

@@ -2,12 +2,12 @@
 //! §6.8), hand-rolled so the crate carries no extra HTTP machinery: a tiny
 //! tokio TCP server answering `GET /` with the text format.
 //!
-//! The whole §6.8 family is exposed here: `ocbot_actions_total{state}`,
-//! `ocbot_transition_cas_conflicts_total`, `ocbot_gate_requests_total{kind,tool}`,
-//! `ocbot_gate_pending`, `ocbot_idle_to_report_seconds` (a proper histogram),
-//! `ocbot_opencode_up`, `ocbot_reconcile_repairs_total{kind}`,
-//! `ocbot_locks_held`, `ocbot_lock_age_seconds`, `ocbot_log_lag_seconds`, and
-//! `ocbot_stream_reconnects_total`.
+//! The whole §6.8 family is exposed here, plus the SPEC-003 §4.9 stream
+//! family: `ocbot_stream_state`, `ocbot_stream_reconnects_total{reason}`,
+//! `ocbot_stream_live_seconds_total`, `ocbot_frames_total{kind,mapped}`,
+//! `ocbot_frames_decode_failures_total`, `ocbot_frames_dropped_total`, and the
+//! honest `ocbot_probe_failures_total{loop}` (the watcher's probe failures are
+//! no longer mislabeled as stream reconnects — D-11).
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -32,7 +32,16 @@ struct Inner {
     locks_held: AtomicU64,
     lock_age_seconds: AtomicU64,
     log_lag_seconds: AtomicU64,
-    stream_reconnects: AtomicU64,
+    stream_state: AtomicU64,
+    stream_live_ms: AtomicU64,
+    frames_decode_failures: AtomicU64,
+    frames_dropped: AtomicU64,
+    /// `reason -> count` for stream reconnects (dynamic labels, sorted render).
+    stream_reconnects: Mutex<BTreeMap<String, u64>>,
+    /// `(kind, mapped) -> count` of observed frames.
+    frames_total: Mutex<BTreeMap<(String, bool), u64>>,
+    /// `loop -> count` of failed probes per polling loop (D-11).
+    probe_failures: Mutex<BTreeMap<String, u64>>,
     repairs_accept: AtomicU64,
     repairs_park: AtomicU64,
     repairs_reset: AtomicU64,
@@ -63,7 +72,13 @@ impl Metrics {
                 locks_held: AtomicU64::new(0),
                 lock_age_seconds: AtomicU64::new(0),
                 log_lag_seconds: AtomicU64::new(0),
-                stream_reconnects: AtomicU64::new(0),
+                stream_state: AtomicU64::new(0),
+                stream_live_ms: AtomicU64::new(0),
+                frames_decode_failures: AtomicU64::new(0),
+                frames_dropped: AtomicU64::new(0),
+                stream_reconnects: Mutex::new(BTreeMap::new()),
+                frames_total: Mutex::new(BTreeMap::new()),
+                probe_failures: Mutex::new(BTreeMap::new()),
                 repairs_accept: AtomicU64::new(0),
                 repairs_park: AtomicU64::new(0),
                 repairs_reset: AtomicU64::new(0),
@@ -168,10 +183,61 @@ impl Metrics {
         self.inner.log_lag_seconds.store(seconds, Ordering::Relaxed);
     }
 
-    /// One transport failure observed by the watcher (the polling model's
-    /// reconnect).
-    pub fn inc_stream_reconnect(&self) {
-        self.inner.stream_reconnects.fetch_add(1, Ordering::Relaxed);
+    /// The event-stream state gauge (§4.9: 0 down / 1 connecting / 2 live).
+    pub fn set_stream_state(&self, state: u8) {
+        self.inner
+            .stream_state
+            .store(u64::from(state), Ordering::Relaxed);
+    }
+
+    /// Accumulate live time on the stream (NFR-15 availability math).
+    pub fn add_stream_live_ms(&self, millis: u64) {
+        self.inner
+            .stream_live_ms
+            .fetch_add(millis, Ordering::Relaxed);
+    }
+
+    /// One reconnect, labeled by reason (idle | error | drift | eof).
+    pub fn inc_stream_reconnect(&self, reason: &str) {
+        let mut map = self
+            .inner
+            .stream_reconnects
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *map.entry(reason.to_owned()).or_insert(0) += 1;
+    }
+
+    /// One frame observed, by kind and whether the taxonomy mapped it.
+    pub fn inc_frame(&self, kind: &str, mapped: bool) {
+        let mut map = self
+            .inner
+            .frames_total
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *map.entry((kind.to_owned(), mapped)).or_insert(0) += 1;
+    }
+
+    /// `n` frames failed the tolerant header parse (P-24).
+    pub fn inc_frames_decode_failures_by(&self, n: u64) {
+        self.inner
+            .frames_decode_failures
+            .fetch_add(n, Ordering::Relaxed);
+    }
+
+    /// One frame dropped because the pump channel was full (§4.6).
+    pub fn inc_frames_dropped(&self) {
+        self.inner.frames_dropped.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// One failed probe by the polling loop named `loop_name` (D-11: the
+    /// watcher's failures are no longer mislabeled as stream reconnects).
+    pub fn inc_probe_failure(&self, loop_name: &str) {
+        let mut map = self
+            .inner
+            .probe_failures
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *map.entry(loop_name.to_owned()).or_insert(0) += 1;
     }
 
     /// Pending-gate gauge (driven by the gate loop, P4).
@@ -201,11 +267,7 @@ impl Metrics {
             "ocbot_denied_interactions_total",
             inner.denied.load(Ordering::Relaxed),
         );
-        counter(
-            &mut out,
-            "ocbot_stream_reconnects_total",
-            inner.stream_reconnects.load(Ordering::Relaxed),
-        );
+        render_stream(inner, &mut out);
         render_gate_requests(inner, &mut out);
         render_repairs(inner, &mut out);
         gauge(
@@ -235,6 +297,64 @@ impl Metrics {
         );
         render_idle_histogram(inner, &mut out);
         out
+    }
+}
+
+/// The SPEC-003 §4.9 stream families.
+fn render_stream(inner: &Inner, out: &mut String) {
+    gauge(
+        out,
+        "ocbot_stream_state",
+        inner.stream_state.load(Ordering::Relaxed),
+    );
+    out.push_str("# TYPE ocbot_stream_reconnects_total counter\n");
+    let reconnects = inner
+        .stream_reconnects
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for (reason, count) in reconnects.iter() {
+        let _ = writeln!(
+            out,
+            "ocbot_stream_reconnects_total{{reason=\"{reason}\"}} {count}"
+        );
+    }
+    let live_seconds = u64_to_f64(inner.stream_live_ms.load(Ordering::Relaxed)) / 1000.0;
+    let _ = writeln!(out, "# TYPE ocbot_stream_live_seconds_total counter");
+    let _ = writeln!(out, "ocbot_stream_live_seconds_total {live_seconds}");
+    out.push_str("# TYPE ocbot_frames_total counter\n");
+    let frames = inner
+        .frames_total
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for ((kind, mapped), count) in frames.iter() {
+        let _ = writeln!(
+            out,
+            "ocbot_frames_total{{kind=\"{}\",mapped=\"{}\"}} {count}",
+            escape_label(kind),
+            mapped
+        );
+    }
+    counter(
+        out,
+        "ocbot_frames_decode_failures_total",
+        inner.frames_decode_failures.load(Ordering::Relaxed),
+    );
+    counter(
+        out,
+        "ocbot_frames_dropped_total",
+        inner.frames_dropped.load(Ordering::Relaxed),
+    );
+    out.push_str("# TYPE ocbot_probe_failures_total counter\n");
+    let probes = inner
+        .probe_failures
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for (loop_name, count) in probes.iter() {
+        let _ = writeln!(
+            out,
+            "ocbot_probe_failures_total{{loop=\"{}\"}} {count}",
+            escape_label(loop_name)
+        );
     }
 }
 
@@ -308,6 +428,12 @@ fn render_idle_histogram(inner: &Inner, out: &mut String) {
     let _ = writeln!(out, "ocbot_idle_to_report_seconds_count {count}");
     let sum_seconds = f64::from_bits(inner.idle_sum_bits.load(Ordering::Relaxed));
     let _ = writeln!(out, "ocbot_idle_to_report_seconds_sum {sum_seconds}");
+}
+
+/// Convert a counter value to `f64` without the banned `as` cast.
+fn u64_to_f64(value: u64) -> f64 {
+    u32::try_from(value >> 32).map_or(0.0, |high| f64::from(high) * 4_294_967_296.0)
+        + f64::from(u32::try_from(value & 0xFFFF_FFFF).unwrap_or(0))
 }
 
 /// Add `value` to an `f64` stored in an atomic via a CAS loop (no lossy cast).

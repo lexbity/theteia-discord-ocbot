@@ -54,9 +54,10 @@ impl Watcher {
                 },
                 Ok(Activity::Busy) => {}
                 Err(error) => {
-                    // In the polling model (S-2) a failed probe is the
-                    // reconnect: the watcher retries next tick.
-                    self.ctx.metrics.inc_stream_reconnect();
+                    // In the polling model (S-2) a failed probe is retried
+                    // next tick; it is counted honestly as a probe failure
+                    // (D-11: not as a stream reconnect).
+                    self.ctx.metrics.inc_probe_failure("watcher");
                     tracing::warn!(session = %session_id, error = %error, "activity probe failed");
                 }
             }
