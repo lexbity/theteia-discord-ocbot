@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use ocbot_core::{Column, State, WriteValue};
+use ocbot_core::{Column, LABEL_MAX_CHARS, State, WriteValue, truncate_chars};
 
 use crate::adapters::now_unix;
 use crate::adapters::store::ActionRow;
@@ -165,14 +165,19 @@ pub async fn execute_accept(
         Ok(Ok(sha)) => sha,
         Ok(Err(hook)) => {
             // Hook / rejected commit: return to `reported` and surface output.
+            // The staged index stays (unlike park's CP-P1 failure): the action
+            // is re-offered with the tree still in play, and a retried Accept
+            // re-adds anyway.
             ctx.store
                 .cas_state(action_id, State::Accepting, State::Reported, &[])
                 .await?;
-            let message = support::simple(
+            let message = support::failure_post(
                 format!(
-                    "❌ **Accept failed for {}**\n```\n{}\n```",
-                    action.label, hook.output
+                    "❌ **Accept failed for {}**",
+                    truncate_chars(&action.label, LABEL_MAX_CHARS)
                 ),
+                &hook.output,
+                "",
                 operator_id,
             );
             ctx.discord

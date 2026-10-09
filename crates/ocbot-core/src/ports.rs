@@ -235,6 +235,10 @@ pub trait GitPort: Send + Sync {
         message_path: &Path,
         no_verify: bool,
     ) -> Result<Result<String, HookFailure>, GitError>;
+    /// Mixed-reset the index back to HEAD, leaving the working tree exactly as
+    /// it is (spec CP-P1's failure repair: a rejected park commit must not
+    /// leave the attempt staged). A no-op when the index already matches HEAD.
+    async fn unstage_all(&self, directory: &Path) -> Result<(), GitError>;
     /// The tip of `name`, or `None` when the branch does not exist.
     async fn branch_exists(&self, directory: &Path, name: &str)
     -> Result<Option<String>, GitError>;

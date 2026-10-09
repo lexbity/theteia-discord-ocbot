@@ -13,6 +13,7 @@
 
 mod common;
 
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -212,4 +213,118 @@ async fn park_of_a_no_change_attempt_still_branches() {
             .is_some()
     );
     assert_eq!(git.head(&repo).await.expect("head"), base);
+}
+
+/// Reject only branch updates that MOVE a branch (`refs/heads/*` with
+/// old ≠ new): `--no-verify` skips the pre-commit and commit-msg hooks but
+/// **not** the reference-transaction hook, so `git add -A` stages the attempt
+/// and the commit's branch move is then rejected — the exact CP-P1 failure
+/// window where the index must be repaired. The repair's own `git reset` does
+/// not move any branch (HEAD and `refs/heads/*` keep their values; only
+/// `ORIG_HEAD` bookkeeping updates with an unspecified old value) and stays
+/// allowed.
+fn install_failing_ref_hook(repo: &Path) {
+    let script = concat!(
+        "#!/bin/sh\n",
+        "while read old new ref; do\n",
+        "  case \"$ref\" in\n",
+        "    refs/heads/*) [ \"$old\" = \"$new\" ] || exit 1 ;;\n",
+        "  esac\n",
+        "done\n",
+        "exit 0\n",
+    );
+    let hook = repo.join(".git/hooks/reference-transaction");
+    std::fs::write(&hook, script).expect("write hook");
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).expect("chmod hook");
+}
+
+#[tokio::test]
+async fn park_commit_failure_unstages_the_index_and_keeps_files() {
+    let tmp = TempDir::new().expect("tmp");
+    let (repo, base) = make_repo(&tmp);
+    let store = StoreHandle::open_in_memory().expect("store");
+    let seeded = common::seed_reported(
+        &store,
+        &repo_str(&repo),
+        Some("main"),
+        Some(&base),
+        CHANNEL,
+        "work",
+        "the original prompt",
+        "ses_1",
+    )
+    .await;
+    // The attempt: a tracked edit plus an untracked file.
+    append_file(&repo, "README.md", "edit\n");
+    write_file(&repo, "new.txt", "attempt content\n");
+    install_failing_ref_hook(&repo);
+
+    let discord = FakeDiscord::new();
+    let ctx = ctx_for(&store, &repo, &discord);
+    let outcome = park::begin_park(&ctx, seeded.action_id, OPERATOR)
+        .await
+        .expect("a failed commit is a handled park failure, not an error");
+    assert!(
+        outcome
+            .as_deref()
+            .unwrap_or_default()
+            .contains("park failed"),
+        "outcome names the failure: {outcome:?}"
+    );
+
+    // The action reached `errored` — not stuck in `parking`.
+    assert_eq!(
+        store
+            .action(seeded.action_id)
+            .await
+            .expect("read")
+            .expect("row")
+            .state,
+        State::Errored
+    );
+
+    // CP-P1's repair, verbatim from the spec: "tree unchanged except index →
+    // git reset (unstage), keep files".
+    assert_eq!(
+        common::git_stdout(&repo, &["diff", "--cached", "--name-only"]),
+        "",
+        "nothing stays staged"
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.join("new.txt")).expect("file kept"),
+        "attempt content\n"
+    );
+    let porcelain = common::porcelain(&repo);
+    assert!(
+        porcelain.contains("?? new.txt"),
+        "untracked file kept: {porcelain}"
+    );
+    assert!(
+        porcelain.contains(" M README.md"),
+        "tracked edit kept, unstaged: {porcelain}"
+    );
+
+    // The sequence stopped before the branch/reset steps.
+    let git = GitAdapter::new();
+    assert!(
+        git.branch_exists(&repo, "rejected/work-1")
+            .await
+            .expect("branch")
+            .is_none()
+    );
+    assert_eq!(git.head(&repo).await.expect("head"), base);
+
+    // The failure post fits the Discord cap and reports the tree state.
+    let post = discord.last_post().expect("failure posted");
+    assert!(post.message.content.contains("Park failed"));
+    assert!(
+        post.message.content.contains("index unstaged"),
+        "{}",
+        post.message.content
+    );
+    assert!(
+        post.message.content.len() <= ocbot_core::DISCORD_MESSAGE_CAP,
+        "failure post is {} bytes",
+        post.message.content.len()
+    );
 }

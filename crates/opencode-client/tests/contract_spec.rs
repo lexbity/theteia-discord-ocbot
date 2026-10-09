@@ -86,3 +86,44 @@ fn sse_fixtures_have_realistic_frames() {
             .unwrap_or_else(|error| panic!("malformed SSE JSON {line:?}: {error}"));
     }
 }
+
+/// S-10 (SPEC-003 W0): the recorded event-stream fixtures obey the same SSE
+/// framing rules, and every frame carries the pinned `type` discriminator.
+/// `events_scripted.sse` is the live-recorded scripted-session transcript
+/// (taxonomy source: `devdocs/compat/EVENTS.md`); `events_quiet.sse` pins the
+/// heartbeat-only quiet evidence.
+#[test]
+fn s10_event_fixtures_are_well_framed() {
+    for name in ["events_scripted.sse", "events_quiet.sse"] {
+        let text = std::fs::read_to_string(common::fixtures_dir().join(name))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let mut kinds = 0;
+        for line in text
+            .lines()
+            .filter(|line| !line.is_empty() && !line.starts_with(':'))
+        {
+            assert!(
+                line.starts_with("data: "),
+                "{name}: non-data line in SSE fixture: {line:?}"
+            );
+            let value: serde_json::Value = serde_json::from_str(&line["data: ".len()..])
+                .unwrap_or_else(|error| panic!("{name}: malformed SSE JSON {line:?}: {error}"));
+            assert!(
+                value.get("type").and_then(|v| v.as_str()).is_some(),
+                "{name}: frame without a `type` discriminator: {line:?}"
+            );
+            kinds += 1;
+        }
+        assert!(kinds > 0, "{name}: no data frames at all");
+    }
+    let quiet = std::fs::read_to_string(common::fixtures_dir().join("events_quiet.sse"))
+        .expect("events_quiet.sse exists");
+    assert!(
+        quiet.contains("server.connected"),
+        "quiet fixture: no connect frame"
+    );
+    assert!(
+        quiet.contains(": heartbeat"),
+        "quiet fixture: no heartbeat evidence"
+    );
+}

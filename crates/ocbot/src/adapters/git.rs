@@ -254,6 +254,15 @@ impl GitPort for GitAdapter {
         Ok(Ok(sha))
     }
 
+    async fn unstage_all(&self, directory: &Path) -> Result<(), GitError> {
+        // Plain `git reset` is a mixed reset to HEAD: the index is rebuilt
+        // from HEAD and the working tree is untouched (CP-P1's "unstage, keep
+        // files"). A no-op when the index already matches HEAD.
+        self.capture("reset", &["reset"], directory)
+            .await
+            .map(|_| ())
+    }
+
     async fn branch_exists(
         &self,
         directory: &Path,

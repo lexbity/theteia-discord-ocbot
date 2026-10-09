@@ -71,6 +71,8 @@ pub enum Call {
     GitUntracked(String),
     /// git: `commit_all(dir, no_verify)`
     GitCommit(String, bool),
+    /// git: `unstage_all(dir)`
+    GitUnstage(String),
     /// git: `branch_exists(dir, name)`
     GitBranchExists(String, String),
     /// git: `create_branch_at(dir, name, at)`
@@ -454,6 +456,19 @@ impl GitPort for FakeGit {
         self.fake_adapter
             .commit_all(repo, message_path, no_verify)
             .await
+    }
+
+    async fn unstage_all(&self, directory: &Path) -> Result<(), GitError> {
+        self.calls
+            .lock()
+            .expect("lock")
+            .push(Call::GitUnstage(directory.display().to_string()));
+        match &self.repo {
+            Some(repo) => self.fake_adapter.unstage_all(repo).await,
+            // Without a repo there is nothing staged; the refusal paths that
+            // matter (non-git park is disabled) never reach this verb.
+            None => Ok(()),
+        }
     }
 
     async fn branch_exists(

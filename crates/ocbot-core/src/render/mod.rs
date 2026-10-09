@@ -24,9 +24,12 @@ pub use browser::{
 pub use gate::gate_message;
 pub use redact::{REDACTED, RedactError, Redactor};
 pub use report::{
-    DISCORD_MESSAGE_CAP, EXCERPT_TARGET, Footer, REPORT_ATTACHMENT_NAME, ReportContext,
-    decision_buttons, fence_neutralize, headline, report, split_excerpt, staged_preview,
+    DISCORD_MESSAGE_CAP, EXCERPT_TARGET, Footer, LABEL_MAX_CHARS, REPORT_ATTACHMENT_NAME,
+    ReportContext, decision_buttons, fence_neutralize, headline, report, split_excerpt,
+    staged_preview,
 };
+
+pub use label::truncate_chars;
 
 pub(crate) use label::collapse_whitespace;
 

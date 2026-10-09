@@ -78,6 +78,66 @@ async fn global_event_stream_parses_durable_positions_and_skips_heartbeats() {
     assert_eq!(durable.version, Some(1));
 }
 
+/// S-10 fixture (SPEC-003 W0): every frame kind of the scripted spike run
+/// decodes with its kind, key, and `durable` position; comment heartbeats are
+/// skipped; the stream ends cleanly. This pins the live-recorded taxonomy —
+/// see `devdocs/compat/EVENTS.md`.
+#[tokio::test]
+async fn scripted_event_fixture_decodes_every_observed_kind() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/event"))
+        .respond_with(sse(fixture("events_scripted.sse")))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(&server.uri(), "secret").expect("client");
+    let mut stream = client.subscribe_events().await.expect("stream opens");
+
+    let mut kinds = Vec::new();
+    while let Some(Ok(event)) = stream.next().await {
+        kinds.push(event.kind);
+    }
+    assert_eq!(kinds.first().map(String::as_str), Some("server.connected"));
+    for expected in [
+        "session.created",
+        "session.inbox.enqueued",
+        "session.execution.started",
+        "session.step.started",
+        "session.step.failed",
+        "session.execution.failed",
+        "session.deleted",
+    ] {
+        assert!(
+            kinds.iter().any(|kind| kind == expected),
+            "events_scripted.sse missing {expected}"
+        );
+    }
+}
+
+/// S-10 quiet fixture: a connect frame followed only by heartbeat comments
+/// — the parser must skip them and report a clean end of stream (AE-4
+/// heartbeat evidence, pinned deterministically).
+#[tokio::test]
+async fn quiet_event_fixture_yields_only_the_connect_frame() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/event"))
+        .respond_with(sse(fixture("events_quiet.sse")))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(&server.uri(), "secret").expect("client");
+    let mut stream = client.subscribe_events().await.expect("stream opens");
+
+    let connected = stream.next().await.expect("event").expect("decodes");
+    assert_eq!(connected.kind, "server.connected");
+    assert!(
+        stream.next().await.is_none(),
+        "heartbeats are skipped; the stream ends cleanly"
+    );
+}
+
 #[tokio::test]
 async fn log_stream_surfaces_a_decode_error() {
     let server = MockServer::start().await;

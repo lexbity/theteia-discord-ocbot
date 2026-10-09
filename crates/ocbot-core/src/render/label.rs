@@ -34,6 +34,19 @@ pub(crate) fn inline_safe(text: &str) -> String {
     collapse_whitespace(text).replace('`', "'")
 }
 
+/// Truncate `text` to at most `max_chars` characters on a char boundary,
+/// marking the cut with an ellipsis. Callers budget message sizes in bytes;
+/// a char cap merely bounds the worst case (each char is at least its own
+/// byte), while the byte accounting done on the clamped result stays exact.
+pub fn truncate_chars(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_owned();
+    }
+    let mut clamped: String = text.chars().take(max_chars.saturating_sub(1)).collect();
+    clamped.push('…');
+    clamped
+}
+
 #[cfg(test)]
 mod tests {
     use super::{collapse_whitespace, inline_safe};
@@ -49,5 +62,18 @@ mod tests {
     fn inline_safe_drops_backticks_after_collapsing() {
         assert_eq!(inline_safe("a`b  c"), "a'b c");
         assert_eq!(inline_safe("  `x`  "), "'x'");
+    }
+
+    #[test]
+    fn truncate_is_identity_within_budget() {
+        assert_eq!(super::truncate_chars("short", 10), "short");
+        assert_eq!(super::truncate_chars("", 0), "");
+    }
+
+    #[test]
+    fn truncate_cuts_on_a_char_boundary_with_an_ellipsis() {
+        // 2-byte chars: the cut can never land mid-codepoint.
+        assert_eq!(super::truncate_chars("ééééé", 3), "éé…");
+        assert_eq!(super::truncate_chars(&"x".repeat(500), 8), "xxxxxxx…");
     }
 }

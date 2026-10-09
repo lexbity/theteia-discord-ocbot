@@ -5,7 +5,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use ocbot_core::{ButtonKind, OutgoingMessage, component_button};
+use ocbot_core::{
+    ButtonKind, DISCORD_MESSAGE_CAP, OutgoingMessage, component_button, fence_neutralize,
+    split_excerpt, truncate_chars,
+};
 
 use crate::adapters::store::ActionRow;
 use crate::app::context::AppContext;
@@ -70,6 +73,51 @@ pub(crate) fn simple(content: impl Into<String>, operator_id: u64) -> OutgoingMe
         components: Vec::new(),
         mentioned_users: vec![operator_id],
     }
+}
+
+/// The marker appended inside the fence when [`failure_post`] clamps output.
+const OUTPUT_CLAMPED: &str = "… (output truncated)";
+
+/// A failure post carrying command output in a fenced block: `title`, the
+/// clamped and fence-neutralized `output`, and an optional trailing `note`
+/// (e.g. what happened to the tree).
+///
+/// Hook output arrives already cut to 2 000 bytes by the adapter — on its own
+/// that overflows the Discord cap once framed, so the block is budgeted
+/// against title + note + fences and the whole message can never exceed the
+/// cap (P10), whatever the output or label size.
+pub(crate) fn failure_post(
+    title: impl AsRef<str>,
+    output: &str,
+    note: &str,
+    operator_id: u64,
+) -> OutgoingMessage {
+    // Belt: callers clamp labels, but this builder's cap invariant must not
+    // depend on them.
+    let title = truncate_chars(title.as_ref(), 300);
+    let note_bytes = if note.is_empty() { 0 } else { note.len() + 1 };
+    let fixed = title.len() + note_bytes + "```\n".len() * 2 + 2;
+    let capacity = DISCORD_MESSAGE_CAP.saturating_sub(fixed);
+    let neutralized = fence_neutralize(output);
+    let (block, truncated) = split_excerpt(&neutralized, capacity);
+    let block = if truncated && capacity > OUTPUT_CLAMPED.len() + 1 {
+        // Re-split with the marker's bytes reserved so the marker itself
+        // cannot push the message past the cap (skipped when the budget is
+        // too small to ever fit it — then the bare clamp already suffices).
+        let (clamped, _) = split_excerpt(
+            &neutralized,
+            capacity.saturating_sub(OUTPUT_CLAMPED.len() + 1),
+        );
+        format!("{clamped}\n{OUTPUT_CLAMPED}")
+    } else {
+        block
+    };
+    let mut content = format!("{title}\n```\n{block}\n```");
+    if !note.is_empty() {
+        content.push('\n');
+        content.push_str(note);
+    }
+    simple(content, operator_id)
 }
 
 /// A one-button message (`custom_id` provided).

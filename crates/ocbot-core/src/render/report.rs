@@ -8,7 +8,7 @@
 use crate::outcome::Outcome;
 use crate::outcome::TokenCounts;
 
-use super::label::collapse_whitespace;
+use super::label::{collapse_whitespace, truncate_chars};
 use super::redact::Redactor;
 use super::{
     AttachmentSpec, ButtonKind, ComponentSpec, OutgoingMessage, component_button,
@@ -19,6 +19,13 @@ use super::{
 pub const DISCORD_MESSAGE_CAP: usize = 2_000;
 /// Inline excerpt target (spec P10: everyone reads the gist).
 pub const EXCERPT_TARGET: usize = 1_500;
+/// The longest label carried inline. Labels are operator text of unbounded
+/// length; the headline must always leave room for the excerpt and footer.
+pub const LABEL_MAX_CHARS: usize = 200;
+/// The longest single-line footer. The diff-stat summary is one line; this
+/// guards a pathological summary line so the footer can never crowd out the
+/// excerpt entirely.
+const FOOTER_MAX_CHARS: usize = 300;
 /// The filename used for the full report attachment.
 pub const REPORT_ATTACHMENT_NAME: &str = "report.md";
 
@@ -38,15 +45,18 @@ pub struct Footer {
 }
 
 impl Footer {
-    /// The single-line footer, always rendered inside the message budget.
+    /// The single-line footer, always rendered inside the message budget: the
+    /// result is clamped to [`FOOTER_MAX_CHARS`] so the doc's "inside the
+    /// budget" claim holds by construction, not by convention.
     pub fn render(&self) -> String {
         let parts = [self.duration(), self.diff(), self.tokens(), self.cost()];
         let parts: Vec<&str> = parts.iter().filter_map(|part| (*part).as_deref()).collect();
-        if parts.is_empty() {
+        let joined = if parts.is_empty() {
             "Duration n/a".to_owned()
         } else {
             parts.join(" · ")
-        }
+        };
+        truncate_chars(&joined, FOOTER_MAX_CHARS)
     }
 
     fn duration(&self) -> Option<String> {
@@ -114,12 +124,18 @@ pub fn fence_neutralize(text: &str) -> String {
 
 /// Split `text` at the last newline inside `budget` bytes. Returns the kept
 /// text and whether it was truncated. A text longer than the budget with no
-/// newlines is cut hard at the budget.
+/// newlines is cut hard at the budget — on a char boundary, so multi-byte
+/// content can never panic the slice.
 pub fn split_excerpt(text: &str, budget: usize) -> (String, bool) {
     if text.len() <= budget {
         return (text.to_owned(), false);
     }
-    let safe = budget.min(text.len());
+    // The budget is bytes; slide back to the nearest char boundary so a
+    // codepoint straddling the cut cannot panic.
+    let mut safe = budget.min(text.len());
+    while !text.is_char_boundary(safe) {
+        safe -= 1;
+    }
     let window = &text[..safe];
     let cut = match window.rfind('\n') {
         Some(index) if index > 0 => index,
@@ -195,12 +211,14 @@ pub fn decision_buttons(outcome: &Outcome, context: &ReportContext) -> Vec<Compo
     }
 }
 
-/// The full report message: headline + fenced excerpt + always-inline footer,
-/// followed by the decision buttons (FR-15) and, for a non-git directory, the
-/// FR-26 degradation note.
+/// The full report message: headline + fenced excerpt + always-inline footer +
+/// context notes, followed by the decision buttons (FR-15).
 ///
-/// `budget` is the total allowed size of `content` (default Discord cap); the
-/// footer is composed *before* truncation so it can never be cut.
+/// The invariant is total: every dynamic piece (label, body, footer) is
+/// redacted and clamped *before* the budget math — redaction can lengthen
+/// text, so scrubbing first is what makes the byte accounting exact — and the
+/// appended notes ([`report_tail`]) are part of the budget, not an
+/// afterthought. Assembled `content` can never exceed the cap (P10).
 pub fn report(
     label: &str,
     outcome: &Outcome,
@@ -208,20 +226,16 @@ pub fn report(
     context: &ReportContext,
     redactor: &Redactor,
 ) -> OutgoingMessage {
-    let label = collapse_whitespace(label);
-    let head = headline(outcome, &label);
-    let (excerpt, truncated) = report_excerpt(outcome, footer, &head, DISCORD_MESSAGE_CAP);
-    let mut message_text = format!("{head}\n```\n{excerpt}\n```\n{}", footer.render());
-    if !context.is_git {
-        message_text.push_str(
-            "\n_non-git directory: **Mark done** records the decision; Park/Reset are disabled._",
-        );
-    }
-    if context.followups >= 2 {
-        message_text.push_str(
-            "\n_this attempt has had several follow-ups — consider **Park & redo** instead (FR-18)._",
-        );
-    }
+    let label = truncate_chars(&collapse_whitespace(label), LABEL_MAX_CHARS);
+    let head = headline(outcome, &redactor.scrub(&label));
+    // `Footer::render` is single-line and self-clamped; scrub it too — the
+    // diff-stat summary carries repo file paths (R-12 inline discipline).
+    let footer_line = redactor.scrub(&footer.render());
+    let tail = report_tail(context);
+    let (excerpt, truncated) =
+        report_excerpt(&report_body(outcome), &head, &footer_line, &tail, redactor);
+    let mut message_text = format!("{head}\n```\n{excerpt}\n```\n{footer_line}");
+    message_text.push_str(&tail);
     let attachment = if truncated {
         let full = report_body(outcome);
         Some(AttachmentSpec {
@@ -232,31 +246,48 @@ pub fn report(
         None
     };
     OutgoingMessage {
-        // R-12: only the inline path is scrubbed (see [`Redactor`]).
-        content: redactor.scrub(&message_text),
+        content: message_text,
         attachment,
         components: decision_buttons(outcome, context),
         mentioned_users: vec![context.operator_id],
     }
 }
 
-/// The excerpt portion budgeted against the headline, footer, and fences.
-fn report_excerpt(
-    outcome: &Outcome,
-    footer: &Footer,
-    headline: &str,
-    budget: usize,
-) -> (String, bool) {
-    let body = report_body(outcome);
-    let overhead = headline.len() + footer.render().len() + "```\n".len() * 2;
-    let available = budget.saturating_sub(overhead).saturating_sub(2);
-    let neutralized = fence_neutralize(&body);
-    let (excerpt, truncated) = split_excerpt(&neutralized, available.min(EXCERPT_TARGET));
-    if truncated {
-        (excerpt, true)
-    } else {
-        (neutralized, false)
+/// The context notes appended after the footer: the FR-26 non-git degradation
+/// note and the FR-18 follow-up nudge. Composed *before* excerpting so their
+/// size is part of the budget — appending them after budgeting was the
+/// cap-overflow bug (they are ~80–155 bytes the excerpt did not pay for).
+fn report_tail(context: &ReportContext) -> String {
+    let mut tail = String::new();
+    if !context.is_git {
+        tail.push_str(
+            "\n_non-git directory: **Mark done** records the decision; Park/Reset are disabled._",
+        );
     }
+    if context.followups >= 2 {
+        tail.push_str(
+            "\n_this attempt has had several follow-ups — consider **Park & redo** instead (FR-18)._",
+        );
+    }
+    tail
+}
+
+/// The excerpt portion budgeted against every other piece of the message —
+/// headline, footer line, notes, and fences — so the assembled content can
+/// never exceed the cap.
+fn report_excerpt(
+    body: &str,
+    head: &str,
+    footer_line: &str,
+    tail: &str,
+    redactor: &Redactor,
+) -> (String, bool) {
+    let overhead = head.len() + footer_line.len() + tail.len() + "```\n".len() * 2;
+    let available = DISCORD_MESSAGE_CAP
+        .saturating_sub(overhead)
+        .saturating_sub(2);
+    let neutralized = fence_neutralize(&redactor.scrub(body));
+    split_excerpt(&neutralized, available.min(EXCERPT_TARGET))
 }
 
 /// The raw report body (from a completed/errored outcome).
@@ -268,6 +299,9 @@ fn report_body(outcome: &Outcome) -> String {
     }
 }
 
+/// The note appended when the preview's fenced prompt was clamped.
+const PREVIEW_CLAMPED: &str = "\n_(preview truncated — Edit & send shows the full prompt)_";
+
 /// A preview spec for a staged action: the prompt text plus the
 /// Send / Edit-and-send buttons (`custom_id` grammar `v1:send:<id>` /
 /// `v1:edit:<id>`) and the Phase 6 template toggle (`v1:tpl:<id>`).
@@ -275,6 +309,10 @@ fn report_body(outcome: &Outcome) -> String {
 /// `template` is the envelope currently rendered (`"fresh"` or `"resume"`); the
 /// toggle button offers the *other* one. Re-rendering happens at review time so
 /// `{git_log}`/`{git_status}` are fresh (FR-6/P13).
+///
+/// The prompt embeds operator text and `{git_log}` lines of unbounded subject
+/// length, so the fenced block is clamped to the Discord cap (P10); the stored
+/// prompt — and the Edit modal — keeps the full text.
 pub fn staged_preview(
     label: &str,
     prompt: &str,
@@ -282,11 +320,29 @@ pub fn staged_preview(
     operator_id: u64,
     template: &str,
 ) -> OutgoingMessage {
-    let label = collapse_whitespace(label);
-    let content = format!(
-        "**Ready to run: {label}**\n_template: {template}_\n```\n{}\n```",
-        fence_neutralize(prompt)
-    );
+    let label = truncate_chars(&collapse_whitespace(label), LABEL_MAX_CHARS);
+    let head = format!("**Ready to run: {label}**\n_template: {template}_");
+    let fixed = head.len() + "```\n".len() * 2 + 2;
+    let neutralized = fence_neutralize(prompt);
+    let capacity = DISCORD_MESSAGE_CAP.saturating_sub(fixed);
+    let (block, truncated) = split_excerpt(&neutralized, capacity);
+    let can_mark = truncated && capacity > PREVIEW_CLAMPED.len() + 1;
+    let block = if can_mark {
+        // Re-split with the note's bytes reserved so the note itself cannot
+        // push the message past the cap (the clamped label bounds `fixed`,
+        // so the guard is belt rather than a reachable branch).
+        let (clamped, _) = split_excerpt(
+            &neutralized,
+            capacity.saturating_sub(PREVIEW_CLAMPED.len() + 1),
+        );
+        clamped
+    } else {
+        block
+    };
+    let mut content = format!("{head}\n```\n{block}\n```");
+    if can_mark {
+        content.push_str(PREVIEW_CLAMPED);
+    }
     let toggle_label = if template == "resume" {
         "Use fresh template"
     } else {

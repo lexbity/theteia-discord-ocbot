@@ -5,7 +5,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use ocbot_core::{Column, State, WriteValue, slug, staged_preview};
+use ocbot_core::{
+    Column, LABEL_MAX_CHARS, State, WriteValue, slug, staged_preview, truncate_chars,
+};
 
 use crate::adapters::now_unix;
 use crate::adapters::store::ActionRow;
@@ -102,22 +104,39 @@ pub async fn resume(
             // is nothing to snapshot, so branch at the current HEAD (below).
             Ok(Err(hook)) if is_nothing_to_commit(&hook.output) => {}
             Ok(Err(hook)) => {
-                // Nothing landed: surface the output, return to `errored`; the
-                // index may have been staged, so unstage but keep the files.
-                let message = support::simple(
-                    format!(
-                        "❌ **Park failed for {}**\n```\n{}\n```\nFiles are untouched.",
-                        action.label, hook.output
-                    ),
-                    operator_id,
-                );
-                ctx.discord.post(channel, &message).await?;
+                // CP-P1 failure: nothing landed. Unstage while `park_step` is
+                // still 0 — reconcile replays step 1 (which re-adds), so a
+                // crash mid-repair converges; after the terminal `errored`
+                // CAS nothing would come back for the index. Mixed reset: the
+                // files stay, only the staging is undone.
+                let unstaged = ctx.git.unstage_all(&dir).await;
                 ctx.store
                     .cas_state(action.id, State::Parking, State::Errored, &[])
                     .await?;
+                let note = match &unstaged {
+                    Ok(()) => "Files are untouched (index unstaged).".to_owned(),
+                    Err(error) => {
+                        format!("⚠️ files kept, but the index could not be unstaged: {error}")
+                    }
+                };
+                let message = support::failure_post(
+                    format!(
+                        "❌ **Park failed for {}**",
+                        truncate_chars(&action.label, LABEL_MAX_CHARS)
+                    ),
+                    &hook.output,
+                    &note,
+                    operator_id,
+                );
+                ctx.discord.post(channel, &message).await?;
                 return Ok(Some("park failed — see the output".to_owned()));
             }
             Err(error) => {
+                // Infra failure (spawn/timeout): the add half of `commit_all`
+                // may have staged before the commit broke. Same repair, best
+                // effort — git itself is misbehaving, and the original error
+                // is the one that must propagate.
+                let _ = ctx.git.unstage_all(&dir).await;
                 ctx.store
                     .cas_state(action.id, State::Parking, State::Errored, &[])
                     .await?;

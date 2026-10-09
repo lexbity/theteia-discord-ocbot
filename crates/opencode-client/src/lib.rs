@@ -66,6 +66,10 @@ pub const PINNED_SERVER_VERSION: &str = "2.0.24";
 #[derive(Debug)]
 pub struct Client {
     http: reqwest::Client,
+    /// A timeout-free client for long-lived SSE streams (a stream's liveness
+    /// is the *consumer's* read deadline, SPEC-003 P-22 — never the
+    /// request-wide [`DEFAULT_TIMEOUT_SECS`]).
+    stream_http: reqwest::Client,
     base: reqwest::Url,
     password: String,
 }
@@ -85,8 +89,12 @@ impl Client {
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .user_agent(concat!("opencode-v2-client/", env!("CARGO_PKG_VERSION")))
             .build()?;
+        let stream_http = reqwest::Client::builder()
+            .user_agent(concat!("opencode-v2-client/", env!("CARGO_PKG_VERSION")))
+            .build()?;
         Ok(Self {
             http,
+            stream_http,
             base,
             password: password.to_owned(),
         })
@@ -156,13 +164,19 @@ impl Client {
     }
 
     /// Send a GET that is expected to return a long-lived stream.
+    ///
+    /// Issued on the timeout-free client: an SSE stream legitimately outlives
+    /// [`DEFAULT_TIMEOUT_SECS`], and a stream's liveness is the *consumer's*
+    /// read deadline (SPEC-003 P-22), never an arbitrary request timeout.
+    /// (S-10 evidence: with the default timeout active, `subscribe_events`
+    /// died with a body-decode transport error every ~10 s.)
     async fn get_stream(
         &self,
         path: &str,
         query: &[(&str, &str)],
     ) -> Result<reqwest::Response, OcError> {
         let request = self
-            .http
+            .stream_http
             .get(self.url(path)?)
             .query(query)
             .basic_auth(AUTH_USERNAME, Some(&self.password));
