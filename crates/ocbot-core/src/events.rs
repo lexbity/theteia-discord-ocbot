@@ -114,6 +114,13 @@ pub const TAXONOMY: &[(&str, TaxonomyRow)] = &[
         },
     ),
     (
+        "session.execution.succeeded",
+        TaxonomyRow {
+            keyed: true,
+            hint: HintKind::Session,
+        },
+    ),
+    (
         "session.execution.failed",
         TaxonomyRow {
             keyed: true,

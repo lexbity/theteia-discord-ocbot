@@ -18,6 +18,10 @@ use tokio::time::Instant;
 
 use opencode_v2_client::{DECODE_BURST_RECONNECT, DECODE_BURST_WINDOW_MS};
 
+use tokio::sync::mpsc;
+
+use opencode_v2_client::EventFrame;
+
 use crate::app::context::{AppContext, EventSource, StreamHandle, StreamItem};
 use crate::app::degraded;
 use crate::app::reconcile;
@@ -82,6 +86,9 @@ pub struct Supervisor {
     ctx: Arc<AppContext>,
     source: Arc<dyn EventSource>,
     cfg: SupervisorConfig,
+    /// Frames are forwarded to the wake dispatcher (W4); a full dispatcher
+    /// channel drops the frame — safe by P-19, ticks are its deadline.
+    frame_tx: mpsc::Sender<EventFrame>,
     /// Jitter source for the backoff, `[0, 1)`; injected so paused-time tests
     /// are deterministic. Production derives it from the wall clock's
     /// sub-second nanos.
@@ -93,12 +100,19 @@ pub struct Supervisor {
 const SUPERVISOR_TICK: Duration = Duration::from_millis(500);
 
 impl Supervisor {
-    /// Build a supervisor over an event source.
-    pub fn new(ctx: Arc<AppContext>, source: Arc<dyn EventSource>, cfg: SupervisorConfig) -> Self {
+    /// Build a supervisor over an event source, forwarding frames to the
+    /// dispatcher side of `frame_tx`.
+    pub fn new(
+        ctx: Arc<AppContext>,
+        source: Arc<dyn EventSource>,
+        cfg: SupervisorConfig,
+        frame_tx: mpsc::Sender<EventFrame>,
+    ) -> Self {
         Self {
             ctx,
             source,
             cfg,
+            frame_tx,
             jitter: Box::new(nanos_jitter),
         }
     }
@@ -116,12 +130,13 @@ impl Supervisor {
         ctx: Arc<AppContext>,
         source: Arc<dyn EventSource>,
         events: &EventsConfig,
+        frame_tx: mpsc::Sender<EventFrame>,
     ) -> Option<tokio::task::JoinHandle<()>> {
         if !events.enabled {
             tracing::info!("event stream disabled ([events].enabled = false): pure-poll mode");
             return None;
         }
-        let supervisor = Self::new(ctx, source, SupervisorConfig::from_events(events));
+        let supervisor = Self::new(ctx, source, SupervisorConfig::from_events(events), frame_tx);
         Some(tokio::spawn(async move {
             supervisor.run_forever().await;
         }))
@@ -206,10 +221,14 @@ impl Supervisor {
             tokio::select! {
                 item = handle.next_item() => {
                     match item {
-                        Some(StreamItem::Frame(_frame)) => {
-                            // Counted at the pump; nothing consumes frames yet (W4).
+                        Some(StreamItem::Frame(frame)) => {
                             saw_frame = true;
                             deadline = Instant::now() + self.cfg.idle_deadline;
+                            // Forward to the dispatcher (W4); a full channel
+                            // drops the frame — counted, safe by P-19.
+                            if self.frame_tx.try_send(frame).is_err() {
+                                self.ctx.metrics.inc_frames_dropped();
+                            }
                         }
                         Some(StreamItem::Closed) | None => {
                             return (Some(DisconnectReason::Eof), saw_frame);

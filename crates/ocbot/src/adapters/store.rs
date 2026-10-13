@@ -705,6 +705,19 @@ store_method! {
         }
     };
 
+    /// Feed the stall watchdog from the event path (SPEC-003 §4.8): a wake
+    /// that found the session busy refreshes the action's liveness.
+    TouchLastEvent as touch_last_event(id: i64 => i64, at: i64 => i64) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            connection
+                .execute(
+                    "UPDATE action SET last_event_at = ?2 WHERE id = ?1 AND state = 'running'",
+                    params![id, at],
+                )
+                .map(|_| ())
+        }
+    };
+
     /// Record a stall ping time (P3/FR-39: one ping per stall episode).
     SetStallPing as set_stall_ping(id: i64 => i64, ts: i64 => i64) -> () {
         |connection: &mut Connection| -> rusqlite::Result<()> {

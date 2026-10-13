@@ -27,6 +27,7 @@ use crate::app::metrics::{self, Metrics};
 use crate::app::ops::OpsLoop;
 use crate::app::reconcile;
 use crate::app::supervisor::Supervisor;
+use crate::app::wake::Dispatcher;
 use crate::app::watcher::Watcher;
 use crate::config::{Config, Secrets, config_path};
 use ocbot_core::Redactor;
@@ -199,11 +200,16 @@ pub async fn start() -> ExitCode {
         metrics.seed_actions(&counts);
     }
 
-    // Event-stream supervisor (SPEC-003 W3): behind `[events].enabled`; in
-    // pure-poll mode no task exists and no connection is attempted (FR-43).
+    // Event-stream supervisor + wake dispatcher (SPEC-003 W3/W4): behind
+    // `[events].enabled`; in pure-poll mode neither task exists and no
+    // connection is attempted (FR-43). The channel mirrors §4.6's bounded
+    // supervisor→dispatcher link.
+    let (frame_tx, frame_rx) =
+        tokio::sync::mpsc::channel(crate::app::context::FRAME_CHANNEL_CAPACITY);
     let events_source: Arc<dyn EventSource> =
         Arc::new(OpenCodeEventSource::new(client.clone(), metrics.clone()));
-    Supervisor::spawn_if_enabled(ctx.clone(), events_source, &config.events);
+    Supervisor::spawn_if_enabled(ctx.clone(), events_source, &config.events, frame_tx);
+    Dispatcher::spawn_if_enabled(ctx.clone(), &config.events, frame_rx);
 
     let metrics_bind = config.metrics_bind.clone();
     {

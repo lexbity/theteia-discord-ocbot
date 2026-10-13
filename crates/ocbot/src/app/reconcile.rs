@@ -13,7 +13,7 @@ use std::sync::Arc;
 use ocbot_core::State;
 use ocbot_core::ports::Activity;
 
-use crate::app::completion::finalize_action;
+use crate::app::completion::{DetectedBy, finalize_action};
 use crate::app::context::AppContext;
 use crate::app::gates_loop;
 use crate::app::handlers::{accept, park, reset};
@@ -80,17 +80,19 @@ pub async fn reconcile(ctx: &Arc<AppContext>) -> ReconcileReport {
             continue;
         };
         match ctx.opencode.activity(&session_id).await {
-            Ok(Activity::Idle) => match finalize_action(ctx, action, false).await {
-                Ok(true) => completed += 1,
-                Ok(false) => {}
-                Err(error) => {
-                    tracing::error!(
-                        action = action.id,
-                        error = %error,
-                        "reconcile finalize failed"
-                    );
+            Ok(Activity::Idle) => {
+                match finalize_action(ctx, action, false, DetectedBy::Fallback).await {
+                    Ok(true) => completed += 1,
+                    Ok(false) => {}
+                    Err(error) => {
+                        tracing::error!(
+                            action = action.id,
+                            error = %error,
+                            "reconcile finalize failed"
+                        );
+                    }
                 }
-            },
+            }
             Ok(Activity::Busy) => {
                 tracing::debug!(session = %session_id, "resuming watch for busy session");
             }

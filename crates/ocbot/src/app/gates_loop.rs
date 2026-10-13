@@ -330,14 +330,15 @@ async fn gate_label(ctx: &Arc<AppContext>, row: &GateRow) -> Result<String, AppE
 }
 
 /// A session→parent index used to attribute a child-session gate to its root
-/// action (FR-24).
-struct GateChannels {
+/// action (FR-24). Shared with the event dispatcher, whose child-session
+/// wakes resolve through the same parent chain (SPEC-003 §4.5).
+pub(crate) struct GateChannels {
     parents: HashMap<String, Option<String>>,
 }
 
 impl GateChannels {
     /// Fetch all sessions and index the parent links.
-    async fn discover(ctx: &Arc<AppContext>) -> Self {
+    pub(crate) async fn discover(ctx: &Arc<AppContext>) -> Self {
         let mut parents = HashMap::new();
         match ctx.opencode.list_sessions(false).await {
             Ok(sessions) => {
@@ -353,7 +354,7 @@ impl GateChannels {
     }
 
     /// The root session id of `session` (itself when a root).
-    fn root_of(&self, session_id: &str) -> Option<String> {
+    pub(crate) fn root_of(&self, session_id: &str) -> Option<String> {
         let mut current = session_id.to_owned();
         let mut hops = 0;
         while let Some(parent) = self.parents.get(&current).and_then(Clone::clone) {

@@ -182,3 +182,69 @@ fn logging_writer_passes_lines_through_when_disarmed() {
     assert!(captured.contains("plain line"), "{captured}");
     assert!(!captured.contains("[redacted]"), "{captured}");
 }
+
+/// AC-E8 (SPEC-003 W4): a seeded secret riding in a frame's payload never
+/// reaches the logs. The dispatcher's structural rule (P-32) is that frames
+/// are reduced to kind + session id and never logged — this drives hostile
+/// frames through the real dispatcher under a capturing subscriber and
+/// asserts neither the payload-bearing kind nor the secret-shaped session id
+/// leaks.
+#[test]
+fn frame_payloads_never_reach_the_logs() {
+    use ocbot::app::wake::Dispatcher;
+    use opencode_v2_client::EventFrame;
+    use tracing_subscriber::layer::SubscriberExt as _;
+
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(
+        tracing_subscriber::fmt::layer()
+            .json()
+            .with_writer(logging::scrub_writer(Buffer(buffer.clone()), redactor())),
+    );
+
+    let discord = FakeDiscord::new();
+    let store = StoreHandle::open_in_memory().expect("store");
+    let ctx = common::context(
+        store,
+        Arc::new(FakeOpenCode::new()),
+        Arc::new(FakeGit::inert()),
+        Arc::new(discord),
+        OPERATOR,
+        None,
+    );
+
+    // A dedicated current-thread runtime installed *inside* the capturing
+    // subscriber's scope: every log line the dispatcher emits is captured.
+    tracing::subscriber::with_default(subscriber, || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("inner runtime")
+            .block_on(async move {
+                let (tx, rx) = tokio::sync::mpsc::channel(8);
+                let cfg = ocbot::config::EventsConfig::spec_defaults();
+                let task = Dispatcher::spawn_if_enabled(ctx, &cfg, rx).expect("dispatcher");
+                // Hostile frames: the secret rides where a payload would, and
+                // a secret-shaped string rides where the session id would
+                // (ids are the only frame fields the dispatcher ever touches).
+                let _ = tx
+                    .send(EventFrame {
+                        event: format!("session.{SECRET}"),
+                        session_id: Some("ses_secretabcdefgh123".to_owned()),
+                    })
+                    .await;
+                drop(tx);
+                let _ = task.await;
+            });
+    });
+
+    let captured = String::from_utf8(buffer.lock().expect("lock").clone()).expect("utf8");
+    assert!(
+        !captured.contains("abcdefgh12345678"),
+        "the frame's secret-shaped payload leaked into the logs: {captured}"
+    );
+    assert!(
+        !captured.contains("ses_secretabcdefgh123"),
+        "the frame's session id leaked into the logs: {captured}"
+    );
+}

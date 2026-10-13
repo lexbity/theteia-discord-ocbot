@@ -42,6 +42,8 @@ struct Inner {
     frames_total: Mutex<BTreeMap<(String, bool), u64>>,
     /// `loop -> count` of failed probes per polling loop (D-11).
     probe_failures: Mutex<BTreeMap<String, u64>>,
+    /// `source -> count` of detections (event | fallback; P-29, the W5 gate).
+    detections: Mutex<BTreeMap<String, u64>>,
     repairs_accept: AtomicU64,
     repairs_park: AtomicU64,
     repairs_reset: AtomicU64,
@@ -79,6 +81,7 @@ impl Metrics {
                 stream_reconnects: Mutex::new(BTreeMap::new()),
                 frames_total: Mutex::new(BTreeMap::new()),
                 probe_failures: Mutex::new(BTreeMap::new()),
+                detections: Mutex::new(BTreeMap::new()),
                 repairs_accept: AtomicU64::new(0),
                 repairs_park: AtomicU64::new(0),
                 repairs_reset: AtomicU64::new(0),
@@ -229,6 +232,17 @@ impl Metrics {
         self.inner.frames_dropped.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// One completion detection attributed to its scheduler (P-29: the W5
+    /// flip gate reads the event/fallback split from this counter).
+    pub fn inc_detection(&self, source: &str) {
+        let mut map = self
+            .inner
+            .detections
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *map.entry(source.to_owned()).or_insert(0) += 1;
+    }
+
     /// One failed probe by the polling loop named `loop_name` (D-11: the
     /// watcher's failures are no longer mislabeled as stream reconnects).
     pub fn inc_probe_failure(&self, loop_name: &str) {
@@ -344,6 +358,14 @@ fn render_stream(inner: &Inner, out: &mut String) {
         "ocbot_frames_dropped_total",
         inner.frames_dropped.load(Ordering::Relaxed),
     );
+    out.push_str("# TYPE ocbot_detection_total counter\n");
+    let detections = inner
+        .detections
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for (source, count) in detections.iter() {
+        let _ = writeln!(out, "ocbot_detection_total{{source=\"{source}\"}} {count}");
+    }
     out.push_str("# TYPE ocbot_probe_failures_total counter\n");
     let probes = inner
         .probe_failures

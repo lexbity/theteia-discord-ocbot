@@ -18,15 +18,39 @@ use crate::app::error::AppError;
 
 /// Attempt to finalize a running action whose session went idle.
 ///
+/// Which scheduler caused the completion read (SPEC-003 P-29): the W5 flip
+/// gate reads the event/fallback split from `ocbot_detection_total{source}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetectedBy {
+    /// The event-stream dispatcher.
+    Event,
+    /// A polling loop (watcher tick, reconcile, ops scan).
+    Fallback,
+}
+
+impl DetectedBy {
+    /// The metric label.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            DetectedBy::Event => "event",
+            DetectedBy::Fallback => "fallback",
+        }
+    }
+}
+
 /// `abort_requested` forces the `Aborted` classification (FR-10: the abort path
 /// finalizes only after the server confirms idle). Returns `true` when a report
 /// was delivered, `false` when the action is blocked by a pending gate (and
-/// stays `running`).
+/// stays `running`). `detected_by` is telemetry only (P-29): it is counted and
+/// changes no decision.
 pub async fn finalize_action(
     ctx: &Arc<AppContext>,
     action: &ActionRow,
     abort_requested: bool,
+    detected_by: DetectedBy,
 ) -> Result<bool, AppError> {
+    ctx.metrics.inc_detection(detected_by.label());
     let Some(session_id) = action.session_id.clone() else {
         // No session ever got bound; nothing to do.
         return Ok(false);

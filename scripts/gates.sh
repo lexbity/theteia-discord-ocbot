@@ -237,3 +237,14 @@ for render_file in mod report gate browser redact label; do
 done
 
 echo "gates: OK"
+
+# --- SPEC-003 W4 appended gates ---------------------------------------------
+# G20: frames are untrusted input (P-32): the supervisor and the dispatcher
+# must never pass a frame's body/payload/data field to any tracing call. The
+# structural rule: the only frame-logging helper is log_frame(event, session_id),
+# which takes neither.
+if grep -nE 'tracing::(trace|debug|info|warn|error)!!?\(.*\b(body|payload|data)\b' \
+     crates/ocbot/src/app/supervisor.rs crates/ocbot/src/app/wake.rs 2>/dev/null; then
+  fail "G20: a frame body field reached a tracing call (P-32)"
+fi
+probe "G20" 'tracing::.*\bpayload\b' 'tracing::debug!(payload = ?frame, "frame");'

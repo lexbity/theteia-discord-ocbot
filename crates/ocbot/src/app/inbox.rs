@@ -13,6 +13,7 @@ use ocbot_core::outcome::{Classification, classify};
 use ocbot_core::ports::Activity;
 use ocbot_core::render::{fence_neutralize, headline, split_excerpt};
 
+use crate::app::completion::DetectedBy;
 use crate::app::context::AppContext;
 use crate::app::error::AppError;
 
@@ -34,7 +35,7 @@ impl Inbox {
     /// Run until cancelled.
     pub async fn run_forever(&self) {
         loop {
-            if let Err(error) = tick(&self.ctx).await {
+            if let Err(error) = tick(&self.ctx, DetectedBy::Fallback).await {
                 tracing::error!(error = %error, "inbox tick failed");
             }
             tokio::time::sleep(self.interval).await;
@@ -42,8 +43,18 @@ impl Inbox {
     }
 }
 
-/// One poll pass over external root sessions.
-pub async fn tick(ctx: &Arc<AppContext>) -> Result<(), AppError> {
+/// One poll pass over external root sessions. The loop is a thin timer around
+/// [`diff_sessions`]: the tick passes [`DetectedBy::Fallback`], the event
+/// dispatcher passes [`DetectedBy::Event`] (SPEC-003 W4 — one body, two
+/// schedulers).
+pub async fn tick(ctx: &Arc<AppContext>, detected_by: DetectedBy) -> Result<(), AppError> {
+    diff_sessions(ctx, detected_by).await
+}
+
+/// The shared session-list diff: one `list_sessions(root_only)` read, deduped
+/// completion posts per external root, external lock sync. `detected_by` is
+/// attributed into every completion this pass delivers (P-29).
+pub async fn diff_sessions(ctx: &Arc<AppContext>, detected_by: DetectedBy) -> Result<(), AppError> {
     let roots = ctx
         .opencode
         .list_sessions(true)
@@ -55,7 +66,7 @@ pub async fn tick(ctx: &Arc<AppContext>) -> Result<(), AppError> {
         if bot_sessions.contains(&session.id) {
             continue;
         }
-        tick_external(ctx, session).await?;
+        tick_external(ctx, session, detected_by).await?;
     }
     Ok(())
 }
@@ -65,6 +76,7 @@ pub async fn tick(ctx: &Arc<AppContext>) -> Result<(), AppError> {
 async fn tick_external(
     ctx: &Arc<AppContext>,
     session: &ocbot_core::ports::PortSession,
+    detected_by: DetectedBy,
 ) -> Result<(), AppError> {
     let dir = session.directory.as_deref();
     ctx.store.upsert_seen(&session.id, dir).await?;
@@ -92,7 +104,7 @@ async fn tick_external(
             if is_muted(ctx, &session.id, dir).await? {
                 return Ok(());
             }
-            deliver_completion(ctx, session, dir).await?;
+            deliver_completion(ctx, session, dir, detected_by).await?;
         }
         Err(error) => {
             tracing::warn!(session = %session.id, error = %error, "inbox activity probe failed");
@@ -108,6 +120,7 @@ async fn deliver_completion(
     ctx: &Arc<AppContext>,
     session: &ocbot_core::ports::PortSession,
     dir: Option<&str>,
+    detected_by: DetectedBy,
 ) -> Result<(), AppError> {
     let Some(snapshot) = ctx.opencode.last_assistant(&session.id).await? else {
         return Ok(()); // freshly created / no assistant message yet
@@ -128,6 +141,9 @@ async fn deliver_completion(
         tracing::debug!(session = %session.id, seq, "completion already notified");
         return Ok(());
     }
+    // A delivered completion is a won detection (P-29): attributed here, after
+    // the dedupe, so the counter is the honest event/fallback numerator.
+    ctx.metrics.inc_detection(detected_by.label());
     let post = ctx.discord.post(channel, &message).await;
     match post {
         Ok(msg_id) => {

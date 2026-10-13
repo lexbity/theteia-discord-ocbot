@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use ocbot_core::ports::Activity;
 
-use crate::app::completion::finalize_action;
+use crate::app::completion::{DetectedBy, finalize_action};
 use crate::app::context::AppContext;
 use crate::app::error::AppError;
 use crate::app::handlers::support;
@@ -45,7 +45,7 @@ pub async fn execute(ctx: &Arc<AppContext>, source: &InteractionSource) -> Resul
         ));
     }
 
-    finalize_action(ctx, &action, true).await?;
+    finalize_action(ctx, &action, true, DetectedBy::Fallback).await?;
     ctx.store
         .audit(source.user_id, "abort", Some(action.id), "aborted")
         .await?;

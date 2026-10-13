@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use ocbot_core::ports::Activity;
 
-use crate::app::completion::finalize_action;
+use crate::app::completion::{DetectedBy, finalize_action};
 use crate::app::context::AppContext;
 use crate::app::error::AppError;
 
@@ -46,12 +46,14 @@ impl Watcher {
                 continue;
             };
             match self.ctx.opencode.activity(&session_id).await {
-                Ok(Activity::Idle) => match finalize_action(&self.ctx, action, false).await {
-                    Ok(_) => {}
-                    Err(error) => {
-                        tracing::error!(action = action.id, error = %error, "finalize failed");
+                Ok(Activity::Idle) => {
+                    match finalize_action(&self.ctx, action, false, DetectedBy::Fallback).await {
+                        Ok(_) => {}
+                        Err(error) => {
+                            tracing::error!(action = action.id, error = %error, "finalize failed");
+                        }
                     }
-                },
+                }
                 Ok(Activity::Busy) => {}
                 Err(error) => {
                     // In the polling model (S-2) a failed probe is retried

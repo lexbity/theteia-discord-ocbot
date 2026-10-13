@@ -96,7 +96,10 @@ fn spawn_supervisor(
     source: Arc<FakeEventSource>,
     cfg: SupervisorConfig,
 ) -> tokio::task::JoinHandle<()> {
-    let supervisor = Supervisor::new(ctx, source, cfg).with_jitter(no_jitter());
+    // W3 semantics: the supervisor forwards frames into a channel nobody
+    // reads here (the W4 dispatcher owns that side in production).
+    let (frame_tx, _frame_rx) = tokio::sync::mpsc::channel::<opencode_v2_client::EventFrame>(1024);
+    let supervisor = Supervisor::new(ctx, source, cfg, frame_tx).with_jitter(no_jitter());
     tokio::spawn(async move {
         supervisor.run_forever().await;
     })
@@ -365,7 +368,8 @@ async fn a_disabled_event_source_never_connects() {
         enabled: false,
         ..ocbot::config::EventsConfig::spec_defaults()
     };
-    let handle = Supervisor::spawn_if_enabled(ctx, source.clone(), &events);
+    let (frame_tx, _frame_rx) = tokio::sync::mpsc::channel::<opencode_v2_client::EventFrame>(1024);
+    let handle = Supervisor::spawn_if_enabled(ctx, source.clone(), &events, frame_tx);
     assert!(handle.is_none(), "pure-poll mode spawns nothing");
     tokio::time::sleep(Duration::from_millis(1100)).await;
     assert_eq!(source.connect_count(), 0, "zero connection attempts");

@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use common::{FakeDiscord, FakeGit, FakeOpenCode, context};
 use ocbot::adapters::store::StoreHandle;
+use ocbot::app::completion::DetectedBy;
 use ocbot::app::handlers::adopt;
 use ocbot::app::inbox;
 use ocbot::app::watcher::Watcher;
@@ -72,6 +73,10 @@ fn ext_session() -> PortSession {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the DetectedBy threading (SPEC-003 W4) pushed the tick calls past the cap; splitting the assert chain would hide the scenario"
+)]
 async fn external_completion_posts_once_and_a_reply_adopts() {
     let store = StoreHandle::open_in_memory().expect("store");
     let opencode = FakeOpenCode::new();
@@ -82,7 +87,9 @@ async fn external_completion_posts_once_and_a_reply_adopts() {
     let ctx = ctx_for(&store, Arc::new(opencode.clone()), &discord);
 
     // First poll: the external completion lands in the inbox.
-    inbox::tick(&ctx).await.expect("inbox tick");
+    inbox::tick(&ctx, DetectedBy::Fallback)
+        .await
+        .expect("inbox tick");
     let posts = discord.posts();
     let inbox_posts: Vec<_> = posts
         .iter()
@@ -111,7 +118,9 @@ async fn external_completion_posts_once_and_a_reply_adopts() {
     );
 
     // A second poll must not duplicate (the (session, seq) key).
-    inbox::tick(&ctx).await.expect("inbox tick again");
+    inbox::tick(&ctx, DetectedBy::Fallback)
+        .await
+        .expect("inbox tick again");
     assert_eq!(
         discord
             .posts()
@@ -195,7 +204,9 @@ async fn a_muted_directory_is_silent() {
     let discord = FakeDiscord::new();
     let ctx = ctx_for(&store, Arc::new(opencode), &discord);
 
-    inbox::tick(&ctx).await.expect("inbox tick muted");
+    inbox::tick(&ctx, DetectedBy::Fallback)
+        .await
+        .expect("inbox tick muted");
     assert!(
         discord
             .posts()
