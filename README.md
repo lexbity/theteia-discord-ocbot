@@ -1,4 +1,4 @@
-# ocbot
+# Theteia - the Discord ocbot
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.98.1_pinned-blue)](rust-toolchain.toml)
@@ -14,7 +14,7 @@
 
 ## What is ocbot?
 
-ocbot is a Discord bot that remote-controls a local opencode server.
+Theteia - ocbot is a Discord bot that remote-controls a local opencode server (coding agent).
 You send a prompt to one of your codebases from your phone.
 When the agent finishes, you get one report and three buttons: **Accept** (commit), **Follow up** (keep going), or **Park & redo** (branch the attempt, reset, and try again).
 The bot itself contains no AI: it is a deterministic controller.
@@ -92,8 +92,7 @@ The full command reference is in [docs/GETTING_STARTED.md](docs/GETTING_STARTED.
 | [docs/TESTING.md](docs/TESTING.md) | Test suites and coverage gates |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
 
-## Status and license
+## Notes and license
 
-Pre-release software (workspace version 0.1.0), built for a single operator.
-The publishable API surface today is the `opencode-v2-client` crate — see its [README](crates/opencode-client/README.md).
-Licensed under [Apache-2.0](LICENSE).
+- (this project is not associated with Opencode)
+- Licensed under [Apache-2.0](LICENSE).
