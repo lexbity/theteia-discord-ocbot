@@ -40,6 +40,23 @@ use ocbot_core::ports::{Clock, FsPort, GitPort, OpenCodePort, PermissionRule};
     reason = "the bootstrap sequence is a linear I/O chain; per-step extraction would add indirection without reuse"
 )]
 pub async fn start() -> ExitCode {
+    // The shutdown listeners go in before anything else: a SIGTERM that lands
+    // *while booting* — between the config load and the surface registry —
+    // must still drain (store checkpoint, shard shutdown) instead of killing
+    // the process between phases.
+    let shutdown_listener = match shutdown_listener() {
+        Ok(listener) => listener,
+        Err(error) => {
+            // Before the scrubber exists, so this goes to stderr unscrubbed:
+            // the message is the platform's io error, never a secret.
+            use std::io::Write as _;
+            let _ = writeln!(
+                std::io::stderr(),
+                "cannot install the signal handlers: {error}"
+            );
+            return ExitCode::from(1);
+        }
+    };
     // The scrubber must exist before the first log line: load the config
     // first, fall back to the built-in patterns if it does not parse, then
     // install the JSON subscriber. Config errors are reported through it.
@@ -62,6 +79,51 @@ pub async fn start() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    // Surface selection (SPEC-004 PH-2/PH-3): resolved before anything else
+    // so a signal-only box skips the Discord-only requirements entirely.
+    let mut surfaces = match SurfaceSet::from_config(&config) {
+        Ok(surfaces) => surfaces,
+        Err(errors) => {
+            for error in errors {
+                tracing::error!("surface set error: {error}");
+            }
+            return ExitCode::from(1);
+        }
+    };
+    let discord_selected = surfaces.contains(ocbot_core::Surface::Discord);
+    let signal_selected = surfaces.contains(ocbot_core::Surface::Signal);
+
+    // SPEC-004 PH-3 doctor gate (FR-114/FR-116): the signal surface must
+    // prove a healthy, current daemon or it is refused — the surface only;
+    // discord (if selected) keeps booting (D-10/NFR-103). The whole check is
+    // budgeted at 2 s, so an absent daemon never stalls the boot. PH-3 ships
+    // no transport yet, so even a healthy daemon is dropped with a loud
+    // warning (the surface lands in PH-4).
+    if signal_selected {
+        match doctor::signal_daemon(&config.signal).await {
+            Ok(report) => {
+                tracing::info!(
+                    version = %report.version,
+                    accounts = ?report.accounts,
+                    "signal-cli daemon healthy (FR-114/FR-116)"
+                );
+                tracing::warn!(
+                    "signal transport lands in SPEC-004 PH-4; refusing the surface until then"
+                );
+            }
+            Err(errors) => {
+                for error in &errors {
+                    tracing::error!(error = %error, "signal surface refused by the boot doctor");
+                }
+            }
+        }
+        surfaces = surfaces.without(ocbot_core::Surface::Signal);
+        if surfaces.is_empty() {
+            tracing::error!("no chat surface survived the boot doctor — refusing to start");
+            return ExitCode::from(3);
+        }
+    }
+
     let secrets = match Secrets::from_env() {
         Ok(secrets) => secrets,
         Err(errors) => {
@@ -75,13 +137,20 @@ pub async fn start() -> ExitCode {
         tracing::error!("missing {}", crate::config::ENV_OPENCODE_PASSWORD);
         return ExitCode::from(1);
     };
-    let Some(token) = secrets.discord_token else {
-        tracing::error!("missing {}", crate::config::ENV_DISCORD_TOKEN);
-        return ExitCode::from(1);
-    };
-    let Some(operator) = config.resolved_operator() else {
-        tracing::error!("missing [discord] allowed_user_id (config or env)");
-        return ExitCode::from(1);
+    // Discord credentials are required iff the discord surface is selected
+    // (SPEC-004 D-09: a signal-only box must boot without them).
+    let discord_credentials: Option<(String, u64)> = if discord_selected {
+        let Some(token) = secrets.discord_token else {
+            tracing::error!("missing {}", crate::config::ENV_DISCORD_TOKEN);
+            return ExitCode::from(1);
+        };
+        let Some(operator) = config.resolved_operator() else {
+            tracing::error!("missing [discord] allowed_user_id (config or env)");
+            return ExitCode::from(1);
+        };
+        Some((token, operator))
+    } else {
+        None
     };
 
     // Doctor, FR-40: refuse wrong server versions; tolerate "down for now".
@@ -171,25 +240,21 @@ pub async fn start() -> ExitCode {
     };
     let client = Arc::new(client);
     let opencode: Arc<dyn OpenCodePort> = Arc::new(OpenCodeAdapter::new(client.clone()));
-    // Surface registry (SPEC-004 PH-2): resolve the selection, build one
-    // instrumented port per surface, and hand the core the collapsed port.
-    let surfaces = match SurfaceSet::from_config(&config) {
-        Ok(surfaces) => surfaces,
-        Err(errors) => {
-            for error in errors {
-                tracing::error!("surface set error: {error}");
-            }
-            return ExitCode::from(1);
-        }
-    };
+    // Surface registry (SPEC-004 PH-2/PH-3): one instrumented port per
+    // surviving surface, handed to the core as the collapsed port.
     // The announce destination: where broadcasts (degraded/stall notices,
     // later reports) land — the inbox channel, falling back to ops (P14).
     let announce_channel = config.discord.inbox_channel.or(config.discord.ops_channel);
     let announce = ocbot_core::Destination::discord(announce_channel.unwrap_or(0));
-    let discord_transport: Arc<dyn ChatPort> = Arc::new(
-        DiscordAdapter::new(shared_http(&token, operator), operator)
-            .with_announce(announce_channel),
-    );
+    let discord_transport: Option<Arc<dyn ChatPort>> =
+        discord_credentials
+            .as_ref()
+            .map(|(token, operator)| -> Arc<dyn ChatPort> {
+                Arc::new(
+                    DiscordAdapter::new(shared_http(token, *operator), *operator)
+                        .with_announce(announce_channel),
+                )
+            });
     let mut transports: Vec<(
         ocbot_core::Surface,
         ocbot_core::Destination,
@@ -198,15 +263,24 @@ pub async fn start() -> ExitCode {
     for surface in surfaces.iter() {
         match surface {
             ocbot_core::Surface::Discord => {
-                transports.push((surface, announce.clone(), discord_transport.clone()));
+                if let Some(port) = &discord_transport {
+                    transports.push((surface, announce.clone(), port.clone()));
+                } else {
+                    // Unreachable: the credentials above are required iff the
+                    // surface is selected.
+                    tracing::error!("discord selected but no transport was built");
+                }
             }
-            // Unreachable today: config validation refuses to select a
-            // surface whose transport does not exist yet (PH-4 for Signal).
+            // Unreachable: the PH-3 doctor gate drops the signal
+            // surface before transports are built (the transport is PH-4).
             ocbot_core::Surface::Signal => {
                 tracing::error!("no transport available for surface {surface}");
-                return ExitCode::from(1);
             }
         }
+    }
+    if transports.is_empty() {
+        tracing::error!("no chat surface has a transport — refusing to start");
+        return ExitCode::from(3);
     }
     let registry = SurfaceRegistry::build(transports, &metrics);
     tracing::info!(
@@ -215,10 +289,17 @@ pub async fn start() -> ExitCode {
     );
     let chat: Arc<dyn ChatPort> = registry.single();
     let guard = Guard {
-        allowed_actors: vec![ocbot_core::ActorId::from_parts(
-            ocbot_core::Surface::Discord,
-            &operator.to_string(),
-        )],
+        // One operator identity per configured surface (D-03). A signal-only
+        // box has no Discord identity; PH-4 adds the Signal one (D-11).
+        allowed_actors: discord_credentials
+            .as_ref()
+            .map(|(_, operator)| {
+                vec![ocbot_core::ActorId::from_parts(
+                    ocbot_core::Surface::Discord,
+                    &operator.to_string(),
+                )]
+            })
+            .unwrap_or_default(),
         ops_channel: config.discord.ops_channel,
         inbox_channel: config.discord.inbox_channel,
     };
@@ -318,27 +399,31 @@ pub async fn start() -> ExitCode {
         });
     }
 
-    let intents = serenity::all::GatewayIntents::GUILDS
-        | serenity::all::GatewayIntents::GUILD_MESSAGES
-        | serenity::all::GatewayIntents::DIRECT_MESSAGES
-        | serenity::all::GatewayIntents::MESSAGE_CONTENT;
-    let shard_manager = match start_gateway(&token, intents, ctx.clone()).await {
-        Ok(manager) => manager,
-        Err(error) => {
-            tracing::error!(error = %error, "gateway start failed");
-            return ExitCode::from(1);
+    // The serenity gateway exists iff the discord surface does (SPEC-004
+    // D-09: a signal-only box has no Discord connection at all).
+    let shard_manager = if let Some((token, _)) = &discord_credentials {
+        let intents = serenity::all::GatewayIntents::GUILDS
+            | serenity::all::GatewayIntents::GUILD_MESSAGES
+            | serenity::all::GatewayIntents::DIRECT_MESSAGES
+            | serenity::all::GatewayIntents::MESSAGE_CONTENT;
+        match start_gateway(token, intents, ctx.clone()).await {
+            Ok(manager) => Some(manager),
+            Err(error) => {
+                tracing::error!(error = %error, "gateway start failed");
+                return ExitCode::from(1);
+            }
         }
+    } else {
+        tracing::info!("discord surface not selected: skipping the serenity gateway");
+        None
     };
 
-    match shutdown_signal().await {
-        Ok(signal) => tracing::info!(signal, "shutdown received; draining"),
-        Err(error) => {
-            tracing::error!(error = %error, "signal handler failed");
-            return ExitCode::from(1);
-        }
-    }
+    let signal = shutdown_signal(shutdown_listener).await;
+    tracing::info!(signal, "shutdown received; draining");
 
-    shard_manager.shutdown_all().await;
+    if let Some(shard_manager) = shard_manager {
+        shard_manager.shutdown_all().await;
+    }
     store.shutdown().await;
     tracing::info!("drained; goodbye");
     ExitCode::SUCCESS
@@ -347,19 +432,37 @@ pub async fn start() -> ExitCode {
 /// Wait for SIGINT or SIGTERM. `systemd` sends SIGTERM (`KillSignal=SIGTERM`),
 /// so both must drain: a bare `ctrl_c()` would terminate on SIGTERM without the
 /// store's WAL checkpoint (spec NFR-9). Returns the signal name for the log.
-async fn shutdown_signal() -> std::io::Result<&'static str> {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{SignalKind, signal};
-        let mut interrupt = signal(SignalKind::interrupt())?;
-        let mut terminate = signal(SignalKind::terminate())?;
+///
+/// The listeners are installed by [`shutdown_listener`] at the very top of
+/// [`start`] — a signal that arrives *while booting* (between the config load
+/// and the registry) must drain cleanly, not kill the process mid-chain.
+async fn shutdown_signal(listener: ShutdownListener) -> &'static str {
+    listener.wait().await
+}
+
+/// The SIGINT/SIGTERM listeners, registered before anything else runs.
+struct ShutdownListener {
+    interrupt: tokio::signal::unix::Signal,
+    terminate: tokio::signal::unix::Signal,
+}
+
+impl ShutdownListener {
+    /// Await whichever signal arrives first, naming it for the log.
+    async fn wait(mut self) -> &'static str {
         tokio::select! {
-            _ = interrupt.recv() => Ok("SIGINT"),
-            _ = terminate.recv() => Ok("SIGTERM"),
+            _ = self.interrupt.recv() => "SIGINT",
+            _ = self.terminate.recv() => "SIGTERM",
         }
     }
-    #[cfg(not(unix))]
-    {
-        tokio::signal::ctrl_c().await.map(|()| "ctrl-c")
-    }
+}
+
+/// Install the shutdown listeners. Errors only if the platform refuses to
+/// register them (a permissions/cgroup oddity); the caller degrades to
+/// running without a drain path rather than refusing to boot.
+fn shutdown_listener() -> std::io::Result<ShutdownListener> {
+    use tokio::signal::unix::{SignalKind, signal};
+    Ok(ShutdownListener {
+        interrupt: signal(SignalKind::interrupt())?,
+        terminate: signal(SignalKind::terminate())?,
+    })
 }

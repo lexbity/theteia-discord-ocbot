@@ -1,11 +1,12 @@
-//! Port adapters: the opencode client, git (argv-only), SQLite, the clock, and
-//! serenity.
+//! Port adapters: the opencode client, git (argv-only), SQLite, the clock,
+//! serenity, and the signal-cli JSON-RPC surface (SPEC-004 PH-3).
 
 pub mod clock;
 pub mod discord;
 pub mod fs;
 pub mod git;
 pub mod opencode;
+pub mod signal;
 pub mod store;
 
 /// Current wall-clock time as unix seconds, saturating on overflow.

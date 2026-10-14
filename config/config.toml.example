@@ -70,8 +70,11 @@ git_timeout_secs = 10
 # ]
 
 # The chat surfaces to run (SPEC-004 D-09): one name or a list; the default
-# is ["discord"]. Selecting "signal" is refused until the Signal surface
-# ships — carrying a [signal] section while running Discord-only is fine.
+# is ["discord"]. Selecting "signal" requires [signal].socket +
+# [signal].operator_number below, and a boot doctor gates the signal-cli
+# daemon itself (FR-114/FR-116): an unhealthy daemon refuses the signal
+# surface only — exit 3 when no surface survives. Carrying a [signal] section
+# while running Discord-only is fine.
 # channel = ["discord"]
 
 [discord]

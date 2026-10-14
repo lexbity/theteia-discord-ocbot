@@ -49,6 +49,25 @@ Every family exposed on `127.0.0.1:9464` (names are load-bearing — see `crates
 
 Each configured chat surface is wrapped in an instrumented port (SPEC-004 PH-2). Three consecutive failed sends declare the surface **down**; the first successful send after an outage declares it **recovered**. Both transitions are edge-triggered and announced exactly once — a downed surface posts one notice on every *other* configured surface (with one surface configured, the notice goes nowhere and only the gauge moves). Sustained `ocbot_surface_send_failures_total` growth with `ocbot_surface_up{surface}=0` means the transport (bot token, daemon, socket) is the problem, not the bot: restart the surface's daemon, and the recovery notice confirms the fix.
 
+### The signal-cli surface (SPEC-004 PH-3 contract layer)
+
+Selecting `signal` in `channel` gates the daemon at boot, **before** the Discord credentials are read, so a signal-only box can be diagnosed without any token. The whole check is budgeted at 2 s (an absent daemon never stalls boot).
+
+| Check | Refusal | Where you see it |
+|---|---|---|
+| `[signal].socket` missing or not a unix socket | surface refused | boot log: `signal socket … is not a unix socket (FR-116)` |
+| Socket mode is not exactly `0600` | surface refused | boot log: `… has mode 644, must be 0600 (FR-116)` — fix with `systemd RuntimeDirectory=signal-cli` (see [DEPLOYMENT](DEPLOYMENT.md)) |
+| Socket owned by another uid | surface refused | boot log: `… is owned by uid …` |
+| `version` older than `MIN_SIGNAL_CLI_VERSION` | surface refused | boot log names both versions; upgrade signal-cli or drop `signal` from `channel` |
+| No registered accounts | surface refused | register/link a number on the daemon host first |
+| Daemon silent past 2 s | surface refused | `… did not answer within 2000 ms (NFR-103)` |
+
+Exit codes: **1** config/secrets/version/permission-baseline faults, **2** permission baseline, **3** *no chat surface survived the doctor* (e.g. `channel = "signal"` with a dead daemon). A signal daemon problem never takes a healthy Discord surface down — that is the design (D-10), and the log line `signal surface refused by the boot doctor` names the reason.
+
+The pinned wire contract — the exact JSON-RPC subset, the reply shapes, and what a live capture must still confirm — is recorded in `crates/ocbot/src/adapters/signal/KNOWN_CAPS.md`. `tests/common/signal_fake.rs` is that contract as an executable double: every client method is tested against it, so a signal-cli upgrade that drifts shows up as a contract-test failure, not as a mystery in production.
+
+No Signal traffic is carried by this build beyond the doctor yet: the transport, inbound grammar and decision verbs land in the slices after this one (see the Changelog).
+
 ## Logs
 
 Structured JSON from `tracing`, one line per event.
@@ -74,6 +93,7 @@ Against a stock Prometheus, these match the design's own thresholds:
 | Stream dead | `ocbot_stream_state == 0` for 10 m | Doorbell gone; latency regresses to fallback ticks |
 | Decode failures bursting | `increase(ocbot_frames_decode_failures_total[10m]) > 25` | The supervisor reconnects at this threshold — likely server drift |
 | Lock stuck | `ocbot_lock_age_seconds > 86400` | A directory held for a day is probably forgotten |
+| Surface down | `ocbot_surface_up{surface} == 0` for 5 m | The transport (bot token / daemon socket) is the problem, not the bot; the other surfaces keep serving |
 | Latency regression | p95 bucket of `ocbot_idle_to_report_seconds` above 5 s | NFR-2 budget |
 
 ## Degraded behaviors (all by design)
@@ -96,6 +116,8 @@ Against a stock Prometheus, these match the design's own thresholds:
 | `ocbot_reconcile_repairs_total` increased | A crash mid-Accept/Park/Reset | Nothing to do — reconcile rolled it forward; the report/git state is authoritative |
 | Suspicious "manual" rows in `/history` | Commits made outside the bot, or a restored older database | Expected — git is the source of truth; see [RESTORE](RESTORE.md) |
 | Database trouble | `PRAGMA integrity_check` on a copy | Follow [RESTORE](RESTORE.md); stop the bot first |
+| Bot exits 3 at boot | `journalctl -u ocbot -b`: `no chat surface survived the boot doctor` | The signal-cli daemon failed the boot doctor — see the table above; with Discord also selected, Discord alone never causes exit 3 |
+| Expecting a Signal reply on this build | `ocbot_surface_up{surface="signal"}` | Not yet: this slice ships the contract layer and the doctor only. The transport, inbound grammar and decision verbs are later slices |
 | RSS creeping up | `scripts/measure-rss.sh` | The unit enforces `MemoryMax=200M`; steady state is ~20 MB — sustained growth is a bug, report it |
 
 ## Database operations

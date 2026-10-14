@@ -10,6 +10,8 @@
     reason = "shared test harness; the subset used varies per test crate, and tests assert by unwrapping (C6)"
 )]
 
+pub mod signal_fake;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

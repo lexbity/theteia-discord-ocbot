@@ -136,7 +136,12 @@ for needle in "git push" "sudo" "rm -rf" ".ssh"; do
 done
 
 # G13: FR-42 ships default-off (D-R6); an on-by-default is a config fault.
-if grep -rn "PER_SESSION_RULESET=true\|per_session_ruleset = true" crates/ 2>/dev/null; then
+# Scanned everywhere *except* tests: a test must be able to exercise the
+# opt-in branch (NFR-107 — a requirement with no failing test is decoration),
+# and a literal inside a test file is never a deployed setting. The probe
+# proves the detector still fires on its target.
+if grep -rn --exclude-dir=tests "PER_SESSION_RULESET=true\|per_session_ruleset = true" \
+     crates/ config/ 2>/dev/null; then
   fail "G13: FR-42 per-session ruleset must stay default-off (D-R6)"
 fi
 probe "G13" "per_session_ruleset = true" 'per_session_ruleset = true'
@@ -144,8 +149,9 @@ probe "G13" "per_session_ruleset = true" 'per_session_ruleset = true'
 # --- Phase 6 appended gates (spec Part 2, Phase 6) -------------------------
 # G14: freeform paths ship default-off (P11); containment (FR-34/FR-35) is the
 # baseline, and enabling freeform is a deliberate deployment act, never a
-# literal in the tree.
-if grep -rn "ALLOW_FREEFORM_PATHS=true\|allow_freeform_paths = true" crates/ 2>/dev/null; then
+# literal in the tree. Same test exclusion as G13: the branch is tested.
+if grep -rn --exclude-dir=tests "ALLOW_FREEFORM_PATHS=true\|allow_freeform_paths = true" \
+     crates/ config/ 2>/dev/null; then
   fail "G14: freeform paths must stay default-off (P11)"
 fi
 probe "G14" "allow_freeform_paths = true" 'allow_freeform_paths = true'

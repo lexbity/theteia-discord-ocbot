@@ -50,8 +50,8 @@ pub struct Config {
     /// The Discord surface section (required iff discord is selected).
     #[serde(default)]
     pub discord: DiscordSection,
-    /// The Signal surface section (parsed now; the surface itself arrives in
-    /// a later slice — selecting it is a loud load error until then).
+    /// The Signal surface section (required iff signal is selected; the
+    /// daemon itself is doctor-gated at boot — SPEC-004 PH-3/FR-114).
     #[serde(default)]
     pub signal: SignalSection,
     /// Inbox root-session poll interval in ms (S-7 locked default 5 s).
@@ -613,12 +613,19 @@ impl Config {
             warn_unselected_section("discord");
         }
 
-        // Honest loud failure until the Signal surface ships (PH-4): selecting
-        // it is a configuration the binary cannot honor yet.
+        // Honest loud failure until the Signal surface ships its transport
+        // (PH-4): the section's keys are required, and the daemon itself is
+        // gated by the boot doctor (SPEC-004 FR-114/116 — a bad daemon
+        // refuses the surface at boot, not the load).
         if signal_selected {
-            errors.push(
-                "channel selects `signal`, which is not implemented until SPEC-004 PH-4".to_owned(),
-            );
+            if self.signal.socket.is_none() {
+                errors.push("[signal].socket is required when signal is selected".to_owned());
+            }
+            if self.signal.resolved_operator_number().is_none() {
+                errors.push(format!(
+                    "[signal].operator_number is required when signal is selected (config or env {ENV_SIGNAL_OPERATOR})"
+                ));
+            }
         } else if self.signal.is_configured() {
             warn_unselected_section("signal");
         }

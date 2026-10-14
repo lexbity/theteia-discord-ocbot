@@ -70,6 +70,13 @@ impl SurfaceSet {
     pub fn contains(&self, surface: Surface) -> bool {
         self.0.contains(&surface)
     }
+
+    /// The set without `surface` (the PH-3 boot gate: a surface the doctor
+    /// refuses is dropped, and the survivors keep the process alive).
+    #[must_use]
+    pub fn without(self, surface: Surface) -> Self {
+        Self(self.0.into_iter().filter(|kept| *kept != surface).collect())
+    }
 }
 
 /// Shared per-surface health state (cheap to clone; atomics inside). The

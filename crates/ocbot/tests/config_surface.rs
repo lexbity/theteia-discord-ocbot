@@ -1,7 +1,8 @@
 //! Surface-selection config tests (SPEC-004 D-09/FR-117, PH-1): the nested
-//! `[discord]`/`[signal]` shape, single-or-list `channel`, collected
-//! validation, and the honest loud refusal of the not-yet-implemented Signal
-//! surface.
+//! `[discord]`/`[signal]` shape, single-or-list `channel`, and collected
+//! validation. PH-3 turns `channel = "signal"` from a not-yet refusal into a
+//! required-keys contract: the section's socket and operator number must be
+//! present, and the daemon itself is doctor-gated at boot (FR-114/FR-116).
 
 #![allow(
     clippy::unwrap_used,
@@ -85,20 +86,51 @@ fn duplicate_surface_entries_are_rejected() {
 }
 
 #[test]
-fn selecting_signal_is_a_loud_not_yet_error() {
-    // The section parses (and validates its own shape), but selecting the
-    // surface is refused until PH-4 (honest failure, not a silent no-op).
-    let errors = parse(
-        "channel = \"signal\"\n[signal]\nsocket = \"/run/signal-cli/socket\"\noperator_number = \"+15551234567\"\n",
-    )
-    .validate()
-    .expect_err("signal not implemented");
+fn selecting_signal_requires_its_section_keys() {
+    // The section parses (and validates its own shape), but *selecting* the
+    // surface without its two required keys is a loud load error (D-09): a
+    // signal box with no socket or no operator number can never reach a
+    // allowlisted identity, so failing to load is the honest answer.
+    let missing_socket =
+        parse("channel = \"signal\"\n[signal]\noperator_number = \"+15551234567\"\n");
+    let errors = missing_socket
+        .validate()
+        .expect_err("socket required when selected");
     assert!(
         errors
             .iter()
-            .any(|error| error.contains("not implemented until SPEC-004 PH-4")),
+            .any(|error| error.contains("[signal].socket is required")),
         "{errors:?}"
     );
+
+    let missing_operator =
+        parse("channel = \"signal\"\n[signal]\nsocket = \"/run/signal-cli/socket\"\n");
+    let errors = missing_operator
+        .validate()
+        .expect_err("operator number required when selected");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("[signal].operator_number is required")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn a_fully_configured_signal_selection_validates() {
+    // Both keys present (the daemon's own health is the boot doctor's job,
+    // not the load's — FR-114/FR-116, proven in tests/doctor_signal.rs).
+    let config = parse(
+        "channel = [\"discord\", \"signal\"]\n[discord]\nallowed_user_id = 42\n[signal]\nsocket = \"/run/signal-cli/socket\"\noperator_number = \"+15551234567\"\n",
+    );
+    assert!(config.validate().is_ok(), "{:?}", config.validate());
+
+    // Signal-only, no [discord] section at all: still valid (D-09 — the box
+    // has no Discord identity to configure).
+    let signal_only = parse(
+        "channel = \"signal\"\n[signal]\nsocket = \"/run/signal-cli/socket\"\noperator_number = \"+15551234567\"\n",
+    );
+    assert!(signal_only.validate().is_ok());
 }
 
 #[test]
