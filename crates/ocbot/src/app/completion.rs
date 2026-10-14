@@ -140,7 +140,7 @@ async fn build_and_deliver(
         .await?;
 
     if delivered {
-        ctx.metrics.inc_reports_delivered();
+        ctx.metrics.inc_reports_delivered(dest.surface);
         ctx.metrics.action_entered(target);
         if let Some(started) = action.started_at {
             ctx.metrics

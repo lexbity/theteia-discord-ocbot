@@ -37,7 +37,7 @@ async fn announces_each_transition_once_and_never_touches_actions() {
     .await;
     let opencode = FakeOpenCode::new();
     let opencode_port: Arc<dyn OpenCodePort> = Arc::new(opencode.clone());
-    let discord = FakeChat::new();
+    let discord = FakeChat::new().with_announce(CHANNEL);
     let ctx = context_with(
         store.clone(),
         opencode_port,

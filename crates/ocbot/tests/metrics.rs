@@ -59,6 +59,10 @@ async fn http_get(addr: SocketAddr) -> String {
     String::from_utf8_lossy(&buffer).into_owned()
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one test scripts every metric family and asserts the endpoint exposes all of them; splitting would scatter the completeness proof"
+)]
 #[tokio::test]
 async fn endpoint_exposes_every_family_after_a_scripted_scenario() {
     let store = StoreHandle::open_in_memory().expect("store");
@@ -111,6 +115,15 @@ async fn endpoint_exposes_every_family_after_a_scripted_scenario() {
     registry.inc_frames_dropped();
     registry.inc_probe_failure("watcher");
     registry.set_opencode_up(true);
+    // SPEC-004 §5.10 surface families.
+    registry.set_surface_up(ocbot_core::Surface::Discord, true);
+    registry.inc_surface_send(ocbot_core::Surface::Discord, "post");
+    registry.inc_surface_send_failure(ocbot_core::Surface::Discord, "post");
+    registry.inc_surface_denied(ocbot_core::Surface::Discord);
+    registry.inc_surface_rate_dropped(ocbot_core::Surface::Discord);
+    registry.inc_signal_envelope_duplicates();
+    registry.set_pending_flows_open("run", 1);
+    registry.set_component_map_rows(3);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -125,7 +138,7 @@ async fn endpoint_exposes_every_family_after_a_scripted_scenario() {
     for needle in [
         "ocbot_actions_total{state=\"running\"}",
         "ocbot_transition_cas_conflicts_total",
-        "ocbot_reports_delivered_total",
+        "ocbot_reports_delivered_total{surface=\"discord\"}",
         "ocbot_gate_requests_total{kind=\"permission\",tool=\"bash\"}",
         "ocbot_gate_pending",
         "ocbot_idle_to_report_seconds_bucket{le=\"5\"}",
@@ -145,6 +158,14 @@ async fn endpoint_exposes_every_family_after_a_scripted_scenario() {
         "ocbot_frames_decode_failures_total",
         "ocbot_frames_dropped_total",
         "ocbot_probe_failures_total{loop=\"watcher\"}",
+        "ocbot_surface_up{surface=\"discord\"} 1",
+        "ocbot_surface_send_total{surface=\"discord\",op=\"post\"} 1",
+        "ocbot_surface_send_failures_total{surface=\"discord\",op=\"post\"} 1",
+        "ocbot_surface_denied_total{surface=\"discord\"} 1",
+        "ocbot_surface_rate_dropped_total{surface=\"discord\"} 1",
+        "ocbot_signal_envelope_duplicates_total 1",
+        "ocbot_pending_flows_open{flow=\"run\"} 1",
+        "ocbot_component_map_rows 3",
     ] {
         assert!(response.contains(needle), "missing metric family {needle}");
     }

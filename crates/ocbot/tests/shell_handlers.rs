@@ -242,7 +242,7 @@ async fn ops_tick_refreshes_gauges_and_announces_health() {
     )
     .await;
     let opencode = FakeOpenCode::new();
-    let discord = FakeChat::new();
+    let discord = FakeChat::new().with_announce(CHANNEL);
     let ctx = ctx_for(&store, opencode.clone(), &discord, 1_000);
 
     ops::tick(&ctx, 45 * 60).await.expect("tick");

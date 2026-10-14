@@ -20,5 +20,6 @@ pub mod reconcile;
 pub mod router;
 pub mod stall;
 pub mod supervisor;
+pub mod surfaces;
 pub mod wake;
 pub mod watcher;

@@ -14,6 +14,10 @@ ignore = [
     { id = "RUSTSEC-2026-0098", reason = "webpki 0.102 line unfixable; forced by serenity 0.12 S-9 pin; loopback bot" },
     { id = "RUSTSEC-2026-0099", reason = "webpki 0.102 line unfixable; forced by serenity 0.12 S-9 pin; loopback bot" },
     { id = "RUSTSEC-2026-0104", reason = "webpki 0.102 line unfixable; forced by serenity 0.12 S-9 pin; loopback bot" },
+    { id = "RUSTSEC-2026-0346", reason = "rustls/webpki 0.102 line unfixable; forced by serenity 0.12 S-9 pin; loopback bot" },
+    { id = "RUSTSEC-2026-0347", reason = "rustls/webpki 0.102 line unfixable; forced by serenity 0.12 S-9 pin; loopback bot" },
+    { id = "RUSTSEC-2026-0348", reason = "rustls/webpki 0.102 line unfixable; forced by serenity 0.12 S-9 pin; loopback bot" },
+    { id = "RUSTSEC-2026-0349", reason = "rustls/webpki 0.102 line unfixable; forced by serenity 0.12 S-9 pin; loopback bot" },
 ]
 
 [licenses]

@@ -27,6 +27,7 @@ use crate::app::metrics::{self, Metrics};
 use crate::app::ops::OpsLoop;
 use crate::app::reconcile;
 use crate::app::supervisor::Supervisor;
+use crate::app::surfaces::{SurfaceRegistry, SurfaceSet};
 use crate::app::wake::Dispatcher;
 use crate::app::watcher::Watcher;
 use crate::config::{Config, Secrets, config_path};
@@ -170,10 +171,49 @@ pub async fn start() -> ExitCode {
     };
     let client = Arc::new(client);
     let opencode: Arc<dyn OpenCodePort> = Arc::new(OpenCodeAdapter::new(client.clone()));
-    let chat: Arc<dyn ChatPort> = Arc::new(
+    // Surface registry (SPEC-004 PH-2): resolve the selection, build one
+    // instrumented port per surface, and hand the core the collapsed port.
+    let surfaces = match SurfaceSet::from_config(&config) {
+        Ok(surfaces) => surfaces,
+        Err(errors) => {
+            for error in errors {
+                tracing::error!("surface set error: {error}");
+            }
+            return ExitCode::from(1);
+        }
+    };
+    // The announce destination: where broadcasts (degraded/stall notices,
+    // later reports) land — the inbox channel, falling back to ops (P14).
+    let announce_channel = config.discord.inbox_channel.or(config.discord.ops_channel);
+    let announce = ocbot_core::Destination::discord(announce_channel.unwrap_or(0));
+    let discord_transport: Arc<dyn ChatPort> = Arc::new(
         DiscordAdapter::new(shared_http(&token, operator), operator)
-            .with_announce(config.discord.ops_channel),
+            .with_announce(announce_channel),
     );
+    let mut transports: Vec<(
+        ocbot_core::Surface,
+        ocbot_core::Destination,
+        Arc<dyn ChatPort>,
+    )> = Vec::new();
+    for surface in surfaces.iter() {
+        match surface {
+            ocbot_core::Surface::Discord => {
+                transports.push((surface, announce.clone(), discord_transport.clone()));
+            }
+            // Unreachable today: config validation refuses to select a
+            // surface whose transport does not exist yet (PH-4 for Signal).
+            ocbot_core::Surface::Signal => {
+                tracing::error!("no transport available for surface {surface}");
+                return ExitCode::from(1);
+            }
+        }
+    }
+    let registry = SurfaceRegistry::build(transports, &metrics);
+    tracing::info!(
+        surfaces = ?registry.handles().iter().map(|handle| handle.surface).collect::<Vec<_>>(),
+        "surface registry built"
+    );
+    let chat: Arc<dyn ChatPort> = registry.single();
     let guard = Guard {
         allowed_actors: vec![ocbot_core::ActorId::from_parts(
             ocbot_core::Surface::Discord,

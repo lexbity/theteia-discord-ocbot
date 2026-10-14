@@ -22,7 +22,9 @@ use ocbot_core::ports::{
     Activity, Clock, FsPort, GateDecision, GateRequest, GitPort, HookFailure, OpenCodePort,
     PermissionRule, PortSession, PromptAdmission, ServerFacts, SessionId,
 };
-use ocbot_core::{Destination, GitError, MsgId, OcError, OutgoingMessage, PostReceipt, Surface};
+use ocbot_core::{
+    ChatRef, Destination, GitError, MsgId, OcError, OutgoingMessage, PostReceipt, Surface,
+};
 
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::context::{AppContext, BroadcastOutcome, ChatPort, SendError};
@@ -529,7 +531,9 @@ pub struct Posted {
     pub id: u64,
 }
 
-/// Recording fake chat port (the e2e suite's `ChatPort`).
+/// Recording fake chat port (the e2e suite's `ChatPort`). `broadcast` posts
+/// to the announce channel when one is configured (mirroring the Discord
+/// adapter's single-surface broadcast).
 #[derive(Clone, Default)]
 pub struct FakeChat {
     inner: Arc<Mutex<FakeChatInner>>,
@@ -541,12 +545,19 @@ struct FakeChatInner {
     edits: Vec<(u64, u64, OutgoingMessage)>,
     reactions: Vec<(u64, u64, char)>,
     next_id: u64,
+    announce: Option<u64>,
 }
 
 impl FakeChat {
     /// Build an empty fake.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Set the announce destination `broadcast` posts to.
+    pub fn with_announce(self, channel: u64) -> Self {
+        self.inner.lock().expect("lock").announce = Some(channel);
+        self
     }
 
     /// All posts in order.
@@ -607,8 +618,39 @@ impl ChatPort for FakeChat {
         ));
     }
 
-    async fn broadcast(&self, _message: &OutgoingMessage) -> BroadcastOutcome {
-        BroadcastOutcome::default()
+    async fn broadcast(&self, message: &OutgoingMessage) -> BroadcastOutcome {
+        let announce = self.inner.lock().expect("lock").announce;
+        match announce {
+            Some(channel) => match self
+                .post(
+                    &Destination {
+                        surface: Surface::Discord,
+                        chat_ref: ChatRef(channel.to_string()),
+                    },
+                    message,
+                )
+                .await
+            {
+                Ok(receipt) => BroadcastOutcome {
+                    delivered: vec![(Surface::Discord, receipt)],
+                    failed: Vec::new(),
+                },
+                Err(error) => BroadcastOutcome {
+                    delivered: Vec::new(),
+                    failed: vec![(Surface::Discord, error)],
+                },
+            },
+            None => BroadcastOutcome {
+                delivered: Vec::new(),
+                failed: vec![(
+                    Surface::Discord,
+                    SendError {
+                        surface: Surface::Discord,
+                        message: "no announce destination configured".to_owned(),
+                    },
+                )],
+            },
+        }
     }
 
     fn surfaces(&self) -> Vec<Surface> {

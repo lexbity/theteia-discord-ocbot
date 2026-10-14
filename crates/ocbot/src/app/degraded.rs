@@ -47,16 +47,11 @@ impl HealthMonitor {
     }
 }
 
-/// Post one transition announcement to the ops/inbox channel. The shared
-/// edge-triggered post path (FR-38's reachability and SPEC-003 P-28's stream
-/// down/recovery both land here — one dedupe pattern, one post door).
+/// Broadcast one transition announcement to every configured surface
+/// (SPEC-004 PH-2: opencode-health announcements ride the broadcast path).
+/// The shared edge-triggered post door (FR-38's reachability and SPEC-003
+/// P-28's stream down/recovery both land here — one dedupe pattern).
 pub async fn announce(ctx: &Arc<AppContext>, up: bool, down_message: String, up_message: String) {
-    let Some(channel) = ctx.guard.inbox() else {
-        // No configured surface: the transition is still remembered by the
-        // caller's monitor, so a later recovery does not re-announce.
-        tracing::warn!(up, "health transition with no configured channel");
-        return;
-    };
     let content = if up { up_message } else { down_message };
     let message = OutgoingMessage {
         content,
@@ -64,12 +59,11 @@ pub async fn announce(ctx: &Arc<AppContext>, up: bool, down_message: String, up_
         components: Vec::new(),
         mention_allowlist: ctx.guard.discord_operator().into_iter().collect(),
     };
-    if let Err(error) = ctx
-        .chat
-        .post(&ocbot_core::Destination::discord(channel), &message)
-        .await
-    {
-        tracing::warn!(error = %error, up, "health transition post failed");
+    let outcome = ctx.chat.broadcast(&message).await;
+    if !outcome.any_delivered() {
+        // The transition is still remembered by the caller's monitor, so a
+        // later recovery does not re-announce.
+        tracing::warn!(up, "health transition reached no surface");
     }
 }
 

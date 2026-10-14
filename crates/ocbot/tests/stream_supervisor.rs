@@ -107,7 +107,7 @@ fn spawn_supervisor(
 
 #[tokio::test(start_paused = true)]
 async fn silent_source_is_declared_dead_and_reconcile_coalesces() {
-    let discord = FakeChat::new();
+    let discord = FakeChat::new().with_announce(999);
     let opencode = FakeOpenCode::new();
     let ctx = ctx_with_opencode(&discord, opencode.clone());
     let source = Arc::new(FakeEventSource::new());
@@ -146,7 +146,7 @@ async fn silent_source_is_declared_dead_and_reconcile_coalesces() {
 
 #[tokio::test(start_paused = true)]
 async fn down_past_threshold_posts_once_and_recovery_once() {
-    let discord = FakeChat::new();
+    let discord = FakeChat::new().with_announce(999);
     let opencode = FakeOpenCode::new();
     let ctx = ctx_with_opencode(&discord, opencode.clone());
     let source = Arc::new(FakeEventSource::new());
@@ -196,7 +196,7 @@ async fn down_past_threshold_posts_once_and_recovery_once() {
 
 #[tokio::test(start_paused = true)]
 async fn garbage_burst_triggers_a_drift_reconnect() {
-    let discord = FakeChat::new();
+    let discord = FakeChat::new().with_announce(999);
     let opencode = FakeOpenCode::new();
     let ctx = ctx_with_opencode(&discord, opencode.clone());
     let source = Arc::new(FakeEventSource::new());
@@ -243,7 +243,7 @@ async fn garbage_burst_triggers_a_drift_reconnect() {
 
 #[tokio::test(start_paused = true)]
 async fn frames_keep_the_connection_alive() {
-    let discord = FakeChat::new();
+    let discord = FakeChat::new().with_announce(999);
     let opencode = FakeOpenCode::new();
     let ctx = ctx_with_opencode(&discord, opencode.clone());
     let source = Arc::new(FakeEventSource::new());

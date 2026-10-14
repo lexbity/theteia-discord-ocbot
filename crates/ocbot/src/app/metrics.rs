@@ -16,6 +16,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use ocbot_core::State;
+use ocbot_core::Surface;
 
 /// Shared metric registry. `Arc<Metrics>` is handed to every component.
 #[derive(Clone)]
@@ -26,7 +27,8 @@ pub struct Metrics {
 struct Inner {
     cas_conflicts: AtomicU64,
     denied: AtomicU64,
-    reports_delivered: AtomicU64,
+    /// `surface -> count` of delivered reports (§5.10: labeled by surface).
+    reports_delivered: Mutex<BTreeMap<String, u64>>,
     opencode_up: AtomicU64,
     gate_pending: AtomicU64,
     locks_held: AtomicU64,
@@ -56,6 +58,22 @@ struct Inner {
     /// `(kind, tool) -> count` for discovered gate requests. A graph of
     /// dynamic label pairs, so a map (rendered in sorted order).
     gate_requests: Mutex<BTreeMap<(String, String), u64>>,
+    /// Per-surface up gauge (1/0).
+    surface_up: Mutex<BTreeMap<String, u64>>,
+    /// Per-surface, per-op send attempt counters.
+    surface_send_total: Mutex<BTreeMap<(String, String), u64>>,
+    /// Per-surface, per-op send failure counters.
+    surface_send_failures: Mutex<BTreeMap<(String, String), u64>>,
+    /// Per-surface deny counters.
+    surface_denied: Mutex<BTreeMap<String, u64>>,
+    /// Per-surface rate-drop counters.
+    surface_rate_dropped: Mutex<BTreeMap<String, u64>>,
+    /// Signal redelivery dedupe (D-11.5).
+    signal_envelope_duplicates: AtomicU64,
+    /// Open pending flows by flow name (D-06).
+    pending_flows_open: Mutex<BTreeMap<String, u64>>,
+    /// Component-map row count (GC health).
+    component_map_rows: AtomicU64,
 }
 
 /// Histogram bucket upper bounds (seconds) for idle→report latency (NFR-2).
@@ -68,7 +86,7 @@ impl Metrics {
             inner: Arc::new(Inner {
                 cas_conflicts: AtomicU64::new(0),
                 denied: AtomicU64::new(0),
-                reports_delivered: AtomicU64::new(0),
+                reports_delivered: Mutex::new(BTreeMap::new()),
                 opencode_up: AtomicU64::new(0),
                 gate_pending: AtomicU64::new(0),
                 locks_held: AtomicU64::new(0),
@@ -90,6 +108,14 @@ impl Metrics {
                 idle_count: AtomicU64::new(0),
                 idle_sum_bits: AtomicU64::new(0),
                 gate_requests: Mutex::new(BTreeMap::new()),
+                surface_up: Mutex::new(BTreeMap::new()),
+                surface_send_total: Mutex::new(BTreeMap::new()),
+                surface_send_failures: Mutex::new(BTreeMap::new()),
+                surface_denied: Mutex::new(BTreeMap::new()),
+                surface_rate_dropped: Mutex::new(BTreeMap::new()),
+                signal_envelope_duplicates: AtomicU64::new(0),
+                pending_flows_open: Mutex::new(BTreeMap::new()),
+                component_map_rows: AtomicU64::new(0),
             }),
         }
     }
@@ -104,9 +130,15 @@ impl Metrics {
         self.inner.denied.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A report was delivered (exactly once by the dedupe CAS).
-    pub fn inc_reports_delivered(&self) {
-        self.inner.reports_delivered.fetch_add(1, Ordering::Relaxed);
+    /// A report was delivered (exactly once by the dedupe CAS), labeled by
+    /// the surface it landed on (§5.10).
+    pub fn inc_reports_delivered(&self, surface: Surface) {
+        let mut map = self
+            .inner
+            .reports_delivered
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *map.entry(surface.as_str().to_owned()).or_insert(0) += 1;
     }
 
     /// opencode reachability gauge (FR-38).
@@ -261,6 +293,82 @@ impl Metrics {
             .store(u64::try_from(count).unwrap_or(0), Ordering::Relaxed);
     }
 
+    /// Per-surface up gauge (D-07, §5.10).
+    pub fn set_surface_up(&self, surface: Surface, up: bool) {
+        let mut map = self
+            .inner
+            .surface_up
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        map.insert(surface.as_str().to_owned(), u64::from(up));
+    }
+
+    /// Per-surface, per-op send attempt counter.
+    pub fn inc_surface_send(&self, surface: Surface, op: &str) {
+        let mut map = self
+            .inner
+            .surface_send_total
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let key = (surface.as_str().to_owned(), op.to_owned());
+        *map.entry(key).or_insert(0) += 1;
+    }
+
+    /// Per-surface, per-op send failure counter.
+    pub fn inc_surface_send_failure(&self, surface: Surface, op: &str) {
+        let mut map = self
+            .inner
+            .surface_send_failures
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let key = (surface.as_str().to_owned(), op.to_owned());
+        *map.entry(key).or_insert(0) += 1;
+    }
+
+    /// Per-surface non-allowlisted sender drop (D-11.1).
+    pub fn inc_surface_denied(&self, surface: Surface) {
+        let mut map = self
+            .inner
+            .surface_denied
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *map.entry(surface.as_str().to_owned()).or_insert(0) += 1;
+    }
+
+    /// Per-surface rate-bucket drop (D-11.4).
+    pub fn inc_surface_rate_dropped(&self, surface: Surface) {
+        let mut map = self
+            .inner
+            .surface_rate_dropped
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *map.entry(surface.as_str().to_owned()).or_insert(0) += 1;
+    }
+
+    /// Signal envelope-dedupe hit (D-11.5).
+    pub fn inc_signal_envelope_duplicates(&self) {
+        self.inner
+            .signal_envelope_duplicates
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Open pending flows by flow name (D-06).
+    pub fn set_pending_flows_open(&self, flow: &str, count: usize) {
+        let mut map = self
+            .inner
+            .pending_flows_open
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        map.insert(flow.to_owned(), u64::try_from(count).unwrap_or(0));
+    }
+
+    /// Component-map row count (GC health, §5.10).
+    pub fn set_component_map_rows(&self, count: usize) {
+        self.inner
+            .component_map_rows
+            .store(u64::try_from(count).unwrap_or(0), Ordering::Relaxed);
+    }
+
     /// Render the Prometheus text format (modelines + family blocks).
     pub fn render_text(&self) -> String {
         let inner = &self.inner;
@@ -271,11 +379,17 @@ impl Metrics {
             "ocbot_transition_cas_conflicts_total",
             inner.cas_conflicts.load(Ordering::Relaxed),
         );
-        counter(
-            &mut out,
-            "ocbot_reports_delivered_total",
-            inner.reports_delivered.load(Ordering::Relaxed),
-        );
+        out.push_str("# TYPE ocbot_reports_delivered_total counter\n");
+        let reports = inner
+            .reports_delivered
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for (surface, count) in reports.iter() {
+            let _ = writeln!(
+                out,
+                "ocbot_reports_delivered_total{{surface=\"{surface}\"}} {count}"
+            );
+        }
         counter(
             &mut out,
             "ocbot_denied_interactions_total",
@@ -308,6 +422,48 @@ impl Metrics {
             &mut out,
             "ocbot_log_lag_seconds",
             inner.log_lag_seconds.load(Ordering::Relaxed),
+        );
+        // --- SPEC-004 §5.10 surface families ------------------------------
+        render_surface_gauge(&mut out, "ocbot_surface_up", &inner.surface_up);
+        render_surface_counter(
+            &mut out,
+            "ocbot_surface_denied_total",
+            &inner.surface_denied,
+        );
+        render_surface_counter(
+            &mut out,
+            "ocbot_surface_rate_dropped_total",
+            &inner.surface_rate_dropped,
+        );
+        render_surface_op_counter(
+            &mut out,
+            "ocbot_surface_send_total",
+            &inner.surface_send_total,
+        );
+        render_surface_op_counter(
+            &mut out,
+            "ocbot_surface_send_failures_total",
+            &inner.surface_send_failures,
+        );
+        counter(
+            &mut out,
+            "ocbot_signal_envelope_duplicates_total",
+            inner.signal_envelope_duplicates.load(Ordering::Relaxed),
+        );
+        out.push_str("# TYPE ocbot_pending_flows_open gauge\n");
+        {
+            let map = inner
+                .pending_flows_open
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for (flow, count) in map.iter() {
+                let _ = writeln!(out, "ocbot_pending_flows_open{{flow=\"{flow}\"}} {count}");
+            }
+        }
+        gauge(
+            &mut out,
+            "ocbot_component_map_rows",
+            inner.component_map_rows.load(Ordering::Relaxed),
         );
         render_idle_histogram(inner, &mut out);
         out
@@ -575,5 +731,48 @@ pub async fn serve_listener(
             let _ = stream.write_all(response.as_bytes()).await;
             let _ = stream.shutdown().await;
         });
+    }
+}
+
+/// The `ocbot_surface_up{surface}` gauge family.
+fn render_surface_gauge(out: &mut String, name: &str, map: &Mutex<BTreeMap<String, u64>>) {
+    out.push_str("# TYPE ");
+    out.push_str(name);
+    out.push_str(" gauge\n");
+    let map = map
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for (surface, value) in map.iter() {
+        let _ = writeln!(out, "{name}{{surface=\"{surface}\"}} {value}");
+    }
+}
+
+/// A `..._total{surface}` counter family.
+fn render_surface_counter(out: &mut String, name: &str, map: &Mutex<BTreeMap<String, u64>>) {
+    out.push_str("# TYPE ");
+    out.push_str(name);
+    out.push_str(" counter\n");
+    let map = map
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for (surface, count) in map.iter() {
+        let _ = writeln!(out, "{name}{{surface=\"{surface}\"}} {count}");
+    }
+}
+
+/// A `..._total{surface,op}` counter family.
+fn render_surface_op_counter(
+    out: &mut String,
+    name: &str,
+    map: &Mutex<BTreeMap<(String, String), u64>>,
+) {
+    out.push_str("# TYPE ");
+    out.push_str(name);
+    out.push_str(" counter\n");
+    let map = map
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for ((surface, op), count) in map.iter() {
+        let _ = writeln!(out, "{name}{{surface=\"{surface}\",op=\"{op}\"}} {count}");
     }
 }

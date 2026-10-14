@@ -18,7 +18,7 @@ Every family exposed on `127.0.0.1:9464` (names are load-bearing — see `crates
 |---|---|---|
 | `ocbot_actions_total{state}` | counter | Actions observed entering each state |
 | `ocbot_transition_cas_conflicts_total` | counter | Lost CAS races — double taps, Discord retries. Each was absorbed; a steady rate is unusual |
-| `ocbot_reports_delivered_total` | counter | Reports delivered |
+| `ocbot_reports_delivered_total{surface}` | counter | Reports delivered, by the surface that carried them |
 | `ocbot_denied_interactions_total` | counter | Interactions rejected by the guard — sustained growth means someone else is poking the bot |
 | `ocbot_opencode_up` | gauge | `1` reachable, `0` not |
 | `ocbot_gate_pending` | gauge | Gates unanswered right now |
@@ -36,6 +36,18 @@ Every family exposed on `127.0.0.1:9464` (names are load-bearing — see `crates
 | `ocbot_probe_failures_total{loop}` | counter | Probe failures per fallback loop |
 | `ocbot_reconcile_repairs_total{kind}` | counter | Interrupted git sequences rolled forward at boot — nonzero means a crash was survived |
 | `ocbot_idle_to_report_seconds` | histogram | Idle→report latency (NFR-2: p95 < 5 s) |
+| `ocbot_surface_up{surface}` | gauge | `1` = the surface last delivered; `0` = it crossed the failure threshold |
+| `ocbot_surface_send_total{surface,op}` | counter | Send attempts per surface and op (`post`/`edit`/`react`/`broadcast`) |
+| `ocbot_surface_send_failures_total{surface,op}` | counter | Failed sends per surface and op — compare against `send_total` |
+| `ocbot_surface_denied_total{surface}` | counter | Non-allowlisted senders dropped by a surface |
+| `ocbot_surface_rate_dropped_total{surface}` | counter | Inbound commands dropped by a surface's rate bucket |
+| `ocbot_signal_envelope_duplicates_total` | counter | Signal redeliveries absorbed by the dedupe cache |
+| `ocbot_pending_flows_open{flow}` | gauge | Live multi-step input flows (a stuck nonzero means an abandoned draft) |
+| `ocbot_component_map_rows` | gauge | Reaction→verb map size (GC health) |
+
+## Surface health
+
+Each configured chat surface is wrapped in an instrumented port (SPEC-004 PH-2). Three consecutive failed sends declare the surface **down**; the first successful send after an outage declares it **recovered**. Both transitions are edge-triggered and announced exactly once — a downed surface posts one notice on every *other* configured surface (with one surface configured, the notice goes nowhere and only the gauge moves). Sustained `ocbot_surface_send_failures_total` growth with `ocbot_surface_up{surface}=0` means the transport (bot token, daemon, socket) is the problem, not the bot: restart the surface's daemon, and the recovery notice confirms the fix.
 
 ## Logs
 
