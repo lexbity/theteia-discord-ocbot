@@ -16,7 +16,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use common::{FakeDiscord, FakeGit, FakeOpenCode, context, init_repo, write_file};
+use common::{FakeChat, FakeGit, FakeOpenCode, context, init_repo, write_file};
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::handlers::prompt;
 use ocbot::app::interaction::{InteractionSource, SourceKind, TextInput};
@@ -41,7 +41,7 @@ fn prompt_source(dir: &str, text: &str) -> InteractionSource {
                 },
             ],
         },
-        user_id: OPERATOR,
+        user_id: format!("discord:{OPERATOR}"),
         channel_id: CHANNEL,
         guild_id: Some(1),
         message_id: None,
@@ -63,7 +63,7 @@ fn ctx_for(
     store: &StoreHandle,
     repo: &Path,
     opencode: &FakeOpenCode,
-    discord: &FakeDiscord,
+    discord: &FakeChat,
 ) -> Arc<ocbot::app::context::AppContext> {
     context(
         store.clone(),
@@ -81,7 +81,7 @@ async fn prompt_creates_and_then_reuses_the_active_session() {
     let (repo, dir) = make_repo(&tmp);
     let store = StoreHandle::open_in_memory().expect("store");
     let opencode = FakeOpenCode::new();
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, &repo, &opencode, &discord);
 
     prompt::execute_prompt(&ctx, &prompt_source(&dir, "first prompt"))
@@ -159,7 +159,7 @@ async fn prompt_refuses_a_busy_active_session() {
         .expect("active session");
     let opencode = FakeOpenCode::new();
     opencode.set_activity("ses_act", Activity::Busy);
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, &PathBuf::from(&dir), &opencode, &discord);
 
     let outcome = prompt::execute_prompt(&ctx, &prompt_source(&dir, "second"))

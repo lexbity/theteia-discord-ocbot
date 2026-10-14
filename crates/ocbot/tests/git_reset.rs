@@ -16,7 +16,7 @@ mod common;
 use std::path::Path;
 use std::sync::Arc;
 
-use common::{FakeDiscord, FakeGit, FakeOpenCode, context, init_repo, write_file};
+use common::{FakeChat, FakeGit, FakeOpenCode, context, init_repo, write_file};
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::handlers::history;
 use ocbot::app::interaction::{InteractionSource, SourceKind};
@@ -46,7 +46,7 @@ fn two_commit_repo(tmp: &TempDir) -> (std::path::PathBuf, String, String) {
 fn ctx_for(
     store: &StoreHandle,
     repo: &Path,
-    discord: &FakeDiscord,
+    discord: &FakeChat,
 ) -> Arc<ocbot::app::context::AppContext> {
     context(
         store.clone(),
@@ -63,7 +63,7 @@ fn history_source() -> InteractionSource {
         kind: SourceKind::SlashCommand {
             name: "history".to_owned(),
         },
-        user_id: OPERATOR,
+        user_id: format!("discord:{OPERATOR}"),
         channel_id: CHANNEL,
         guild_id: Some(1),
         message_id: None,
@@ -76,14 +76,14 @@ async fn reset_creates_superseded_branch_before_moving_head() {
     let tmp = TempDir::new().expect("tmp");
     let (repo, first, second) = two_commit_repo(&tmp);
     let store = StoreHandle::open_in_memory().expect("store");
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, &repo, &discord);
 
     let outcome = ocbot::app::handlers::reset::begin_reset(
         &ctx,
         &repo_str(&repo),
         &first,
-        OPERATOR,
+        &format!("discord:{OPERATOR}"),
         Some(CHANNEL),
     )
     .await
@@ -124,14 +124,14 @@ async fn reset_refuses_a_dirty_tree() {
     let (repo, first, second) = two_commit_repo(&tmp);
     write_file(&repo, "dirty.txt", "d\n");
     let store = StoreHandle::open_in_memory().expect("store");
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, &repo, &discord);
 
     let error = ocbot::app::handlers::reset::begin_reset(
         &ctx,
         &repo_str(&repo),
         &first,
-        OPERATOR,
+        &format!("discord:{OPERATOR}"),
         Some(CHANNEL),
     )
     .await
@@ -149,14 +149,14 @@ async fn reset_refuses_a_non_live_target() {
     let tmp = TempDir::new().expect("tmp");
     let (repo, _first, _second) = two_commit_repo(&tmp);
     let store = StoreHandle::open_in_memory().expect("store");
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, &repo, &discord);
 
     let error = ocbot::app::handlers::reset::begin_reset(
         &ctx,
         &repo_str(&repo),
         "0123456789abcdef0123456789abcdef01234567",
-        OPERATOR,
+        &format!("discord:{OPERATOR}"),
         Some(CHANNEL),
     )
     .await
@@ -182,7 +182,7 @@ async fn actions_above_a_reset_render_orphaned() {
     let action = store
         .insert_action(
             run,
-            Some(i64::try_from(CHANNEL).unwrap()),
+            Some(&CHANNEL.to_string()),
             "accepted work",
             "prompt",
             1,
@@ -217,13 +217,13 @@ async fn actions_above_a_reset_render_orphaned() {
         .await
         .expect("release");
 
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, &repo, &discord);
     ocbot::app::handlers::reset::begin_reset(
         &ctx,
         &repo_str(&repo),
         &first,
-        OPERATOR,
+        &format!("discord:{OPERATOR}"),
         Some(CHANNEL),
     )
     .await
@@ -231,7 +231,7 @@ async fn actions_above_a_reset_render_orphaned() {
 
     // History now shows the accepted action as orphaned (AC-8).
     store
-        .set_ui_cwd(OPERATOR, &repo_str(&repo))
+        .set_ui_cwd(&format!("discord:{OPERATOR}"), &repo_str(&repo))
         .await
         .expect("cwd");
     history::execute(&ctx, &history_source(), false)

@@ -38,7 +38,7 @@ pub async fn begin_modal(
     ctx: &Arc<AppContext>,
     source: &InteractionSource,
 ) -> Result<ModalSpec, AppError> {
-    let prefill = match ctx.store.ui_cwd(source.user_id).await? {
+    let prefill = match ctx.store.ui_cwd(&source.user_id).await? {
         Some(cwd) => cwd,
         None => ctx
             .store
@@ -53,7 +53,7 @@ pub async fn begin_modal(
     // in, so it is not prefilled here.
     let plan_prefill = ctx
         .store
-        .draft_path(source.user_id)
+        .draft_path(&source.user_id)
         .await?
         .filter(|path| Path::new(path).is_file());
     Ok(ModalSpec {
@@ -98,7 +98,7 @@ pub async fn execute_newrun(
     }
     let typed = source.input("directory").map(str::trim).unwrap_or_default();
     let directory = if typed.is_empty() {
-        ctx.store.ui_cwd(source.user_id).await?.unwrap_or_default()
+        ctx.store.ui_cwd(&source.user_id).await?.unwrap_or_default()
     } else {
         typed.to_owned()
     };
@@ -146,22 +146,32 @@ pub async fn execute_newrun(
         .store
         .insert_run_with_plan(&dir_name, "free", plan_path.as_deref())
         .await?;
-    let channel = i64::try_from(source.channel_id).unwrap_or(i64::MAX);
+    let chat_ref = source.channel_id.to_string();
     let action_id = ctx
         .store
-        .insert_action(run_id, Some(channel), label, &prompt, 1)
+        .insert_action(run_id, Some(&chat_ref), label, &prompt, 1)
         .await?;
-    ctx.store.set_ui_cwd(source.user_id, &dir_name).await?;
+    ctx.store.set_ui_cwd(&source.user_id, &dir_name).await?;
     ctx.store
-        .audit(source.user_id, "run", Some(action_id), "staged")
+        .audit(&source.user_id, "run", Some(action_id), "staged")
         .await?;
 
     if plan_path.is_some() && !plan_options.is_empty() {
-        let picker = plan_picker_message(label, &plan_options, 0, action_id, source.user_id);
-        let message_id = ctx.discord.post(source.channel_id, &picker).await?;
-        ctx.store
-            .set_origin(action_id, &message_id.to_string())
+        let picker = plan_picker_message(
+            label,
+            &plan_options,
+            0,
+            action_id,
+            crate::app::handlers::support::operator_u64(&source.user_id),
+        );
+        let receipt = ctx
+            .chat
+            .post(
+                &ocbot_core::Destination::discord(source.channel_id),
+                &picker,
+            )
             .await?;
+        ctx.store.set_origin(action_id, &receipt.msg_id.0).await?;
         return Ok(Some("pick a plan step (or Other: type it)".to_owned()));
     }
 
@@ -216,15 +226,29 @@ pub async fn plan_page_edit(
     let action = load_staged(ctx, action_id).await?;
     let (_, plan_path) = plan_context(ctx, &action).await?;
     let options = load_plan(ctx, &plan_path).await?;
-    let picker = plan_picker_message(&action.label, &options, page, action_id, source.user_id);
+    let picker = plan_picker_message(
+        &action.label,
+        &options,
+        page,
+        action_id,
+        crate::app::handlers::support::operator_u64(&source.user_id),
+    );
     match source.message_id {
         Some(message_id) => {
-            ctx.discord
-                .edit(source.channel_id, message_id, &picker)
-                .await?;
+            ctx.chat
+                .edit(
+                    &crate::app::handlers::support::discord_receipt(message_id),
+                    &picker,
+                )
+                .await;
         }
         None => {
-            ctx.discord.post(source.channel_id, &picker).await?;
+            ctx.chat
+                .post(
+                    &ocbot_core::Destination::discord(source.channel_id),
+                    &picker,
+                )
+                .await?;
         }
     }
     Ok(())
@@ -356,9 +380,16 @@ pub async fn execute_send(
                 format!("v1:runany:{action_id}"),
                 ButtonKind::Danger,
             )],
-            mentioned_users: vec![source.user_id],
+            mention_allowlist: crate::app::handlers::support::mention_allowlist_for(
+                &source.user_id,
+            ),
         };
-        ctx.discord.post(source.channel_id, &message).await?;
+        ctx.chat
+            .post(
+                &ocbot_core::Destination::discord(source.channel_id),
+                &message,
+            )
+            .await?;
         return Ok(Some(
             "worktree is dirty — confirm before running".to_owned(),
         ));
@@ -491,12 +522,10 @@ pub async fn launch(
         return Err(AppError::OpenCode(error));
     }
 
-    if let (Some(origin), Some(channel)) = (action.origin_msg_id.clone(), action.channel_id) {
-        let _ = ctx
-            .discord
+    if let Some(origin) = action.origin_msg_id.clone() {
+        ctx.chat
             .react(
-                u64::try_from(channel).unwrap_or(u64::MAX),
-                origin.parse().unwrap_or_default(),
+                &crate::app::handlers::support::discord_receipt_str(&origin),
                 '⏳',
             )
             .await;
@@ -557,16 +586,29 @@ async fn show_preview(
     prompt: &str,
     template: &str,
 ) -> Result<(), AppError> {
-    let preview = staged_preview(label, prompt, action_id, source.user_id, template);
+    let preview = staged_preview(
+        label,
+        prompt,
+        action_id,
+        crate::app::handlers::support::operator_u64(&source.user_id),
+        template,
+    );
     if let Some(message_id) = source.message_id {
-        ctx.discord
-            .edit(source.channel_id, message_id, &preview)
-            .await?;
+        ctx.chat
+            .edit(
+                &crate::app::handlers::support::discord_receipt(message_id),
+                &preview,
+            )
+            .await;
     } else {
-        let message_id = ctx.discord.post(source.channel_id, &preview).await?;
-        ctx.store
-            .set_origin(action_id, &message_id.to_string())
+        let receipt = ctx
+            .chat
+            .post(
+                &ocbot_core::Destination::discord(source.channel_id),
+                &preview,
+            )
             .await?;
+        ctx.store.set_origin(action_id, &receipt.msg_id.0).await?;
     }
     Ok(())
 }

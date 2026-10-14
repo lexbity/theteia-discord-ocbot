@@ -20,10 +20,11 @@ use ocbot_core::ports::{
     SessionId,
 };
 use ocbot_core::render::OutgoingMessage;
+use ocbot_core::{Destination, PostReceipt, Surface};
 
 use crate::adapters::git::GitAdapter;
 use crate::adapters::store::StoreHandle;
-use crate::app::context::{AppContext, DiscordPort, SendError};
+use crate::app::context::{AppContext, BroadcastOutcome, ChatPort, SendError};
 use crate::app::guard::Guard;
 use crate::app::handlers::{accept, park, reset};
 use crate::app::metrics::Metrics;
@@ -45,6 +46,7 @@ pub async fn run_from_env() -> Result<(), String> {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(42_u64);
+    let actor = format!("discord:{operator}");
 
     let store = StoreHandle::open(Path::new(&db)).map_err(|error| error.to_string())?;
     let fs = crate::adapters::fs::FsAdapter::new(
@@ -62,14 +64,17 @@ pub async fn run_from_env() -> Result<(), String> {
         clock: Arc::new(crate::adapters::clock::SystemClock),
         abort_timeout_secs: 30,
         permission_ruleset: None,
-        discord: Arc::new(NullDiscord {
+        chat: Arc::new(NullChat {
             next: std::sync::atomic::AtomicU64::new(1),
         }),
         metrics: Arc::new(Metrics::new()),
         redactor: Arc::new(ocbot_core::Redactor::default()),
         health: Arc::new(crate::app::degraded::HealthMonitor::new()),
         guard: Guard {
-            allowed_user_id: operator,
+            allowed_actors: vec![ocbot_core::ActorId::from_parts(
+                ocbot_core::Surface::Discord,
+                &operator.to_string(),
+            )],
             ops_channel: None,
             inbox_channel: None,
         },
@@ -87,20 +92,20 @@ pub async fn run_from_env() -> Result<(), String> {
             let action_id = parse_id(&env("OCBOT_CRASH_ACTION")?)?;
             let subject =
                 std::env::var("OCBOT_CRASH_SUBJECT").unwrap_or_else(|_| "recovered".to_owned());
-            accept::execute_accept(&ctx, action_id, &subject, "", operator)
+            accept::execute_accept(&ctx, action_id, &subject, "", &actor)
                 .await
                 .map_err(|error| error.to_string())?;
         }
         "park" => {
             let action_id = parse_id(&env("OCBOT_CRASH_ACTION")?)?;
-            park::begin_park(&ctx, action_id, operator)
+            park::begin_park(&ctx, action_id, &actor)
                 .await
                 .map_err(|error| error.to_string())?;
         }
         "reset" => {
             let dir = env("OCBOT_CRASH_DIR")?;
             let target = env("OCBOT_CRASH_TARGET")?;
-            reset::begin_reset(&ctx, &dir, &target, operator, None)
+            reset::begin_reset(&ctx, &dir, &target, &actor, None)
                 .await
                 .map_err(|error| error.to_string())?;
         }
@@ -125,7 +130,7 @@ async fn run_store_sequence(store: &StoreHandle, dir: &str) -> Result<(), String
     let run_id = store.insert_run(dir, "free").await.map_err(store_err)?;
     checkpoint("STORE-RUN");
     let action_id = store
-        .insert_action(run_id, Some(7), "chaos", "prompt", 1)
+        .insert_action(run_id, Some("7"), "chaos", "prompt", 1)
         .await
         .map_err(store_err)?;
     checkpoint("STORE-ACTION");
@@ -172,29 +177,36 @@ fn parse_id(raw: &str) -> Result<i64, String> {
     raw.parse().map_err(|_| format!("bad action id {raw:?}"))
 }
 
-/// A Discord surface that accepts posts but does nothing (the harness does not
-/// exercise notifications).
-struct NullDiscord {
+/// A chat surface that accepts posts but does nothing (the harness does not
+/// exercise notifications). Receipts are deterministic `test:<n>` ids.
+struct NullChat {
     next: std::sync::atomic::AtomicU64,
 }
 
 #[async_trait]
-impl DiscordPort for NullDiscord {
-    async fn post(&self, _channel: u64, _message: &OutgoingMessage) -> Result<u64, SendError> {
-        Ok(self.next.fetch_add(1, std::sync::atomic::Ordering::SeqCst))
-    }
-
-    async fn edit(
+impl ChatPort for NullChat {
+    async fn post(
         &self,
-        _channel: u64,
-        _message: u64,
-        _replacement: &OutgoingMessage,
-    ) -> Result<(), SendError> {
-        Ok(())
+        _dest: &Destination,
+        _message: &OutgoingMessage,
+    ) -> Result<PostReceipt, SendError> {
+        let n = self.next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(PostReceipt {
+            surface: Surface::Discord,
+            msg_id: ocbot_core::MsgId(format!("test:{n}")),
+        })
     }
 
-    async fn react(&self, _channel: u64, _message: u64, _emoji: char) -> Result<(), SendError> {
-        Ok(())
+    async fn edit(&self, _receipt: &PostReceipt, _replacement: &OutgoingMessage) {}
+
+    async fn react(&self, _receipt: &PostReceipt, _emoji: char) {}
+
+    async fn broadcast(&self, _message: &OutgoingMessage) -> BroadcastOutcome {
+        BroadcastOutcome::default()
+    }
+
+    fn surfaces(&self) -> Vec<Surface> {
+        vec![Surface::Discord]
     }
 }
 

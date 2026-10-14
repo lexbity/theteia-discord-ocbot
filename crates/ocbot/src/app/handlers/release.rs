@@ -9,7 +9,6 @@ use ocbot_core::{ButtonKind, OutgoingMessage, component_button, dir_hash};
 
 use crate::app::context::AppContext;
 use crate::app::error::AppError;
-use crate::app::handlers::support;
 use crate::app::interaction::InteractionSource;
 
 /// Execute `/release`: list every held lock with a Release button.
@@ -38,9 +37,14 @@ pub async fn list(ctx: &Arc<AppContext>, source: &InteractionSource) -> Result<(
         content,
         attachment: None,
         components,
-        mentioned_users: vec![source.user_id],
+        mention_allowlist: crate::app::handlers::support::mention_allowlist_for(&source.user_id),
     };
-    ctx.discord.post(source.channel_id, &message).await?;
+    ctx.chat
+        .post(
+            &ocbot_core::Destination::discord(source.channel_id),
+            &message,
+        )
+        .await?;
     Ok(())
 }
 
@@ -52,14 +56,19 @@ pub async fn confirm(
 ) -> Result<Option<String>, AppError> {
     let dir = resolve(ctx, hash).await?;
     let holder = ctx.store.lock_holder(&dir).await?.unwrap_or_default();
-    let message = support::with_button(
+    let message = crate::app::handlers::support::with_button(
         format!("Release the lock on `{dir}` (holder {holder})?"),
         "Confirm release",
         format!("v1:release:{hash}"),
         ButtonKind::Danger,
-        source.user_id,
+        &source.user_id,
     );
-    ctx.discord.post(source.channel_id, &message).await?;
+    ctx.chat
+        .post(
+            &ocbot_core::Destination::discord(source.channel_id),
+            &message,
+        )
+        .await?;
     Ok(Some("confirm to release".to_owned()))
 }
 
@@ -80,7 +89,7 @@ pub async fn release(
         return Err(AppError::AlreadyHandled);
     }
     ctx.store
-        .audit(source.user_id, "release", None, &dir)
+        .audit(&source.user_id, "release", None, &dir)
         .await?;
     Ok(Some(format!("released `{dir}` (was {holder})")))
 }

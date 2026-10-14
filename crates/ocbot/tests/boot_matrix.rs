@@ -48,11 +48,12 @@ fn write_config(dir: &Path, opencode_url: &str, permissions_file: &str) -> PathB
             "opencode_url = {opencode_url:?}\n\
              db_path = {:?}\n\
              templates_dir = {templates:?}\n\
-             allowed_user_id = 42\n\
              metrics_bind = \"127.0.0.1:19964\"\n\
              permissions_file = {permissions_file:?}\n\
              browse_roots = [{dir:?}]\n\
-             inbox_dir = {:?}\n",
+             inbox_dir = {:?}\n\
+             [discord]\n\
+             allowed_user_id = 42\n",
             dir.join("ocbot.db").to_string_lossy(),
             dir.join("inbox").to_string_lossy(),
             templates = templates_dir(),
@@ -110,7 +111,7 @@ fn a_bad_config_exits_one() {
     let config = dir.path().join("config.toml");
     std::fs::write(
         &config,
-        "opencode_url = \"http://127.0.0.1:9\"\nallowed_user_id = 42\nsurprise_key = true\n",
+        "opencode_url = \"http://127.0.0.1:9\"\n[discord]\nallowed_user_id = 42\nsurprise_key = true\n",
     )
     .expect("config");
     let status = run_binary(&config, &[], UNSET);

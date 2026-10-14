@@ -16,8 +16,8 @@ mod common;
 use std::sync::Arc;
 
 use common::{
-    FakeDiscord, FakeGit, FakeOpenCode, boolean_field, choice_field, context, form_gate,
-    seed_running, text_field,
+    FakeChat, FakeGit, FakeOpenCode, boolean_field, choice_field, context, form_gate, seed_running,
+    text_field,
 };
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::gates_loop;
@@ -32,7 +32,7 @@ const SESSION: &str = "ses_form";
 fn ctx_for(
     store: &StoreHandle,
     opencode: Arc<dyn OpenCodePort>,
-    discord: &FakeDiscord,
+    discord: &FakeChat,
 ) -> Arc<ocbot::app::context::AppContext> {
     context(
         store.clone(),
@@ -47,7 +47,7 @@ fn ctx_for(
 async fn seeded_ctx(
     store: &StoreHandle,
     opencode: Arc<dyn OpenCodePort>,
-    discord: &FakeDiscord,
+    discord: &FakeChat,
 ) -> Arc<ocbot::app::context::AppContext> {
     seed_running(
         store,
@@ -76,7 +76,7 @@ fn modal_source(custom_id: &str, values: Vec<(&str, &str)>) -> InteractionSource
                 })
                 .collect(),
         },
-        user_id: OPERATOR,
+        user_id: format!("discord:{OPERATOR}"),
         channel_id: CHANNEL,
         guild_id: Some(1),
         message_id: None,
@@ -97,7 +97,7 @@ async fn choice_plus_text_form_renders_a_button_and_a_modal() {
             text_field("note", Some("Note")),
         ],
     )]);
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = seeded_ctx(&store, Arc::new(opencode.clone()), &discord).await;
 
     let rowid = store.pending_gates().await.expect("rows")[0].id;
@@ -158,7 +158,7 @@ async fn a_bad_choice_keeps_the_gate_pending() {
         "Pick one",
         vec![choice_field("approach", &[("a", "A"), ("b", "B")])],
     )]);
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = seeded_ctx(&store, Arc::new(opencode.clone()), &discord).await;
 
     let rowid = store.pending_gates().await.expect("rows")[0].id;
@@ -194,7 +194,7 @@ async fn single_choice_form_answers_by_button() {
         "Continue?",
         vec![boolean_field("notify")],
     )]);
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = seeded_ctx(&store, Arc::new(opencode.clone()), &discord).await;
 
     let rowid = store.pending_gates().await.expect("rows")[0].id;
@@ -208,7 +208,7 @@ async fn single_choice_form_answers_by_button() {
         "yes button"
     );
 
-    gate::execute_form_pick(&ctx, rowid, "true", OPERATOR)
+    gate::execute_form_pick(&ctx, rowid, "true", &format!("discord:{OPERATOR}"))
         .await
         .expect("pick");
     assert_eq!(
@@ -235,7 +235,7 @@ async fn a_seven_field_form_is_surface_only_and_clears_on_resolve() {
         .map(|index| text_field(&format!("f{index}"), None))
         .collect();
     opencode.set_gates(vec![form_gate("frm_7", SESSION, "Too many", fields)]);
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = seeded_ctx(&store, Arc::new(opencode.clone()), &discord).await;
 
     let rowid = store.pending_gates().await.expect("rows")[0].id;

@@ -15,7 +15,7 @@ mod common;
 
 use std::sync::Arc;
 
-use common::{FakeDiscord, FakeGit, FakeOpenCode, context, permission_gate, seed_running};
+use common::{FakeChat, FakeGit, FakeOpenCode, context, permission_gate, seed_running};
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::gates_loop;
 use ocbot::app::handlers::gate;
@@ -28,7 +28,7 @@ const SESSION: &str = "ses_root";
 fn ctx_for(
     store: &StoreHandle,
     opencode: Arc<dyn ocbot_core::ports::OpenCodePort>,
-    discord: &FakeDiscord,
+    discord: &FakeChat,
 ) -> Arc<ocbot::app::context::AppContext> {
     context(
         store.clone(),
@@ -65,7 +65,7 @@ async fn sync_upserts_idempotently_and_posts_the_gate_message_once() {
         "bash",
         &["echo hi"],
     )]);
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, Arc::new(opencode.clone()), &discord);
 
     gates_loop::sync(&ctx).await.expect("first sync");
@@ -113,13 +113,15 @@ async fn double_reply_commits_exactly_one_post() {
         "bash",
         &["ls"],
     )]);
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, Arc::new(opencode.clone()), &discord);
     gates_loop::sync(&ctx).await.expect("sync");
 
     let rowid = store.pending_gates().await.expect("rows")[0].id;
     for _ in 0..2 {
-        let _ = gate::execute_permission_reply(&ctx, rowid, "always", OPERATOR).await;
+        let _ =
+            gate::execute_permission_reply(&ctx, rowid, "always", &format!("discord:{OPERATOR}"))
+                .await;
     }
     let replies = opencode
         .inner()
@@ -155,14 +157,15 @@ async fn unknown_request_error_is_a_success() {
         &["ls"],
     )]);
     opencode.reply_unknown();
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, Arc::new(opencode.clone()), &discord);
     gates_loop::sync(&ctx).await.expect("sync");
 
     let rowid = store.pending_gates().await.expect("rows")[0].id;
-    let outcome = gate::execute_permission_reply(&ctx, rowid, "once", OPERATOR)
-        .await
-        .expect("404 is success (FR-23)");
+    let outcome =
+        gate::execute_permission_reply(&ctx, rowid, "once", &format!("discord:{OPERATOR}"))
+            .await
+            .expect("404 is success (FR-23)");
     assert!(outcome.unwrap_or_default().contains("answered"));
     assert_eq!(
         store.gate(rowid).await.expect("read").expect("row").state,
@@ -184,12 +187,12 @@ async fn transport_failures_are_retried() {
     // Two flaky replies, then success: the ×3 retry must recover without
     // surfacing an error and without a duplicate CAS.
     opencode.fail_next_replies(2);
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, Arc::new(opencode.clone()), &discord);
     gates_loop::sync(&ctx).await.expect("sync");
 
     let rowid = store.pending_gates().await.expect("rows")[0].id;
-    gate::execute_permission_reply(&ctx, rowid, "always", OPERATOR)
+    gate::execute_permission_reply(&ctx, rowid, "always", &format!("discord:{OPERATOR}"))
         .await
         .expect("retry succeeds");
     let replies = opencode
@@ -212,11 +215,11 @@ async fn reconcile_reposts_a_locally_answered_remote_pending_gate() {
         "bash",
         &["ls"],
     )]);
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, Arc::new(opencode.clone()), &discord);
     gates_loop::sync(&ctx).await.expect("sync");
     let rowid = store.pending_gates().await.expect("rows")[0].id;
-    gate::execute_permission_reply(&ctx, rowid, "once", OPERATOR)
+    gate::execute_permission_reply(&ctx, rowid, "once", &format!("discord:{OPERATOR}"))
         .await
         .expect("reply");
     let reply_call_count = || {
@@ -261,7 +264,7 @@ async fn a_gate_that_leaves_the_pending_list_is_resolved_elsewhere() {
         "bash",
         &["ls"],
     )]);
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, Arc::new(opencode.clone()), &discord);
     gates_loop::sync(&ctx).await.expect("sync");
     let rowid = store.pending_gates().await.expect("rows")[0].id;

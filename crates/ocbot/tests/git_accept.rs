@@ -16,7 +16,7 @@ mod common;
 use std::path::Path;
 use std::sync::Arc;
 
-use common::{FakeDiscord, FakeGit, FakeOpenCode, context, init_repo, write_file};
+use common::{FakeChat, FakeGit, FakeOpenCode, context, init_repo, write_file};
 use ocbot::adapters::git::GitAdapter;
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::handlers::accept;
@@ -34,7 +34,7 @@ fn repo_str(repo: &Path) -> String {
 fn ctx_for(
     store: &StoreHandle,
     repo: &Path,
-    discord: &FakeDiscord,
+    discord: &FakeChat,
 ) -> Arc<ocbot::app::context::AppContext> {
     context(
         store.clone(),
@@ -72,12 +72,18 @@ async fn accept_commits_on_the_work_branch_and_releases_the_lock() {
     )
     .await;
     write_file(&repo, "feature.txt", "feature\n");
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, &repo, &discord);
 
-    let outcome = accept::execute_accept(&ctx, seeded.action_id, "feat: add", "body", OPERATOR)
-        .await
-        .expect("accept");
+    let outcome = accept::execute_accept(
+        &ctx,
+        seeded.action_id,
+        "feat: add",
+        "body",
+        &format!("discord:{OPERATOR}"),
+    )
+    .await
+    .expect("accept");
     assert!(outcome.unwrap_or_default().contains("accepted"));
 
     let row = store
@@ -126,12 +132,18 @@ async fn failed_hook_returns_to_reported_with_prefill_from_the_db() {
     )
     .await;
     write_file(&repo, "feature.txt", "feature\n");
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, &repo, &discord);
 
-    let outcome = accept::execute_accept(&ctx, seeded.action_id, "feat: add", "body", OPERATOR)
-        .await
-        .expect("accept");
+    let outcome = accept::execute_accept(
+        &ctx,
+        seeded.action_id,
+        "feat: add",
+        "body",
+        &format!("discord:{OPERATOR}"),
+    )
+    .await
+    .expect("accept");
     assert!(outcome.unwrap_or_default().contains("failed"));
 
     let row = store
@@ -197,12 +209,18 @@ async fn accept_refuses_when_started_dirty_without_include_existing() {
         "mark-dirty CAS must find a reported action"
     );
     write_file(&repo, "feature.txt", "f\n");
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, &repo, &discord);
 
-    let error = accept::execute_accept(&ctx, seeded.action_id, "s", "", OPERATOR)
-        .await
-        .expect_err("must refuse");
+    let error = accept::execute_accept(
+        &ctx,
+        seeded.action_id,
+        "s",
+        "",
+        &format!("discord:{OPERATOR}"),
+    )
+    .await
+    .expect_err("must refuse");
     assert!(error.to_string().contains("FR-27"), "error: {error}");
     assert_eq!(
         store
@@ -236,12 +254,18 @@ async fn accept_refuses_on_a_different_branch() {
     )
     .await;
     write_file(&repo, "feature.txt", "f\n");
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, &repo, &discord);
 
-    let error = accept::execute_accept(&ctx, seeded.action_id, "s", "", OPERATOR)
-        .await
-        .expect_err("must refuse");
+    let error = accept::execute_accept(
+        &ctx,
+        seeded.action_id,
+        "s",
+        "",
+        &format!("discord:{OPERATOR}"),
+    )
+    .await
+    .expect_err("must refuse");
     assert!(error.to_string().contains("FR-17"), "error: {error}");
     assert_eq!(
         store
@@ -271,7 +295,7 @@ async fn non_git_mark_done_is_db_only() {
         "ses_1",
     )
     .await;
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = context(
         store.clone(),
         Arc::new(FakeOpenCode::new()),
@@ -281,7 +305,7 @@ async fn non_git_mark_done_is_db_only() {
         Some(CHANNEL),
     );
 
-    let outcome = accept::execute_mark_done(&ctx, seeded.action_id, OPERATOR)
+    let outcome = accept::execute_mark_done(&ctx, seeded.action_id, &format!("discord:{OPERATOR}"))
         .await
         .expect("mark done");
     assert!(outcome.unwrap_or_default().contains("done"));

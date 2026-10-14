@@ -14,7 +14,7 @@ use crate::adapters::store::ActionRow;
 use crate::app::context::AppContext;
 use crate::app::crashpoint::checkpoint;
 use crate::app::error::AppError;
-use crate::app::handlers::support::{self, TempMessage};
+use crate::app::handlers::support::TempMessage;
 use crate::app::interaction::{InputStyle, ModalInputSpec, ModalSpec};
 
 /// The decision states an Accept may start from (a completed report).
@@ -53,7 +53,7 @@ pub fn accept_modal(action: &ActionRow) -> ModalSpec {
 pub async fn execute_mark_done(
     ctx: &Arc<AppContext>,
     action_id: i64,
-    operator_id: u64,
+    operator: &str,
 ) -> Result<Option<String>, AppError> {
     let action = ctx
         .store
@@ -63,8 +63,8 @@ pub async fn execute_mark_done(
     if !ACCEPT_FROM.contains(&action.state) {
         return Err(AppError::AlreadyHandled);
     }
-    let dir = support::directory_for(ctx, &action).await?;
-    let dir_text = support::dir_text(&dir);
+    let dir = crate::app::handlers::support::directory_for(ctx, &action).await?;
+    let dir_text = crate::app::handlers::support::dir_text(&dir);
 
     let accepted = ctx
         .store
@@ -78,7 +78,7 @@ pub async fn execute_mark_done(
         .await?;
     ctx.store.retire_active_session(&dir_text).await?;
     ctx.store
-        .audit(operator_id, "markdone", Some(action_id), "accepted")
+        .audit(operator, "markdone", Some(action_id), "accepted")
         .await?;
     Ok(Some(format!("marked **{}** done", action.label)))
 }
@@ -93,7 +93,7 @@ pub async fn execute_accept(
     action_id: i64,
     subject: &str,
     body: &str,
-    operator_id: u64,
+    operator: &str,
 ) -> Result<Option<String>, AppError> {
     let subject = subject.trim();
     if subject.is_empty() {
@@ -122,14 +122,14 @@ pub async fn execute_accept(
         .action(action_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("action {action_id}")))?;
-    let dir = support::directory_for(ctx, &action).await?;
-    let dir_text = support::dir_text(&dir);
+    let dir = crate::app::handlers::support::directory_for(ctx, &action).await?;
+    let dir_text = crate::app::handlers::support::dir_text(&dir);
     let project = ctx.store.project(&dir_text).await?;
 
     // Non-git fallback: the router routes non-git to mark_done, but a direct
     // caller (crash harness) may reach here; treat it as a DB-only accept.
     let Some(work_branch) = project.and_then(|project| project.work_branch) else {
-        return finish_non_git(ctx, action_id, &dir_text, operator_id).await;
+        return finish_non_git(ctx, action_id, &dir_text, operator).await;
     };
 
     // CP-A1: the branch must still be the run's work branch (FR-17) and the
@@ -171,17 +171,20 @@ pub async fn execute_accept(
             ctx.store
                 .cas_state(action_id, State::Accepting, State::Reported, &[])
                 .await?;
-            let message = support::failure_post(
+            let message = crate::app::handlers::support::failure_post(
                 format!(
                     "❌ **Accept failed for {}**",
                     truncate_chars(&action.label, LABEL_MAX_CHARS)
                 ),
                 &hook.output,
                 "",
-                operator_id,
+                operator,
             );
-            ctx.discord
-                .post(support::channel_for(&action)?, &message)
+            ctx.chat
+                .post(
+                    &crate::app::handlers::support::destination_for(&action)?,
+                    &message,
+                )
                 .await?;
             return Ok(Some("accept failed — see the hook output".to_owned()));
         }
@@ -211,15 +214,18 @@ pub async fn execute_accept(
         .await?;
     ctx.store.retire_active_session(&dir_text).await?;
     ctx.store
-        .audit(operator_id, "accept", Some(action_id), &sha)
+        .audit(operator, "accept", Some(action_id), &sha)
         .await?;
     let short: String = sha.chars().take(8).collect();
-    let message = support::simple(
+    let message = crate::app::handlers::support::simple(
         format!("✅ Accepted **{}** as `{short}`", action.label),
-        operator_id,
+        operator,
     );
-    ctx.discord
-        .post(support::channel_for(&action)?, &message)
+    ctx.chat
+        .post(
+            &crate::app::handlers::support::destination_for(&action)?,
+            &message,
+        )
         .await?;
     checkpoint("CP-A3");
     Ok(Some(format!("accepted as {short}")))
@@ -233,8 +239,8 @@ pub async fn resume(ctx: &Arc<AppContext>, action: &ActionRow) -> Result<Option<
     if action.state != State::Accepting {
         return Err(AppError::AlreadyHandled);
     }
-    let dir = support::directory_for(ctx, action).await?;
-    let dir_text = support::dir_text(&dir);
+    let dir = crate::app::handlers::support::directory_for(ctx, action).await?;
+    let dir_text = crate::app::handlers::support::dir_text(&dir);
     let head = ctx.git.head(&dir).await?;
 
     let matches = match action.pending_commit_subject.as_deref() {
@@ -290,7 +296,7 @@ async fn finish_non_git(
     ctx: &Arc<AppContext>,
     action_id: i64,
     dir_text: &str,
-    operator_id: u64,
+    operator: &str,
 ) -> Result<Option<String>, AppError> {
     let accepted = ctx
         .store
@@ -304,7 +310,7 @@ async fn finish_non_git(
         .await?;
     ctx.store.retire_active_session(dir_text).await?;
     ctx.store
-        .audit(operator_id, "markdone", Some(action_id), "accepted")
+        .audit(operator, "markdone", Some(action_id), "accepted")
         .await?;
     Ok(Some("marked done".to_owned()))
 }

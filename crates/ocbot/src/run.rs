@@ -16,7 +16,7 @@ use crate::adapters::fs::FsAdapter;
 use crate::adapters::git::GitAdapter;
 use crate::adapters::opencode::{OpenCodeAdapter, OpenCodeEventSource};
 use crate::adapters::store::StoreHandle;
-use crate::app::context::{AppContext, DiscordPort, EventSource};
+use crate::app::context::{AppContext, ChatPort, EventSource};
 use crate::app::degraded::HealthMonitor;
 use crate::app::doctor;
 use crate::app::gates_loop::GatesLoop;
@@ -79,7 +79,7 @@ pub async fn start() -> ExitCode {
         return ExitCode::from(1);
     };
     let Some(operator) = config.resolved_operator() else {
-        tracing::error!("missing allowed_user_id (config or env)");
+        tracing::error!("missing [discord] allowed_user_id (config or env)");
         return ExitCode::from(1);
     };
 
@@ -170,12 +170,17 @@ pub async fn start() -> ExitCode {
     };
     let client = Arc::new(client);
     let opencode: Arc<dyn OpenCodePort> = Arc::new(OpenCodeAdapter::new(client.clone()));
-    let discord_surface: Arc<dyn DiscordPort> =
-        Arc::new(DiscordAdapter::new(shared_http(&token, operator), operator));
+    let chat: Arc<dyn ChatPort> = Arc::new(
+        DiscordAdapter::new(shared_http(&token, operator), operator)
+            .with_announce(config.discord.ops_channel),
+    );
     let guard = Guard {
-        allowed_user_id: operator,
-        ops_channel: config.ops_channel,
-        inbox_channel: config.inbox_channel,
+        allowed_actors: vec![ocbot_core::ActorId::from_parts(
+            ocbot_core::Surface::Discord,
+            &operator.to_string(),
+        )],
+        ops_channel: config.discord.ops_channel,
+        inbox_channel: config.discord.inbox_channel,
     };
     let ctx = Arc::new(AppContext {
         store: store.clone(),
@@ -185,7 +190,7 @@ pub async fn start() -> ExitCode {
         clock,
         abort_timeout_secs: config.abort_timeout_secs,
         permission_ruleset,
-        discord: discord_surface,
+        chat,
         metrics: metrics.clone(),
         redactor,
         health: Arc::new(HealthMonitor::new()),

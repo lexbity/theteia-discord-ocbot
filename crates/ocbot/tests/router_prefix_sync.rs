@@ -31,7 +31,7 @@ mod common;
 
 use std::sync::Arc;
 
-use common::{FakeDiscord, FakeGit, FakeOpenCode, context};
+use common::{FakeChat, FakeGit, FakeOpenCode, context};
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::context::AppContext;
 use ocbot::app::interaction::{AckPlan, InteractionSource, SourceKind};
@@ -115,7 +115,7 @@ fn constant_prefixes() -> Vec<String> {
 fn source(kind: SourceKind) -> InteractionSource {
     InteractionSource {
         kind,
-        user_id: OPERATOR,
+        user_id: format!("discord:{OPERATOR}"),
         channel_id: CHANNEL,
         guild_id: Some(1),
         message_id: Some(1),
@@ -134,7 +134,7 @@ fn base_ctx(store: &StoreHandle) -> Arc<AppContext> {
         store.clone(),
         Arc::new(FakeOpenCode::new()),
         Arc::new(FakeGit::inert()),
-        Arc::new(FakeDiscord::new()),
+        Arc::new(FakeChat::new()),
         OPERATOR,
         Some(CHANNEL),
     )

@@ -15,7 +15,7 @@ mod common;
 use std::sync::Arc;
 
 use common::{
-    FakeClock, FakeDiscord, FakeGit, FakeOpenCode, context_with, permission_gate, seed_running,
+    FakeChat, FakeClock, FakeGit, FakeOpenCode, context_with, permission_gate, seed_running,
 };
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::gates_loop;
@@ -44,7 +44,7 @@ async fn reping_runs_on_the_cadence_and_stops_after_six() {
         "bash",
         &["ls"],
     )]);
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let clock = FakeClock::at(1_000_000);
     let ctx = context_with(
         store.clone(),

@@ -19,7 +19,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use common::{FakeDiscord, FakeGit, FakeOpenCode, context, init_repo, write_file};
+use common::{FakeChat, FakeGit, FakeOpenCode, context, init_repo, write_file};
 use ocbot::adapters::git::GitAdapter;
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::reconcile::reconcile_git_states;
@@ -46,7 +46,7 @@ fn make_repo(tmp: &TempDir) -> (PathBuf, String) {
 fn ctx_for(
     store: &StoreHandle,
     repo: &Path,
-    discord: &FakeDiscord,
+    discord: &FakeChat,
 ) -> Arc<ocbot::app::context::AppContext> {
     context(
         store.clone(),
@@ -109,7 +109,7 @@ async fn accept_cp_a0_without_a_commit_reverts_to_reported() {
     .await;
     enter_accepting(&store, seeded.action_id, "never happened").await;
 
-    let ctx = ctx_for(&store, &repo, &FakeDiscord::new());
+    let ctx = ctx_for(&store, &repo, &FakeChat::new());
     let repaired = reconcile_git_states(&ctx).await;
     assert_eq!(repaired, 1);
     assert_eq!(
@@ -149,7 +149,7 @@ async fn accept_cp_a2_adopts_the_landed_commit() {
     assert!(commit.status.success(), "manual commit");
     let head = common::git_stdout(&repo, &["rev-parse", "HEAD"]);
 
-    let ctx = ctx_for(&store, &repo, &FakeDiscord::new());
+    let ctx = ctx_for(&store, &repo, &FakeChat::new());
     let repaired = reconcile_git_states(&ctx).await;
     assert_eq!(repaired, 1);
     let row = store
@@ -242,7 +242,7 @@ async fn park_cp_p1_commits_resume_branches_and_resets() {
     let store = StoreHandle::open_in_memory().expect("store");
     let action_id = seed_parking(&store, &repo, &base, 1, "park: work (attempt 1)").await;
 
-    let ctx = ctx_for(&store, &repo, &FakeDiscord::new());
+    let ctx = ctx_for(&store, &repo, &FakeChat::new());
     let repaired = reconcile_git_states(&ctx).await;
     assert_eq!(repaired, 1);
     let row = store.action(action_id).await.expect("read").expect("row");
@@ -270,7 +270,7 @@ async fn park_cp_p2_resumes_at_the_reset() {
     let store = StoreHandle::open_in_memory().expect("store");
     let action_id = seed_parking(&store, &repo, &base, 2, "park: work (attempt 1)").await;
 
-    let ctx = ctx_for(&store, &repo, &FakeDiscord::new());
+    let ctx = ctx_for(&store, &repo, &FakeChat::new());
     reconcile_git_states(&ctx).await;
     assert_eq!(
         store
@@ -292,7 +292,7 @@ async fn park_cp_p3_finishes() {
     let store = StoreHandle::open_in_memory().expect("store");
     let action_id = seed_parking(&store, &repo, &base, 3, "park: work (attempt 1)").await;
 
-    let ctx = ctx_for(&store, &repo, &FakeDiscord::new());
+    let ctx = ctx_for(&store, &repo, &FakeChat::new());
     reconcile_git_states(&ctx).await;
     assert_eq!(
         store
@@ -343,7 +343,7 @@ async fn reset_cp_r0_creates_the_safety_branch_then_resets() {
         .expect("project");
     seed_reset(&store, &repo, &first, 0).await;
 
-    let ctx = ctx_for(&store, &repo, &FakeDiscord::new());
+    let ctx = ctx_for(&store, &repo, &FakeChat::new());
     reconcile_git_states(&ctx).await;
     assert!(
         store
@@ -377,7 +377,7 @@ async fn reset_cp_r1_and_r2_resume() {
             .expect("project");
         seed_reset(&store, &repo, &first, step).await;
 
-        let ctx = ctx_for(&store, &repo, &FakeDiscord::new());
+        let ctx = ctx_for(&store, &repo, &FakeChat::new());
         reconcile_git_states(&ctx).await;
         assert!(
             store
@@ -420,7 +420,7 @@ async fn accept_cp_a1_with_a_foreign_commit_reverts_to_reported() {
     let commit = common::run_git(&repo, &["commit", "-m", "a foreign subject"]);
     assert!(commit.status.success());
 
-    let ctx = ctx_for(&store, &repo, &FakeDiscord::new());
+    let ctx = ctx_for(&store, &repo, &FakeChat::new());
     let repaired = reconcile_git_states(&ctx).await;
     assert_eq!(repaired, 1);
     let row = store
@@ -473,7 +473,7 @@ async fn accept_cp_a3_accepted_is_terminal_and_untouched() {
             .expect("accepted")
     );
 
-    let ctx = ctx_for(&store, &repo, &FakeDiscord::new());
+    let ctx = ctx_for(&store, &repo, &FakeChat::new());
     assert_eq!(reconcile_git_states(&ctx).await, 0, "Accepted is terminal");
     let row = store
         .action(seeded.action_id)
@@ -493,7 +493,7 @@ async fn park_cp_p0_commits_from_a_dirty_worktree() {
     let store = StoreHandle::open_in_memory().expect("store");
     let action_id = seed_parking(&store, &repo, &base, 0, "park: work (attempt 1)").await;
 
-    let ctx = ctx_for(&store, &repo, &FakeDiscord::new());
+    let ctx = ctx_for(&store, &repo, &FakeChat::new());
     assert_eq!(reconcile_git_states(&ctx).await, 1);
     let row = store.action(action_id).await.expect("read").expect("row");
     assert_eq!(row.state, State::Parked, "CP-P0 commits, branches, resets");
@@ -520,7 +520,7 @@ async fn park_cp_p4_parked_is_untouched_on_a_second_pass() {
     let store = StoreHandle::open_in_memory().expect("store");
     let action_id = seed_parking(&store, &repo, &base, 3, "park: work (attempt 1)").await;
 
-    let ctx = ctx_for(&store, &repo, &FakeDiscord::new());
+    let ctx = ctx_for(&store, &repo, &FakeChat::new());
     assert_eq!(reconcile_git_states(&ctx).await, 1);
     assert_eq!(
         reconcile_git_states(&ctx).await,

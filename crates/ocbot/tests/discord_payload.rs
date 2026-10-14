@@ -55,13 +55,13 @@ fn every_message_type_carries_operator_only_mentions() {
             content: "status".to_owned(),
             attachment: None,
             components: vec![component_button("go", "v1:send:3", ButtonKind::Primary)],
-            mentioned_users: vec![OPERATOR],
+            mention_allowlist: vec![OPERATOR],
         },
         OutgoingMessage {
             content: "with tokens".to_owned(),
             attachment: None,
             components: Vec::new(),
-            mentioned_users: vec![OPERATOR],
+            mention_allowlist: vec![OPERATOR],
         },
     ];
 

@@ -15,7 +15,7 @@ mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{FakeDiscord, FakeGit, FakeOpenCode, seed_running, session_frame};
+use common::{FakeChat, FakeGit, FakeOpenCode, seed_running, session_frame};
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::wake::Dispatcher;
 use ocbot_core::ports::PortSession;
@@ -42,7 +42,7 @@ impl Dispatch {
         FakeOpenCode,
         tokio::sync::mpsc::Sender<opencode_v2_client::EventFrame>,
     ) {
-        let discord = FakeDiscord::new();
+        let discord = FakeChat::new();
         let opencode = FakeOpenCode::new();
         opencode.set_sessions(sessions);
         let store = StoreHandle::open_in_memory().expect("store");
@@ -307,7 +307,7 @@ async fn a_disabled_dispatcher_never_spawns() {
                 StoreHandle::open_in_memory().expect("store"),
                 Arc::new(FakeOpenCode::new()),
                 Arc::new(FakeGit::inert()),
-                Arc::new(FakeDiscord::new()),
+                Arc::new(FakeChat::new()),
                 OPERATOR,
                 None,
             ),

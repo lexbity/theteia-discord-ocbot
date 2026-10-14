@@ -15,7 +15,7 @@ mod common;
 use std::path::Path;
 use std::sync::Arc;
 
-use common::{FakeDiscord, FakeGit, FakeOpenCode, context, init_repo, write_file};
+use common::{FakeChat, FakeGit, FakeOpenCode, context, init_repo, write_file};
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::handlers::history;
 use ocbot::app::interaction::{InteractionSource, SourceKind};
@@ -34,7 +34,7 @@ fn source() -> InteractionSource {
         kind: SourceKind::SlashCommand {
             name: "history".to_owned(),
         },
-        user_id: OPERATOR,
+        user_id: format!("discord:{OPERATOR}"),
         channel_id: CHANNEL,
         guild_id: Some(1),
         message_id: None,
@@ -63,13 +63,7 @@ async fn history_renders_manual_rows_after_db_loss() {
             .expect("project");
         let run = store.insert_run(&text, "free").await.expect("run");
         let action = store
-            .insert_action(
-                run,
-                Some(i64::try_from(CHANNEL).unwrap()),
-                "my label",
-                "prompt",
-                1,
-            )
+            .insert_action(run, Some(&CHANNEL.to_string()), "my label", "prompt", 1)
             .await
             .expect("action");
         assert!(
@@ -101,9 +95,12 @@ async fn history_renders_manual_rows_after_db_loss() {
     // Losing the DB (P15): labels are gone, the commits remain.
     std::fs::remove_file(&db).expect("remove db");
     let store = StoreHandle::open(&db).expect("reopen");
-    store.set_ui_cwd(OPERATOR, &text).await.expect("cwd");
+    store
+        .set_ui_cwd(&format!("discord:{OPERATOR}"), &text)
+        .await
+        .expect("cwd");
 
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = context(
         store,
         Arc::new(FakeOpenCode::new()),

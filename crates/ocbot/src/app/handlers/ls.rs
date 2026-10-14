@@ -19,9 +19,14 @@ pub const CD_MODAL: &str = "v1:cd";
 
 /// Execute `/ls`: browse from the remembered cwd (or the first root).
 pub async fn execute_ls(ctx: &Arc<AppContext>, source: &InteractionSource) -> Result<(), AppError> {
-    let cwd = start_dir(ctx, source.user_id).await?;
-    let message = render(ctx, &cwd, 0, source.user_id).await?;
-    ctx.discord.post(source.channel_id, &message).await?;
+    let cwd = start_dir(ctx, &source.user_id).await?;
+    let message = render(ctx, &cwd, 0, &source.user_id).await?;
+    ctx.chat
+        .post(
+            &ocbot_core::Destination::discord(source.channel_id),
+            &message,
+        )
+        .await?;
     Ok(())
 }
 
@@ -30,7 +35,7 @@ pub async fn cd_modal(
     ctx: &Arc<AppContext>,
     source: &InteractionSource,
 ) -> Result<ModalSpec, AppError> {
-    let prefill = ctx.store.ui_cwd(source.user_id).await?;
+    let prefill = ctx.store.ui_cwd(&source.user_id).await?;
     Ok(ModalSpec {
         custom_id: CD_MODAL.to_owned(),
         title: "ocbot — cd".to_owned(),
@@ -55,14 +60,19 @@ pub async fn execute_cd(
         return Err(AppError::Other("a path is required".to_owned()));
     }
     let resolved = ctx.fs.resolve(Path::new(typed)).await?;
-    let message = render(ctx, &resolved, 0, source.user_id).await?;
-    ctx.discord.post(source.channel_id, &message).await?;
+    let message = render(ctx, &resolved, 0, &source.user_id).await?;
+    ctx.chat
+        .post(
+            &ocbot_core::Destination::discord(source.channel_id),
+            &message,
+        )
+        .await?;
     Ok(None)
 }
 
 /// `v1:ls:up`: ascend one directory (clamped at a browse root).
 pub async fn up(ctx: &Arc<AppContext>, source: &InteractionSource) -> Result<(), AppError> {
-    let cwd = start_dir(ctx, source.user_id).await?;
+    let cwd = start_dir(ctx, &source.user_id).await?;
     let parent = cwd
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -73,7 +83,7 @@ pub async fn up(ctx: &Arc<AppContext>, source: &InteractionSource) -> Result<(),
         Ok(resolved) => resolved,
         Err(_) => cwd,
     };
-    let message = render(ctx, &target, 0, source.user_id).await?;
+    let message = render(ctx, &target, 0, &source.user_id).await?;
     edit_or_post(ctx, source, &message).await
 }
 
@@ -83,7 +93,7 @@ pub async fn open(
     source: &InteractionSource,
     index: usize,
 ) -> Result<(), AppError> {
-    let cwd = start_dir(ctx, source.user_id).await?;
+    let cwd = start_dir(ctx, &source.user_id).await?;
     let entry = entry_at(ctx, &cwd, index).await?;
     if !entry.is_dir {
         return Err(AppError::Other(format!(
@@ -92,7 +102,7 @@ pub async fn open(
         )));
     }
     let target = ctx.fs.resolve(Path::new(&entry.path)).await?;
-    let message = render(ctx, &target, 0, source.user_id).await?;
+    let message = render(ctx, &target, 0, &source.user_id).await?;
     edit_or_post(ctx, source, &message).await
 }
 
@@ -102,8 +112,8 @@ pub async fn page(
     source: &InteractionSource,
     page: usize,
 ) -> Result<(), AppError> {
-    let cwd = start_dir(ctx, source.user_id).await?;
-    let message = render(ctx, &cwd, page, source.user_id).await?;
+    let cwd = start_dir(ctx, &source.user_id).await?;
+    let message = render(ctx, &cwd, page, &source.user_id).await?;
     edit_or_post(ctx, source, &message).await
 }
 
@@ -113,13 +123,13 @@ pub async fn select(
     source: &InteractionSource,
     index: usize,
 ) -> Result<Option<String>, AppError> {
-    let cwd = start_dir(ctx, source.user_id).await?;
+    let cwd = start_dir(ctx, &source.user_id).await?;
     let entry = entry_at(ctx, &cwd, index).await?;
     let resolved = ctx.fs.resolve(Path::new(&entry.path)).await?;
     let text = resolved.to_string_lossy().into_owned();
-    ctx.store.set_draft_path(source.user_id, &text).await?;
+    ctx.store.set_draft_path(&source.user_id, &text).await?;
     ctx.store
-        .audit(source.user_id, "ls", None, "selected")
+        .audit(&source.user_id, "ls", None, "selected")
         .await?;
     Ok(Some(format!("selected `{text}`")))
 }
@@ -129,12 +139,12 @@ pub async fn use_current(
     ctx: &Arc<AppContext>,
     source: &InteractionSource,
 ) -> Result<Option<String>, AppError> {
-    let cwd = start_dir(ctx, source.user_id).await?;
+    let cwd = start_dir(ctx, &source.user_id).await?;
     let resolved = ctx.fs.resolve(&cwd).await?;
     let text = resolved.to_string_lossy().into_owned();
-    ctx.store.set_draft_path(source.user_id, &text).await?;
+    ctx.store.set_draft_path(&source.user_id, &text).await?;
     ctx.store
-        .audit(source.user_id, "ls", None, "selected-dir")
+        .audit(&source.user_id, "ls", None, "selected-dir")
         .await?;
     Ok(Some(format!("selected directory `{text}`")))
 }
@@ -174,7 +184,7 @@ fn parse_index(raw: &str) -> Result<usize, AppError> {
 
 /// The directory a browser session starts from: the remembered cwd when it is
 /// still resolvable, else the first configured root.
-async fn start_dir(ctx: &Arc<AppContext>, user_id: u64) -> Result<PathBuf, AppError> {
+async fn start_dir(ctx: &Arc<AppContext>, user_id: &str) -> Result<PathBuf, AppError> {
     if let Some(cwd) = ctx.store.ui_cwd(user_id).await?
         && let Ok(resolved) = ctx.fs.resolve(Path::new(&cwd)).await
     {
@@ -206,7 +216,7 @@ async fn render(
     ctx: &Arc<AppContext>,
     cwd: &Path,
     page: usize,
-    operator_id: u64,
+    actor: &str,
 ) -> Result<ocbot_core::OutgoingMessage, AppError> {
     let entries = ctx.fs.list(cwd, false).await?;
     let ls_entries: Vec<LsEntry> = entries
@@ -217,13 +227,13 @@ async fn render(
         })
         .collect();
     let text = cwd.to_string_lossy().into_owned();
-    ctx.store.set_ui_cwd(operator_id, &text).await?;
+    ctx.store.set_ui_cwd(actor, &text).await?;
     Ok(ls_message(
         &text,
         &ls_entries,
         page,
         ctx.ls_page_size,
-        operator_id,
+        crate::app::handlers::support::operator_u64(actor),
     ))
 }
 
@@ -236,12 +246,20 @@ async fn edit_or_post(
 ) -> Result<(), AppError> {
     match source.message_id {
         Some(message_id) => {
-            ctx.discord
-                .edit(source.channel_id, message_id, message)
-                .await?;
+            ctx.chat
+                .edit(
+                    &crate::app::handlers::support::discord_receipt(message_id),
+                    message,
+                )
+                .await;
         }
         None => {
-            ctx.discord.post(source.channel_id, message).await?;
+            ctx.chat
+                .post(
+                    &ocbot_core::Destination::discord(source.channel_id),
+                    message,
+                )
+                .await?;
         }
     }
     Ok(())

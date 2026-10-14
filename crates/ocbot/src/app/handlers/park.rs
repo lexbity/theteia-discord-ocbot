@@ -14,7 +14,7 @@ use crate::adapters::store::ActionRow;
 use crate::app::context::AppContext;
 use crate::app::crashpoint::checkpoint;
 use crate::app::error::AppError;
-use crate::app::handlers::support::{self, TempMessage, channel_for, dir_text, directory_for};
+use crate::app::handlers::support::{TempMessage, dir_text, directory_for};
 
 /// Refuse to park when an untracked, unignored file exceeds this size (P7).
 pub const MAX_PARK_FILE_MB: u64 = 50;
@@ -29,7 +29,7 @@ pub const PARK_MARKER: &str = "park: ";
 pub async fn begin_park(
     ctx: &Arc<AppContext>,
     action_id: i64,
-    operator_id: u64,
+    operator: &str,
 ) -> Result<Option<String>, AppError> {
     let action = ctx
         .store
@@ -68,7 +68,7 @@ pub async fn begin_park(
         .action(action_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("action {action_id}")))?;
-    resume(ctx, &action, operator_id).await
+    resume(ctx, &action, operator).await
 }
 
 /// Resume an action already in `parking` from its recorded `park_step`. Safe to
@@ -80,14 +80,14 @@ pub async fn begin_park(
 pub async fn resume(
     ctx: &Arc<AppContext>,
     action: &ActionRow,
-    operator_id: u64,
+    operator: &str,
 ) -> Result<Option<String>, AppError> {
     if action.state != State::Parking {
         return Err(AppError::AlreadyHandled);
     }
     let dir = directory_for(ctx, action).await?;
     let dir_text = dir_text(&dir);
-    let channel = channel_for(action)?;
+    let dest = crate::app::handlers::support::destination_for(action)?;
     let branch = action
         .park_branch_name
         .clone()
@@ -119,16 +119,16 @@ pub async fn resume(
                         format!("⚠️ files kept, but the index could not be unstaged: {error}")
                     }
                 };
-                let message = support::failure_post(
+                let message = crate::app::handlers::support::failure_post(
                     format!(
                         "❌ **Park failed for {}**",
                         truncate_chars(&action.label, LABEL_MAX_CHARS)
                     ),
                     &hook.output,
                     &note,
-                    operator_id,
+                    operator,
                 );
-                ctx.discord.post(channel, &message).await?;
+                ctx.chat.post(&dest, &message).await?;
                 return Ok(Some("park failed — see the output".to_owned()));
             }
             Err(error) => {
@@ -215,13 +215,13 @@ pub async fn resume(
         .await?;
     ctx.store.retire_active_session(&dir_text).await?;
     ctx.store
-        .audit(operator_id, "park", Some(action.id), &branch)
+        .audit(operator, "park", Some(action.id), &branch)
         .await?;
     let child = ctx
         .store
         .insert_staged_child(
             action.run_id,
-            action.channel_id,
+            action.chat_ref.as_deref(),
             &action.label,
             &action.prompt_sent,
             &action.template,
@@ -233,10 +233,10 @@ pub async fn resume(
         &action.label,
         &action.prompt_sent,
         child,
-        operator_id,
+        crate::app::handlers::support::operator_u64(operator),
         &action.template,
     );
-    ctx.discord.post(channel, &preview).await?;
+    ctx.chat.post(&dest, &preview).await?;
     checkpoint("CP-P4");
     Ok(Some(format!(
         "parked on `{branch}`; retry staged (attempt {})",

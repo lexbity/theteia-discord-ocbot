@@ -18,7 +18,7 @@ use ocbot::app::handlers::{park, run};
 use ocbot::app::interaction::{InteractionSource, SourceKind, TextInput};
 use ocbot_core::ports::OpenCodePort;
 
-use common::{FakeDiscord, FakeGit, FakeOpenCode, append_file, context, init_repo, write_file};
+use common::{FakeChat, FakeGit, FakeOpenCode, append_file, context, init_repo, write_file};
 
 const OPERATOR: u64 = 42;
 const CHANNEL: u64 = 7;
@@ -35,7 +35,7 @@ fn modal(custom_id: &str, values: &[(&str, &str)]) -> InteractionSource {
                 })
                 .collect(),
         },
-        user_id: OPERATOR,
+        user_id: format!("discord:{OPERATOR}"),
         channel_id: CHANNEL,
         guild_id: Some(1),
         message_id: None,
@@ -66,7 +66,7 @@ async fn preview_shows_the_stored_prompt_byte_for_byte() {
     let repo = make_repo(&tmp);
     let store = StoreHandle::open_in_memory().expect("store");
     let opencode: Arc<dyn OpenCodePort> = Arc::new(FakeOpenCode::new());
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = context(
         store.clone(),
         opencode,
@@ -122,7 +122,7 @@ async fn park_restages_the_stored_prompt_not_a_rerender() {
     .await;
     append_file(&repo, "README.md", "edit\n");
 
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = context(
         store.clone(),
         Arc::new(FakeOpenCode::new()),
@@ -131,7 +131,7 @@ async fn park_restages_the_stored_prompt_not_a_rerender() {
         OPERATOR,
         Some(CHANNEL),
     );
-    park::begin_park(&ctx, seeded.action_id, OPERATOR)
+    park::begin_park(&ctx, seeded.action_id, &format!("discord:{OPERATOR}"))
         .await
         .expect("park");
 

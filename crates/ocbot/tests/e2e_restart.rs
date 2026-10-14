@@ -15,7 +15,7 @@ mod common;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use common::{FakeDiscord, FakeGit, context};
+use common::{FakeChat, FakeGit, context};
 use ocbot::adapters::opencode::OpenCodeAdapter;
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::reconcile::reconcile;
@@ -112,7 +112,7 @@ async fn a_restart_delivers_the_report_exactly_once() {
         let opencode = OpenCodeAdapter::new(Arc::new(
             opencode_v2_client::Client::new(&server.uri(), "secret").expect("client"),
         ));
-        let discord = FakeDiscord::new();
+        let discord = FakeChat::new();
         let ctx = context(
             store.clone(),
             Arc::new(opencode),
@@ -140,7 +140,7 @@ async fn a_restart_delivers_the_report_exactly_once() {
         let opencode = OpenCodeAdapter::new(Arc::new(
             opencode_v2_client::Client::new(&server.uri(), "secret").expect("client"),
         ));
-        let discord = FakeDiscord::new();
+        let discord = FakeChat::new();
         let ctx = context(
             store.clone(),
             Arc::new(opencode),

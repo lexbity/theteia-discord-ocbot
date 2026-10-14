@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, watch};
 
 use ocbot_core::error::OcError as CoreOcError;
 use ocbot_core::ports::{Clock, FsPort, GitPort, OpenCodePort, PermissionRule};
-use ocbot_core::{OutgoingMessage, Redactor};
+use ocbot_core::{Destination, OutgoingMessage, PostReceipt, Redactor, Surface};
 use opencode_v2_client::EventFrame;
 
 use crate::adapters::store::StoreHandle;
@@ -18,29 +18,58 @@ use crate::app::guard::Guard;
 use crate::app::metrics::Metrics;
 use crate::config::Templates;
 
-/// A failure posting to Discord.
+/// A failure delivering to one surface (SPEC-004 D-02: no platform prefix —
+/// the surface is a typed field).
 #[derive(Debug, Clone, thiserror::Error)]
-#[error("discord: {0}")]
-pub struct SendError(pub String);
+#[error("{surface}: {message}")]
+pub struct SendError {
+    /// The surface that failed.
+    pub surface: Surface,
+    /// The transport's error text.
+    pub message: String,
+}
 
-/// The message-posting surface handlers use. The serenity adapter is the only
-/// production implementation; the e2e suite uses a recording fake. Every
+/// The per-surface result vector of a [`ChatPort::broadcast`] (SPEC-004 D-07):
+/// `delivered` is non-empty iff at least one surface accepted the message.
+#[derive(Debug, Clone, Default)]
+pub struct BroadcastOutcome {
+    /// Every successful `(surface, receipt)` delivery.
+    pub delivered: Vec<(Surface, PostReceipt)>,
+    /// Every failed surface, with its error.
+    pub failed: Vec<(Surface, SendError)>,
+}
+
+impl BroadcastOutcome {
+    /// Whether at least one surface accepted the message (D-07's ≥1 contract).
+    pub fn any_delivered(&self) -> bool {
+        !self.delivered.is_empty()
+    }
+}
+
+/// The message-posting surface handlers use (SPEC-004 §5.3): one outbound
+/// port, destination-addressed, surface-blind. Production implementations are
+/// the Discord adapter today and a `FanoutPort` over per-surface adapters in
+/// dual-surface deployments; the e2e suite uses a recording fake. Every
 /// payload built from `&OutgoingMessage` carries the structural
 /// `allowed_mentions` restriction (FR-3) — this trait is the only door.
 #[async_trait]
-pub trait DiscordPort: Send + Sync {
-    /// Post a new message; returns the Discord message id.
-    async fn post(&self, channel: u64, message: &OutgoingMessage) -> Result<u64, SendError>;
-    /// Replace a message's content in place (edits do not notify — used for
-    /// quiet status, not for reports).
-    async fn edit(
+pub trait ChatPort: Send + Sync {
+    /// Ordered, single-destination delivery. `Err` propagates to the caller
+    /// (reply routing is point-to-point).
+    async fn post(
         &self,
-        channel: u64,
-        message: u64,
-        replacement: &OutgoingMessage,
-    ) -> Result<(), SendError>;
-    /// Add a reaction (the quiet status light, P10).
-    async fn react(&self, channel: u64, message: u64, emoji: char) -> Result<(), SendError>;
+        dest: &Destination,
+        message: &OutgoingMessage,
+    ) -> Result<PostReceipt, SendError>;
+    /// Best-effort quiet rewrite; never fails the caller (quiet status, P10).
+    async fn edit(&self, receipt: &PostReceipt, replacement: &OutgoingMessage);
+    /// Best-effort status reaction (the quiet status light, P10).
+    async fn react(&self, receipt: &PostReceipt, emoji: char);
+    /// Concurrent delivery to every configured surface. Ok iff ≥ 1 surface
+    /// accepted; the per-surface results are always returned (D-07).
+    async fn broadcast(&self, message: &OutgoingMessage) -> BroadcastOutcome;
+    /// The surfaces this port would deliver to (health/ops display).
+    fn surfaces(&self) -> Vec<Surface>;
 }
 
 /// One item handed from an event-source pump to its consumer (SPEC-003 §4.6:
@@ -143,8 +172,9 @@ pub struct AppContext {
     /// The permission baseline, attached to created sessions only when FR-42
     /// is enabled (D-R6: off by default).
     pub permission_ruleset: Option<Vec<PermissionRule>>,
-    /// The Discord message surface.
-    pub discord: Arc<dyn DiscordPort>,
+    /// The chat message surface (one port; a fan-out in dual-surface
+    /// deployments — SPEC-004 D-01).
+    pub chat: Arc<dyn ChatPort>,
     /// Metrics registry.
     pub metrics: Arc<Metrics>,
     /// Inline-report secret scrubber (R-12).

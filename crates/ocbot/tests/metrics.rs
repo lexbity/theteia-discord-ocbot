@@ -14,7 +14,7 @@ mod common;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use common::{FakeClock, FakeDiscord, FakeGit, FakeOpenCode, context_with, seed_running};
+use common::{FakeChat, FakeClock, FakeGit, FakeOpenCode, context_with, seed_running};
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::metrics;
 use ocbot::app::watcher::Watcher;
@@ -74,7 +74,7 @@ async fn endpoint_exposes_every_family_after_a_scripted_scenario() {
     .await;
     let opencode = FakeOpenCode::new();
     opencode.set_snapshot("ses_m", FakeOpenCode::completed_snapshot());
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = context_with(
         store.clone(),
         Arc::new(opencode),

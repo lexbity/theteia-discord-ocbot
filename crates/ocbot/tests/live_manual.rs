@@ -31,7 +31,7 @@ use ocbot::app::reconcile::reconcile;
 use ocbot_core::ports::OpenCodePort;
 use tempfile::TempDir;
 
-use common::{FakeDiscord, FakeGit, context};
+use common::{FakeChat, FakeGit, context};
 
 const OPERATOR: u64 = 42;
 const CHANNEL: u64 = 7;
@@ -70,7 +70,7 @@ async fn live_spine_against_real_server() {
     let opencode: Arc<dyn OpenCodePort> = Arc::new(OpenCodeAdapter::new(Arc::new(
         opencode_v2_client::Client::new(&server_url, &password).expect("client"),
     )));
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = context(
         store.clone(),
         opencode.clone(),
@@ -97,7 +97,7 @@ async fn live_spine_against_real_server() {
                 },
             ],
         },
-        user_id: OPERATOR,
+        user_id: format!("discord:{OPERATOR}"),
         channel_id: CHANNEL,
         guild_id: Some(1),
         message_id: None,
@@ -114,7 +114,7 @@ async fn live_spine_against_real_server() {
         kind: SourceKind::Component {
             custom_id: format!("v1:send:{}", action.id),
         },
-        user_id: OPERATOR,
+        user_id: format!("discord:{OPERATOR}"),
         channel_id: CHANNEL,
         guild_id: Some(1),
         message_id: Some(1),

@@ -35,7 +35,7 @@ async fn store_bench() {
         .expect("project");
     let run = store.insert_run("/tmp/bench", "free").await.expect("run");
     let action = store
-        .insert_action(run, Some(7), "bench", "prompt", 1)
+        .insert_action(run, Some("7"), "bench", "prompt", 1)
         .await
         .expect("action");
 

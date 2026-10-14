@@ -14,7 +14,7 @@ mod common;
 
 use std::sync::Arc;
 
-use common::{FakeDiscord, FakeGit, FakeOpenCode, context};
+use common::{FakeChat, FakeGit, FakeOpenCode, context};
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::interaction::{AckPlan, InteractionSource, SourceKind, TextInput};
 use ocbot::app::router::{self, PlanOutcome};
@@ -36,7 +36,7 @@ fn modal(custom_id: &str, values: &[(&str, &str)]) -> InteractionSource {
                 })
                 .collect(),
         },
-        user_id: OPERATOR,
+        user_id: format!("discord:{OPERATOR}"),
         channel_id: CHANNEL,
         guild_id: Some(1),
         message_id: None,
@@ -49,7 +49,7 @@ fn button(custom_id: &str) -> InteractionSource {
         kind: SourceKind::Component {
             custom_id: custom_id.to_owned(),
         },
-        user_id: OPERATOR,
+        user_id: format!("discord:{OPERATOR}"),
         channel_id: CHANNEL,
         guild_id: Some(1),
         message_id: Some(1),
@@ -69,7 +69,7 @@ async fn run_flows_through_the_router_to_a_single_report() {
     let store = StoreHandle::open_in_memory().expect("store");
     let opencode = FakeOpenCode::new();
     opencode.set_snapshot("ses_fake_1", FakeOpenCode::completed_snapshot());
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = context(
         store.clone(),
         Arc::new(opencode),

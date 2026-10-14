@@ -9,8 +9,9 @@
 pub struct InteractionSource {
     /// What kind of interaction this is.
     pub kind: SourceKind,
-    /// The invoking user id.
-    pub user_id: u64,
+    /// The invoking user, as a namespaced `ActorId` string (`discord:42`,
+    /// `signal:+1555…` — SPEC-004 D-03; adapters namespace at build time).
+    pub user_id: String,
     /// The channel the interaction happened in.
     pub channel_id: u64,
     /// The guild, when not a DM.

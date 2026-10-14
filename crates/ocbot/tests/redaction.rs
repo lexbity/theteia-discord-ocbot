@@ -15,7 +15,7 @@ use std::io;
 use std::sync::{Arc, Mutex};
 
 use ocbot::adapters::store::StoreHandle;
-use ocbot::app::context::{AppContext, DiscordPort};
+use ocbot::app::context::{AppContext, ChatPort};
 use ocbot::app::degraded::HealthMonitor;
 use ocbot::app::guard::Guard;
 use ocbot::app::logging;
@@ -24,7 +24,7 @@ use ocbot::app::watcher::Watcher;
 use ocbot_core::Redactor;
 use ocbot_core::ports::{Clock, OpenCodePort};
 
-use common::{FakeClock, FakeDiscord, FakeGit, FakeOpenCode, seed_running};
+use common::{FakeChat, FakeClock, FakeGit, FakeOpenCode, seed_running};
 
 const OPERATOR: u64 = 42;
 const CHANNEL: u64 = 7;
@@ -38,7 +38,7 @@ fn redactor() -> Arc<Redactor> {
 fn redacting_ctx(
     store: StoreHandle,
     opencode: Arc<dyn OpenCodePort>,
-    discord: Arc<dyn DiscordPort>,
+    discord: Arc<dyn ChatPort>,
 ) -> Arc<AppContext> {
     let clock: Arc<dyn Clock> = Arc::new(FakeClock::at(1_000));
     Arc::new(AppContext {
@@ -49,12 +49,15 @@ fn redacting_ctx(
         clock,
         abort_timeout_secs: common::DEFAULT_ABORT_TIMEOUT_SECS,
         permission_ruleset: None,
-        discord,
+        chat: discord,
         metrics: Arc::new(Metrics::new()),
         redactor: redactor(),
         health: Arc::new(HealthMonitor::new()),
         guard: Guard {
-            allowed_user_id: OPERATOR,
+            allowed_actors: vec![ocbot_core::ActorId::from_parts(
+                ocbot_core::Surface::Discord,
+                &OPERATOR.to_string(),
+            )],
             ops_channel: Some(CHANNEL),
             inbox_channel: None,
         },
@@ -82,7 +85,7 @@ async fn a_secret_is_scrubbed_inline_but_recorded_verbatim() {
     let mut snapshot = FakeOpenCode::completed_snapshot();
     snapshot.text = format!("{SECRET}\n{}", "detail ".repeat(500));
     opencode.set_snapshot("ses_red", snapshot);
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = redacting_ctx(store.clone(), Arc::new(opencode), Arc::new(discord.clone()));
 
     Watcher::new(ctx.clone(), std::time::Duration::from_millis(10))
@@ -202,7 +205,7 @@ fn frame_payloads_never_reach_the_logs() {
             .with_writer(logging::scrub_writer(Buffer(buffer.clone()), redactor())),
     );
 
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let store = StoreHandle::open_in_memory().expect("store");
     let ctx = common::context(
         store,

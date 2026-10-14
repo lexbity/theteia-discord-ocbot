@@ -10,7 +10,6 @@ use crate::adapters::now_unix;
 use crate::adapters::store::ActionRow;
 use crate::app::context::AppContext;
 use crate::app::error::AppError;
-use crate::app::handlers::support;
 use crate::app::interaction::{InputStyle, ModalInputSpec, ModalSpec};
 
 /// The decision states a follow-up may start from.
@@ -39,14 +38,14 @@ pub async fn execute_followup(
     ctx: &Arc<AppContext>,
     action_id: i64,
     prompt: &str,
-    user_id: u64,
+    user: &str,
 ) -> Result<Option<String>, AppError> {
     let prompt = prompt.trim();
     if prompt.is_empty() {
         return Err(AppError::Other("a prompt is required".to_owned()));
     }
     let action = require_followup(ctx, action_id).await?;
-    let dir = support::directory_for(ctx, &action).await?;
+    let dir = crate::app::handlers::support::directory_for(ctx, &action).await?;
 
     // FR-29: the run's start must still be an ancestor of HEAD. A reset (or a
     // forced rewrite) invalidates the chain; the operator must re-stage.
@@ -95,7 +94,7 @@ pub async fn execute_followup(
     }
 
     ctx.store
-        .audit(user_id, "followup", Some(action_id), "running")
+        .audit(user, "followup", Some(action_id), "running")
         .await?;
     Ok(Some(
         "follow-up running; the next report lands when it finishes".to_owned(),

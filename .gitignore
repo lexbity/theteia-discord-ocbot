@@ -7,3 +7,5 @@ fuzz/Cargo.lock
 *.profraw
 /mutants.out*/
 /devdocs
+config/*.toml
+ocbot.db

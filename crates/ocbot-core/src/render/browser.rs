@@ -92,7 +92,7 @@ pub fn ls_message(
         content,
         attachment: None,
         components,
-        mentioned_users: vec![operator_id],
+        mention_allowlist: vec![operator_id],
     }
 }
 
@@ -154,7 +154,7 @@ pub fn plan_picker_message(
         content,
         attachment: None,
         components,
-        mentioned_users: vec![operator_id],
+        mention_allowlist: vec![operator_id],
     }
 }
 
@@ -220,7 +220,7 @@ pub fn history_page(
         content,
         attachment: None,
         components,
-        mentioned_users: vec![operator_id],
+        mention_allowlist: vec![operator_id],
     }
 }
 

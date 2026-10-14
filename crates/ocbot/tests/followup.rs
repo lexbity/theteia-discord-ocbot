@@ -16,7 +16,7 @@ mod common;
 use std::path::Path;
 use std::sync::Arc;
 
-use common::{FakeDiscord, FakeGit, FakeOpenCode, context, init_repo, write_file};
+use common::{FakeChat, FakeGit, FakeOpenCode, context, init_repo, write_file};
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::handlers::followup;
 use ocbot::app::watcher::Watcher;
@@ -35,7 +35,7 @@ fn ctx_for(
     store: &StoreHandle,
     repo: &Path,
     opencode: Arc<dyn OpenCodePort>,
-    discord: &FakeDiscord,
+    discord: &FakeChat,
 ) -> Arc<ocbot::app::context::AppContext> {
     context(
         store.clone(),
@@ -70,13 +70,18 @@ async fn followup_reuses_the_same_session_and_increments() {
     )
     .await;
     let opencode = FakeOpenCode::new();
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let handle = opencode.clone();
     let ctx = ctx_for(&store, &repo, Arc::new(opencode), &discord);
 
-    let outcome = followup::execute_followup(&ctx, seeded.action_id, "keep going", OPERATOR)
-        .await
-        .expect("follow up");
+    let outcome = followup::execute_followup(
+        &ctx,
+        seeded.action_id,
+        "keep going",
+        &format!("discord:{OPERATOR}"),
+    )
+    .await
+    .expect("follow up");
     assert!(outcome.unwrap_or_default().contains("follow-up"));
 
     let row = store
@@ -124,13 +129,18 @@ async fn reports_nudge_after_two_followups() {
     .await;
     common::write_file(&repo, "feature.txt", "f\n");
     let opencode = FakeOpenCode::new();
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, &repo, Arc::new(opencode.clone()), &discord);
 
     for _ in 0..2 {
-        followup::execute_followup(&ctx, seeded.action_id, "again", OPERATOR)
-            .await
-            .expect("follow up");
+        followup::execute_followup(
+            &ctx,
+            seeded.action_id,
+            "again",
+            &format!("discord:{OPERATOR}"),
+        )
+        .await
+        .expect("follow up");
         // The follow-up completes.
         opencode.set_activity("ses_fu2", Activity::Idle);
         opencode.set_snapshot("ses_fu2", FakeOpenCode::completed_snapshot());
@@ -192,12 +202,17 @@ async fn followup_refuses_after_a_reset_fr29() {
     assert_ne!(common::git_stdout(&repo, &["rev-parse", "HEAD"]), start);
 
     let opencode = FakeOpenCode::new();
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, &repo, Arc::new(opencode), &discord);
 
-    let error = followup::execute_followup(&ctx, seeded.action_id, "again", OPERATOR)
-        .await
-        .expect_err("FR-29 refusal");
+    let error = followup::execute_followup(
+        &ctx,
+        seeded.action_id,
+        "again",
+        &format!("discord:{OPERATOR}"),
+    )
+    .await
+    .expect_err("FR-29 refusal");
     assert!(error.to_string().contains("FR-29"), "error: {error}");
     assert_eq!(
         store

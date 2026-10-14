@@ -14,7 +14,7 @@ mod common;
 
 use std::sync::Arc;
 
-use common::{FakeDiscord, FakeGit, FakeOpenCode, context, permission_gate, seed_running};
+use common::{FakeChat, FakeGit, FakeOpenCode, context, permission_gate, seed_running};
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::gates_loop;
 use ocbot_core::ports::PortSession;
@@ -60,7 +60,7 @@ async fn child_gates_attribute_to_the_root_action() {
         "bash",
         &["curl https://x"],
     )]);
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = context(
         store.clone(),
         Arc::new(opencode),

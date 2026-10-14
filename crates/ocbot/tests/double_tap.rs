@@ -15,7 +15,7 @@ mod common;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use common::{FakeDiscord, FakeGit, FakeOpenCode, context, init_repo, write_file};
+use common::{FakeChat, FakeGit, FakeOpenCode, context, init_repo, write_file};
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::handlers::accept;
 use tempfile::TempDir;
@@ -44,7 +44,7 @@ async fn double_tap_accept_commits_exactly_once() {
     let repo_text = repo.to_string_lossy().into_owned();
 
     let store = StoreHandle::open_in_memory().expect("store");
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = Arc::new(context(
         store.clone(),
         Arc::new(FakeOpenCode::new()),
@@ -75,13 +75,27 @@ async fn double_tap_accept_commits_exactly_once() {
             for _ in 0..first_delay {
                 tokio::task::yield_now().await;
             }
-            accept::execute_accept(&ctx, seeded.action_id, "s", "", OPERATOR).await
+            accept::execute_accept(
+                &ctx,
+                seeded.action_id,
+                "s",
+                "",
+                &format!("discord:{OPERATOR}"),
+            )
+            .await
         };
         let second = async {
             for _ in 0..second_delay {
                 tokio::task::yield_now().await;
             }
-            accept::execute_accept(&ctx, seeded.action_id, "s", "", OPERATOR).await
+            accept::execute_accept(
+                &ctx,
+                seeded.action_id,
+                "s",
+                "",
+                &format!("discord:{OPERATOR}"),
+            )
+            .await
         };
         let (a, b) = tokio::join!(first, second);
         let wins = [a.is_ok(), b.is_ok()].iter().filter(|ok| **ok).count();

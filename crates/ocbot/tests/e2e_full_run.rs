@@ -16,13 +16,13 @@ use std::sync::Arc;
 
 use ocbot::adapters::fs::FsAdapter;
 use ocbot::adapters::store::StoreHandle;
-use ocbot::app::context::{AppContext, DiscordPort};
+use ocbot::app::context::{AppContext, ChatPort};
 use ocbot::app::handlers::{files, run};
 use ocbot::app::interaction::{InteractionSource, SourceKind, TextInput};
 use ocbot::app::watcher::Watcher;
 use ocbot_core::State;
 
-use common::{Call, FakeClock, FakeDiscord, FakeGit, FakeOpenCode};
+use common::{Call, FakeChat, FakeClock, FakeGit, FakeOpenCode};
 
 const OPERATOR: u64 = 42;
 const CHANNEL: u64 = 7;
@@ -32,7 +32,7 @@ fn button(custom_id: &str) -> InteractionSource {
         kind: SourceKind::Component {
             custom_id: custom_id.to_owned(),
         },
-        user_id: OPERATOR,
+        user_id: format!("discord:{OPERATOR}"),
         channel_id: CHANNEL,
         guild_id: Some(1),
         message_id: Some(10),
@@ -52,7 +52,7 @@ fn modal(custom_id: &str, values: &[(&str, &str)]) -> InteractionSource {
                 })
                 .collect(),
         },
-        user_id: OPERATOR,
+        user_id: format!("discord:{OPERATOR}"),
         channel_id: CHANNEL,
         guild_id: Some(1),
         message_id: None,
@@ -81,8 +81,8 @@ async fn upload_browse_pick_review_edit_send_report() {
     let clock = Arc::new(FakeClock::at(1_700_000_000));
     let fs =
         FsAdapter::new(vec![root.clone()], root.join("inbox"), false, clock.clone()).expect("fs");
-    let discord = FakeDiscord::new();
-    let discord_port: Arc<dyn DiscordPort> = Arc::new(discord.clone());
+    let discord = FakeChat::new();
+    let discord_port: Arc<dyn ChatPort> = Arc::new(discord.clone());
     let ctx: Arc<AppContext> = common::context_with_fs(
         store.clone(),
         Arc::new(opencode.clone()),
@@ -98,9 +98,14 @@ async fn upload_browse_pick_review_edit_send_report() {
 
     // 1. "Upload" a plan: the attachment path becomes the draft.
     let plan_markdown = "## Steps\n1. first step\n2. second step\n";
-    let plan_path = files::ingest(&ctx, OPERATOR, "plan.md", plan_markdown.as_bytes())
-        .await
-        .expect("ingest plan");
+    let plan_path = files::ingest(
+        &ctx,
+        &format!("discord:{OPERATOR}"),
+        "plan.md",
+        plan_markdown.as_bytes(),
+    )
+    .await
+    .expect("ingest plan");
 
     // 2. `/run` with the plan; the run records the plan path and a picker posts.
     run::execute_newrun(

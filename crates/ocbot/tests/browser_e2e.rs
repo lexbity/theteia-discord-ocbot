@@ -19,7 +19,7 @@ use ocbot::app::handlers::{ls, run};
 use ocbot::app::interaction::{InteractionSource, SourceKind};
 use ocbot_core::ports::OpenCodePort;
 
-use common::{FakeDiscord, FakeGit, FakeOpenCode, context};
+use common::{FakeChat, FakeGit, FakeOpenCode, context};
 
 const OPERATOR: u64 = 42;
 const CHANNEL: u64 = 7;
@@ -29,7 +29,7 @@ fn slash(name: &str) -> InteractionSource {
         kind: SourceKind::SlashCommand {
             name: name.to_owned(),
         },
-        user_id: OPERATOR,
+        user_id: format!("discord:{OPERATOR}"),
         channel_id: CHANNEL,
         guild_id: Some(1),
         message_id: None,
@@ -42,7 +42,7 @@ fn button(custom_id: &str) -> InteractionSource {
         kind: SourceKind::Component {
             custom_id: custom_id.to_owned(),
         },
-        user_id: OPERATOR,
+        user_id: format!("discord:{OPERATOR}"),
         channel_id: CHANNEL,
         guild_id: Some(1),
         message_id: Some(10),
@@ -70,7 +70,7 @@ async fn browse_pages_descends_and_selects_into_the_run_prefill() {
 
     let store = StoreHandle::open_in_memory().expect("store");
     let opencode: Arc<dyn OpenCodePort> = Arc::new(FakeOpenCode::new());
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = context(
         store.clone(),
         opencode,
@@ -80,7 +80,7 @@ async fn browse_pages_descends_and_selects_into_the_run_prefill() {
         Some(CHANNEL),
     );
     store
-        .set_ui_cwd(OPERATOR, &root.to_string_lossy())
+        .set_ui_cwd(&format!("discord:{OPERATOR}"), &root.to_string_lossy())
         .await
         .expect("cwd");
 
@@ -116,7 +116,11 @@ async fn browse_pages_descends_and_selects_into_the_run_prefill() {
         .expect("select")
         .expect("ephemeral");
     assert!(ephemeral.contains("note.md"), "{ephemeral}");
-    let draft = store.draft_path(OPERATOR).await.expect("draft").unwrap();
+    let draft = store
+        .draft_path(&format!("discord:{OPERATOR}"))
+        .await
+        .expect("draft")
+        .unwrap();
     assert!(draft.ends_with("note.md"));
 
     // Descend into `pkg`: the cwd follows the open.
@@ -125,7 +129,10 @@ async fn browse_pages_descends_and_selects_into_the_run_prefill() {
         .await
         .expect("open");
     assert_eq!(
-        store.ui_cwd(OPERATOR).await.expect("cwd"),
+        store
+            .ui_cwd(&format!("discord:{OPERATOR}"))
+            .await
+            .expect("cwd"),
         Some(root.join("pkg").to_string_lossy().into_owned())
     );
 

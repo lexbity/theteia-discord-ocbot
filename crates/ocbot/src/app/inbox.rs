@@ -144,14 +144,17 @@ async fn deliver_completion(
     // A delivered completion is a won detection (P-29): attributed here, after
     // the dedupe, so the counter is the honest event/fallback numerator.
     ctx.metrics.inc_detection(detected_by.label());
-    let post = ctx.discord.post(channel, &message).await;
+    let post = ctx
+        .chat
+        .post(&ocbot_core::Destination::discord(channel), &message)
+        .await;
     match post {
-        Ok(msg_id) => {
+        Ok(receipt) => {
             ctx.store
-                .finish_notified(&session.id, seq, &msg_id.to_string())
+                .finish_notified(&session.id, seq, &receipt.to_receipt_string())
                 .await?;
             ctx.store
-                .insert_msg_map(&msg_id.to_string(), &session.id)
+                .insert_msg_map("discord", &receipt.msg_id.0, &session.id, None)
                 .await?;
             tracing::info!(session = %session.id, seq, "inbox completion posted");
         }
@@ -191,7 +194,7 @@ fn inbox_message(
         ),
         attachment: None,
         components: Vec::new(),
-        mentioned_users: vec![ctx.guard.allowed_user_id],
+        mention_allowlist: ctx.guard.discord_operator().into_iter().collect(),
     }
 }
 

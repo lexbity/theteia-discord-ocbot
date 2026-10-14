@@ -9,7 +9,9 @@
 //! immediate ack (modal or deferral) which is sent before any handler work;
 //! the execute pass then runs in a spawned task.
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use async_trait::async_trait;
 use serenity::all::{
@@ -23,9 +25,9 @@ use serenity::builder::{
     CreateInteractionResponseMessage, CreateMessage, CreateModal, EditMessage,
 };
 
-use ocbot_core::{ButtonKind, OutgoingMessage};
+use ocbot_core::{ButtonKind, Destination, OutgoingMessage, PostReceipt, Surface};
 
-use crate::app::context::{AppContext, DiscordPort, SendError};
+use crate::app::context::{AppContext, BroadcastOutcome, ChatPort, SendError};
 use crate::app::handlers;
 use crate::app::interaction::{
     AckPlan, InputStyle, InteractionSource, ModalSpec, SourceKind, TextInput,
@@ -53,18 +55,72 @@ pub fn operator_allowed_mentions(operator: u64) -> CreateAllowedMentions {
         .users([UserId::new(operator)])
 }
 
-/// The only production [`DiscordPort`]: posts through serenity `Http`.
+/// The only production Discord [`ChatPort`]: posts through serenity `Http`.
+/// Ids are parsed at this boundary (SPEC-004 D-02): a `chat_ref`/`msg_id` that
+/// is not a numeric snowflake is a programming error and fails loud.
+///
+/// Discord edits/reactions need the channel, but the port contract's
+/// [`PostReceipt`] carries only the message id (surface-agnostic by design);
+/// the adapter therefore remembers the channel of every message it posted in
+/// a bounded map (quiet ops only — a miss degrades to a warn, never an error
+/// for the caller).
 #[derive(Clone)]
 pub struct DiscordAdapter {
     http: Arc<Http>,
     operator: u64,
+    /// The announce destination for `broadcast` (the ops channel; PH-1's
+    /// single-surface stand-in for the PH-6 fan-out).
+    announce: Option<u64>,
+    /// Bounded `msg_id → channel` memory for receipt-addressed quiet ops.
+    channels: Arc<Mutex<HashMap<u64, u64>>>,
 }
+
+/// The map bound (quiet-op memory, not correctness state).
+const CHANNEL_MEMORY_CAP: usize = 4_096;
 
 impl DiscordAdapter {
     /// Wrap a shared, structurally-locked http handle.
     pub fn new(http: Arc<Http>, operator: u64) -> Self {
-        Self { http, operator }
+        Self {
+            http,
+            operator,
+            announce: None,
+            channels: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
+
+    /// Set the announce destination used by `broadcast`.
+    #[must_use]
+    pub fn with_announce(mut self, channel: Option<u64>) -> Self {
+        self.announce = channel;
+        self
+    }
+
+    fn remember_channel(&self, message: u64, channel: u64) {
+        let mut channels = self
+            .channels
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if channels.len() >= CHANNEL_MEMORY_CAP {
+            channels.clear();
+        }
+        channels.insert(message, channel);
+    }
+
+    fn channel_of(&self, message: u64) -> Option<u64> {
+        self.channels
+            .lock()
+            .ok()
+            .and_then(|channels| channels.get(&message).copied())
+    }
+}
+
+/// Parse a snowflake from an opaque core string, failing loud (D-02).
+fn snowflake(text: &str, what: &str) -> Result<u64, SendError> {
+    text.parse().map_err(|_| SendError {
+        surface: Surface::Discord,
+        message: format!("{what} {text:?} is not a numeric snowflake"),
+    })
 }
 
 /// Core spec → `CreateMessage`. Always sets `allowed_mentions`. Public so the
@@ -111,21 +167,77 @@ pub fn message_builder(spec: &OutgoingMessage, operator: u64) -> CreateMessage {
 }
 
 #[async_trait]
-impl DiscordPort for DiscordAdapter {
-    async fn post(&self, channel: u64, spec: &OutgoingMessage) -> Result<u64, SendError> {
+impl ChatPort for DiscordAdapter {
+    async fn post(
+        &self,
+        dest: &Destination,
+        spec: &OutgoingMessage,
+    ) -> Result<PostReceipt, SendError> {
+        let channel = snowflake(&dest.chat_ref.0, "chat_ref")?;
         let message = ChannelId::new(channel)
             .send_message(&*self.http, message_builder(spec, self.operator))
             .await
-            .map_err(|error| SendError(error.to_string()))?;
-        Ok(message.id.get())
+            .map_err(|error| SendError {
+                surface: Surface::Discord,
+                message: error.to_string(),
+            })?;
+        self.remember_channel(message.id.get(), channel);
+        Ok(PostReceipt {
+            surface: Surface::Discord,
+            msg_id: ocbot_core::MsgId(message.id.get().to_string()),
+        })
     }
 
-    async fn edit(
+    async fn edit(&self, receipt: &PostReceipt, replacement: &OutgoingMessage) {
+        let result = self.edit_inner(receipt, replacement).await;
+        if let Err(error) = result {
+            tracing::warn!(error = %error, "quiet edit failed");
+        }
+    }
+
+    async fn react(&self, receipt: &PostReceipt, emoji: char) {
+        let result = self.react_inner(receipt, emoji).await;
+        if let Err(error) = result {
+            tracing::warn!(error = %error, "status reaction failed");
+        }
+    }
+
+    async fn broadcast(&self, message: &OutgoingMessage) -> BroadcastOutcome {
+        let mut outcome = BroadcastOutcome::default();
+        match self.announce {
+            Some(channel) => match self.post(&Destination::discord(channel), message).await {
+                Ok(receipt) => outcome.delivered.push((Surface::Discord, receipt)),
+                Err(error) => outcome.failed.push((Surface::Discord, error)),
+            },
+            None => {
+                outcome.failed.push((
+                    Surface::Discord,
+                    SendError {
+                        surface: Surface::Discord,
+                        message: "no announce destination configured".to_owned(),
+                    },
+                ));
+            }
+        }
+        outcome
+    }
+
+    fn surfaces(&self) -> Vec<Surface> {
+        vec![Surface::Discord]
+    }
+}
+
+impl DiscordAdapter {
+    async fn edit_inner(
         &self,
-        channel: u64,
-        message: u64,
+        receipt: &PostReceipt,
         replacement: &OutgoingMessage,
     ) -> Result<(), SendError> {
+        let message = snowflake(&receipt.msg_id.0, "msg_id")?;
+        let channel = self.channel_of(message).ok_or_else(|| SendError {
+            surface: Surface::Discord,
+            message: format!("no channel remembered for message {message}"),
+        })?;
         let builder = EditMessage::new().content(replacement.content.clone());
         self.http
             .edit_message(
@@ -136,15 +248,26 @@ impl DiscordPort for DiscordAdapter {
             )
             .await
             .map(|_| ())
-            .map_err(|error| SendError(error.to_string()))
+            .map_err(|error| SendError {
+                surface: Surface::Discord,
+                message: error.to_string(),
+            })
     }
 
-    async fn react(&self, channel: u64, message: u64, emoji: char) -> Result<(), SendError> {
+    async fn react_inner(&self, receipt: &PostReceipt, emoji: char) -> Result<(), SendError> {
+        let message = snowflake(&receipt.msg_id.0, "msg_id")?;
+        let channel = self.channel_of(message).ok_or_else(|| SendError {
+            surface: Surface::Discord,
+            message: format!("no channel remembered for message {message}"),
+        })?;
         let reaction: ReactionType = emoji.into();
         self.http
             .create_reaction(ChannelId::new(channel), MessageId::new(message), &reaction)
             .await
-            .map_err(|error| SendError(error.to_string()))
+            .map_err(|error| SendError {
+                surface: Surface::Discord,
+                message: error.to_string(),
+            })
     }
 }
 
@@ -360,7 +483,8 @@ fn located_source(
 ) -> InteractionSource {
     InteractionSource {
         kind,
-        user_id,
+        // Namespaced at the adapter boundary (SPEC-004 D-03).
+        user_id: format!("discord:{user_id}"),
         channel_id,
         guild_id,
         message_id,
@@ -416,7 +540,10 @@ impl EventHandler for BotEvents {
         // on any in-scope operator message are persisted (FR-36) and their
         // paths become the draft. Every other message is ignored — the operator
         // surface is interactions.
-        if message.author.id.get() != self.ctx.guard.allowed_user_id || message.author.bot {
+        let Some(operator) = self.ctx.guard.discord_operator() else {
+            return;
+        };
+        if message.author.id.get() != operator || message.author.bot {
             return;
         }
         let channel = message.channel_id.get();
@@ -435,7 +562,7 @@ impl EventHandler for BotEvents {
                 Ok(bytes) => {
                     if let Err(error) = handlers::files::ingest(
                         &self.ctx,
-                        message.author.id.get(),
+                        &format!("discord:{}", message.author.id.get()),
                         &attachment.filename,
                         &bytes,
                     )
@@ -455,7 +582,7 @@ impl EventHandler for BotEvents {
         let Ok(Some((session, _))) = self
             .ctx
             .store
-            .lookup_msg_map(&reference.id.get().to_string())
+            .lookup_msg_map("discord", &reference.id.get().to_string())
             .await
         else {
             return;
@@ -464,9 +591,14 @@ impl EventHandler for BotEvents {
         if text.trim().is_empty() {
             return;
         }
-        if let Err(error) =
-            handlers::adopt::adopt(&self.ctx, &session, &text, channel, message.author.id.get())
-                .await
+        if let Err(error) = handlers::adopt::adopt(
+            &self.ctx,
+            &session,
+            &text,
+            channel,
+            &format!("discord:{}", message.author.id.get()),
+        )
+        .await
         {
             tracing::warn!(error = %error, "adoption failed");
         }
@@ -480,7 +612,7 @@ pub async fn start_gateway(
     intents: GatewayIntents,
     ctx: Arc<AppContext>,
 ) -> Result<Arc<ShardManager>, Box<serenity::Error>> {
-    let http = shared_http(token, ctx.guard.allowed_user_id);
+    let http = shared_http(token, ctx.guard.discord_operator().unwrap_or(0));
     let mut client = Client::builder(token, intents)
         .event_handler(BotEvents::new(ctx, http))
         .await?;

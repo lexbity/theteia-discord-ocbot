@@ -27,7 +27,7 @@ use wiremock::Request as WireRequest;
 use wiremock::matchers::any;
 use wiremock::{Mock, MockServer, Respond, ResponseTemplate};
 
-use common::{FakeDiscord, FakeGit, context, seed_running};
+use common::{FakeChat, FakeGit, context, seed_running};
 
 const OPERATOR: u64 = 42;
 const CHANNEL: u64 = 7;
@@ -104,7 +104,7 @@ async fn permission_gate_round_trips_over_the_real_client() {
     let opencode: Arc<dyn OpenCodePort> = Arc::new(OpenCodeAdapter::new(Arc::new(
         opencode_v2_client::Client::new(&server.uri(), "secret").expect("client"),
     )));
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = context(
         store.clone(),
         opencode,
@@ -121,7 +121,7 @@ async fn permission_gate_round_trips_over_the_real_client() {
     assert!(posted.message.content.contains("printf 'hello'"));
 
     let rowid = store.pending_gates().await.expect("rows")[0].id;
-    gate::execute_permission_reply(&ctx, rowid, "always", OPERATOR)
+    gate::execute_permission_reply(&ctx, rowid, "always", &format!("discord:{OPERATOR}"))
         .await
         .expect("reply");
 

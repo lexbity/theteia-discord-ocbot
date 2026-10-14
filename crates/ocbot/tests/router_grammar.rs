@@ -14,7 +14,7 @@ mod common;
 
 use std::sync::Arc;
 
-use common::{FakeDiscord, FakeGit, FakeOpenCode, context, seed_reported};
+use common::{FakeChat, FakeGit, FakeOpenCode, context, seed_reported};
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::context::AppContext;
 use ocbot::app::interaction::{AckPlan, InteractionSource, SourceKind, TextInput};
@@ -26,7 +26,7 @@ const CHANNEL: u64 = 7;
 fn source(kind: SourceKind) -> InteractionSource {
     InteractionSource {
         kind,
-        user_id: OPERATOR,
+        user_id: format!("discord:{OPERATOR}"),
         channel_id: CHANNEL,
         guild_id: Some(1),
         message_id: Some(1),
@@ -61,7 +61,7 @@ fn base_ctx(store: &StoreHandle) -> Arc<AppContext> {
         store.clone(),
         Arc::new(FakeOpenCode::new()),
         Arc::new(FakeGit::inert()),
-        Arc::new(FakeDiscord::new()),
+        Arc::new(FakeChat::new()),
         OPERATOR,
         Some(CHANNEL),
     )
@@ -74,7 +74,7 @@ async fn staged_action(store: &StoreHandle, dir: &str) -> i64 {
         .expect("project");
     let run = store.insert_run(dir, "free").await.expect("run");
     store
-        .insert_action(run, Some(7), "task", "prompt", 1)
+        .insert_action(run, Some("7"), "task", "prompt", 1)
         .await
         .expect("action")
 }
@@ -85,7 +85,7 @@ async fn guard_runs_before_any_routing() {
     let ctx = base_ctx(&store);
 
     let mut wrong_user = slash("run");
-    wrong_user.user_id = 1;
+    wrong_user.user_id = "discord:1".to_owned();
     assert!(matches!(
         router::guarded_plan(&ctx, &wrong_user).await,
         PlanOutcome::Deny
@@ -285,7 +285,7 @@ async fn execute_ls_up_re_renders_the_parent_directory() {
     std::fs::create_dir_all(&child).expect("child");
     let store = StoreHandle::open_in_memory().expect("store");
     store
-        .set_ui_cwd(OPERATOR, &child.to_string_lossy())
+        .set_ui_cwd(&format!("discord:{OPERATOR}"), &child.to_string_lossy())
         .await
         .expect("cwd");
     let ctx = base_ctx(&store);
@@ -294,7 +294,10 @@ async fn execute_ls_up_re_renders_the_parent_directory() {
         .await
         .expect("ls up");
     assert_eq!(
-        store.ui_cwd(OPERATOR).await.expect("cwd"),
+        store
+            .ui_cwd(&format!("discord:{OPERATOR}"))
+            .await
+            .expect("cwd"),
         Some(tmp.path().to_string_lossy().into_owned())
     );
 }

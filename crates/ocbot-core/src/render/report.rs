@@ -249,7 +249,7 @@ pub fn report(
         content: message_text,
         attachment,
         components: decision_buttons(outcome, context),
-        mentioned_users: vec![context.operator_id],
+        mention_allowlist: vec![context.operator_id],
     }
 }
 
@@ -368,6 +368,6 @@ pub fn staged_preview(
                 ButtonKind::Secondary,
             ),
         ],
-        mentioned_users: vec![operator_id],
+        mention_allowlist: vec![operator_id],
     }
 }

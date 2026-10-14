@@ -11,7 +11,6 @@ use ocbot_core::{OutgoingMessage, history_page};
 
 use crate::app::context::AppContext;
 use crate::app::error::AppError;
-use crate::app::handlers::support;
 use crate::app::interaction::InteractionSource;
 
 /// Execute `/history` (or `/reset`): post page 0 of the directory's history.
@@ -20,10 +19,15 @@ pub async fn execute(
     source: &InteractionSource,
     show_reset: bool,
 ) -> Result<(), AppError> {
-    let dir = support::history_dir(ctx, source.user_id).await?;
-    ctx.store.set_ui_cwd(source.user_id, &dir).await?;
-    let message = build_page(ctx, &dir, 0, show_reset, source.user_id).await?;
-    ctx.discord.post(source.channel_id, &message).await?;
+    let dir = crate::app::handlers::support::history_dir(ctx, &source.user_id).await?;
+    ctx.store.set_ui_cwd(&source.user_id, &dir).await?;
+    let message = build_page(ctx, &dir, 0, show_reset, &source.user_id).await?;
+    ctx.chat
+        .post(
+            &ocbot_core::Destination::discord(source.channel_id),
+            &message,
+        )
+        .await?;
     Ok(())
 }
 
@@ -34,16 +38,24 @@ pub async fn page(
     source: &InteractionSource,
     page: usize,
 ) -> Result<(), AppError> {
-    let dir = support::history_dir(ctx, source.user_id).await?;
-    let message = build_page(ctx, &dir, page, true, source.user_id).await?;
+    let dir = crate::app::handlers::support::history_dir(ctx, &source.user_id).await?;
+    let message = build_page(ctx, &dir, page, true, &source.user_id).await?;
     match source.message_id {
         Some(message_id) => {
-            ctx.discord
-                .edit(source.channel_id, message_id, &message)
-                .await?;
+            ctx.chat
+                .edit(
+                    &crate::app::handlers::support::discord_receipt(message_id),
+                    &message,
+                )
+                .await;
         }
         None => {
-            ctx.discord.post(source.channel_id, &message).await?;
+            ctx.chat
+                .post(
+                    &ocbot_core::Destination::discord(source.channel_id),
+                    &message,
+                )
+                .await?;
         }
     }
     Ok(())
@@ -56,13 +68,13 @@ async fn build_page(
     dir: &str,
     page: usize,
     show_reset: bool,
-    operator_id: u64,
+    actor: &str,
 ) -> Result<OutgoingMessage, AppError> {
     let path = Path::new(dir);
-    if !support::is_git_dir(ctx, path).await? {
-        return Ok(support::simple(
+    if !crate::app::handlers::support::is_git_dir(ctx, path).await? {
+        return Ok(crate::app::handlers::support::simple(
             format!("`{dir}` is not a git repository"),
-            operator_id,
+            actor,
         ));
     }
     let base = ctx
@@ -100,5 +112,11 @@ async fn build_page(
     let rows = merge(&log, &history_actions, &head, |sha| {
         *reachable.get(sha).unwrap_or(&false)
     });
-    Ok(history_page(dir, &rows, page, show_reset, operator_id))
+    Ok(history_page(
+        dir,
+        &rows,
+        page,
+        show_reset,
+        crate::app::handlers::support::operator_u64(actor),
+    ))
 }

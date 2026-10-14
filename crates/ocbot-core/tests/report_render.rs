@@ -120,7 +120,7 @@ fn report_stays_under_cap_and_carries_footer() {
     assert!(message.content.contains("31.4k tok"));
     assert!(message.content.contains("$0.41"));
     assert!(message.content.contains("12 insertions(+)"));
-    assert_eq!(message.mentioned_users, vec![42]);
+    assert_eq!(message.mention_allowlist, vec![42]);
     let attached = message.attachment.expect("truncated report is attached");
     assert_eq!(attached.filename, "report.md");
     assert!(attached.bytes.len() > message.content.len());
@@ -148,7 +148,7 @@ fn preview_carries_send_edit_and_template_buttons() {
     assert_eq!(preview.components[1].custom_id, "v1:edit:123");
     assert_eq!(preview.components[2].custom_id, "v1:tpl:123");
     assert_eq!(preview.components[2].label, "Use resume template");
-    assert_eq!(preview.mentioned_users, vec![9]);
+    assert_eq!(preview.mention_allowlist, vec![9]);
     let resume = staged_preview("poke", "do the thing", 123, 9, "resume");
     assert_eq!(resume.components[2].label, "Use fresh template");
 }

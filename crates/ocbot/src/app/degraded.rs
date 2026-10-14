@@ -62,9 +62,13 @@ pub async fn announce(ctx: &Arc<AppContext>, up: bool, down_message: String, up_
         content,
         attachment: None,
         components: Vec::new(),
-        mentioned_users: vec![ctx.guard.allowed_user_id],
+        mention_allowlist: ctx.guard.discord_operator().into_iter().collect(),
     };
-    if let Err(error) = ctx.discord.post(channel, &message).await {
+    if let Err(error) = ctx
+        .chat
+        .post(&ocbot_core::Destination::discord(channel), &message)
+        .await
+    {
         tracing::warn!(error = %error, up, "health transition post failed");
     }
 }

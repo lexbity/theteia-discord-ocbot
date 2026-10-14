@@ -20,6 +20,7 @@ pub mod plan;
 pub mod ports;
 pub mod render;
 pub mod state;
+pub mod surface;
 pub mod templates;
 
 pub use error::{FsError, GitError, OcError};
@@ -47,3 +48,4 @@ pub use render::{
     staged_preview, truncate_chars,
 };
 pub use state::{ALL_STATES, CasIntent, Column, Event, State, WriteValue, transition};
+pub use surface::{ActorId, ChatRef, Destination, MsgId, PostReceipt, Surface};

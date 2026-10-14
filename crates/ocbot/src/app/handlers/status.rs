@@ -82,8 +82,13 @@ pub async fn execute(ctx: &Arc<AppContext>, source: &InteractionSource) -> Resul
         content,
         attachment: None,
         components: Vec::new(),
-        mentioned_users: vec![source.user_id],
+        mention_allowlist: crate::app::handlers::support::mention_allowlist_for(&source.user_id),
     };
-    ctx.discord.post(source.channel_id, &message).await?;
+    ctx.chat
+        .post(
+            &ocbot_core::Destination::discord(source.channel_id),
+            &message,
+        )
+        .await?;
     Ok(())
 }

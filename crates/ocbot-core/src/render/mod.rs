@@ -42,10 +42,10 @@ pub struct OutgoingMessage {
     pub attachment: Option<AttachmentSpec>,
     /// Interactive components (buttons).
     pub components: Vec<ComponentSpec>,
-    /// Discord user ids that may be mentioned; the adapter sets
+    /// Discord-rendered mention allowlist (FR-3): the adapter sets
     /// `allowed_mentions.users` from exactly this list and never the
-    /// `everyone`/`here` bits.
-    pub mentioned_users: Vec<u64>,
+    /// `everyone`/`here` bits. Other surfaces ignore it.
+    pub mention_allowlist: Vec<u64>,
 }
 
 /// A file attachment.

@@ -16,7 +16,7 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{FakeDiscord, FakeEventSource, FakeGit, FakeOpenCode, session_frame};
+use common::{FakeChat, FakeEventSource, FakeGit, FakeOpenCode, session_frame};
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::supervisor::{Supervisor, SupervisorConfig};
 
@@ -34,7 +34,7 @@ fn test_config() -> SupervisorConfig {
 
 /// [`ctx_with`] with a retained fake opencode port (reconcile assertions).
 fn ctx_with_opencode(
-    discord: &FakeDiscord,
+    discord: &FakeChat,
     opencode: FakeOpenCode,
 ) -> Arc<ocbot::app::context::AppContext> {
     let store = StoreHandle::open_in_memory().expect("store");
@@ -107,7 +107,7 @@ fn spawn_supervisor(
 
 #[tokio::test(start_paused = true)]
 async fn silent_source_is_declared_dead_and_reconcile_coalesces() {
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let opencode = FakeOpenCode::new();
     let ctx = ctx_with_opencode(&discord, opencode.clone());
     let source = Arc::new(FakeEventSource::new());
@@ -146,7 +146,7 @@ async fn silent_source_is_declared_dead_and_reconcile_coalesces() {
 
 #[tokio::test(start_paused = true)]
 async fn down_past_threshold_posts_once_and_recovery_once() {
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let opencode = FakeOpenCode::new();
     let ctx = ctx_with_opencode(&discord, opencode.clone());
     let source = Arc::new(FakeEventSource::new());
@@ -196,7 +196,7 @@ async fn down_past_threshold_posts_once_and_recovery_once() {
 
 #[tokio::test(start_paused = true)]
 async fn garbage_burst_triggers_a_drift_reconnect() {
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let opencode = FakeOpenCode::new();
     let ctx = ctx_with_opencode(&discord, opencode.clone());
     let source = Arc::new(FakeEventSource::new());
@@ -243,7 +243,7 @@ async fn garbage_burst_triggers_a_drift_reconnect() {
 
 #[tokio::test(start_paused = true)]
 async fn frames_keep_the_connection_alive() {
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let opencode = FakeOpenCode::new();
     let ctx = ctx_with_opencode(&discord, opencode.clone());
     let source = Arc::new(FakeEventSource::new());
@@ -361,7 +361,7 @@ fn backoff_grows_exponentially_and_caps_at_max_with_jitter_band() {
 /// `[events].enabled = false` ⇒ no task, zero connection attempts (FR-43).
 #[tokio::test(start_paused = true)]
 async fn a_disabled_event_source_never_connects() {
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_with_opencode(&discord, FakeOpenCode::new());
     let source = Arc::new(FakeEventSource::new());
     let events = ocbot::config::EventsConfig {

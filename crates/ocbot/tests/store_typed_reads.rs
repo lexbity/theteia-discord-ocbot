@@ -127,7 +127,7 @@ async fn store_typed_reads() {
 
     // A staged action is visible through the staged read.
     let staged = store
-        .insert_action(running.run_id, Some(7), "staged", "p", 1)
+        .insert_action(running.run_id, Some("7"), "staged", "p", 1)
         .await
         .expect("insert staged");
     assert!(
@@ -238,17 +238,26 @@ async fn store_typed_reads() {
     );
 
     // --- ui state / dirs / counts ---
-    store.set_ui_cwd(OPERATOR, "/tmp/cwd").await.expect("cwd");
+    store
+        .set_ui_cwd(&format!("discord:{OPERATOR}"), "/tmp/cwd")
+        .await
+        .expect("cwd");
     assert_eq!(
-        store.ui_cwd(OPERATOR).await.expect("cwd"),
+        store
+            .ui_cwd(&format!("discord:{OPERATOR}"))
+            .await
+            .expect("cwd"),
         Some("/tmp/cwd".to_owned())
     );
     store
-        .set_draft_path(OPERATOR, "/tmp/draft")
+        .set_draft_path(&format!("discord:{OPERATOR}"), "/tmp/draft")
         .await
         .expect("draft");
     assert_eq!(
-        store.draft_path(OPERATOR).await.expect("draft"),
+        store
+            .draft_path(&format!("discord:{OPERATOR}"))
+            .await
+            .expect("draft"),
         Some("/tmp/draft".to_owned())
     );
     assert!(
@@ -279,11 +288,14 @@ async fn store_typed_reads() {
     );
     assert!(store.claim_notified("ses_run", "7").await.expect("claim"));
     store
-        .insert_msg_map("msg_1", "ses_run")
+        .insert_msg_map("discord", "msg_1", "ses_run", None)
         .await
         .expect("msg map");
     assert_eq!(
-        store.lookup_msg_map("msg_1").await.expect("lookup"),
+        store
+            .lookup_msg_map("discord", "msg_1")
+            .await
+            .expect("lookup"),
         Some(("ses_run".to_owned(), None))
     );
 

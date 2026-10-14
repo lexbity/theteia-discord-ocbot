@@ -55,7 +55,7 @@ pub fn gate_message(
                         ButtonKind::Danger,
                     ),
                 ],
-                mentioned_users: vec![operator_id],
+                mention_allowlist: vec![operator_id],
             }
         }
         GateKind::Form { title, fields } => {
@@ -94,7 +94,7 @@ pub fn gate_message(
                     content,
                     attachment: None,
                     components,
-                    mentioned_users: vec![operator_id],
+                    mention_allowlist: vec![operator_id],
                 }
             } else {
                 let text = serde_json::to_string_pretty(&gate.payload)
@@ -106,7 +106,7 @@ pub fn gate_message(
                     ),
                     attachment: None,
                     components: Vec::new(),
-                    mentioned_users: vec![operator_id],
+                    mention_allowlist: vec![operator_id],
                 }
             }
         }
@@ -180,7 +180,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["v1:gate:7:once", "v1:gate:7:always", "v1:gate:7:reject"]
         );
-        assert_eq!(message.mentioned_users, vec![42]);
+        assert_eq!(message.mention_allowlist, vec![42]);
     }
 
     #[test]

@@ -11,12 +11,6 @@ db_path = "ocbot.db"
 # Directory containing fresh.md / resume.md (P13, load-time validated).
 templates_dir = "templates"
 
-# The ops channel. DMs with the operator are always allowed (FR-2).
-ops_channel = 123456789012345678
-
-# The operator Discord user id. Env ALLOWED_USER_ID overrides it.
-allowed_user_id = 123456789012345678
-
 # Watcher poll interval (S-2 locked default).
 poll_interval_ms = 2000
 
@@ -30,9 +24,8 @@ git_timeout_secs = 10
 # gate_poll_interval_ms = 2000
 # perm_reping_minutes = 10
 
-# Inbox (P14): where external completions post (falls back to ops_channel),
-# and the root-session poll interval (S-7 default 5 s).
-# inbox_channel = 123456789012345678
+# Inbox (P14): where external completions post (falls back to [discord]
+# ops_channel), and the root-session poll interval (S-7 default 5 s).
 # inbox_poll_interval_ms = 5000
 
 # `/abort` waits this long for the server to confirm idle before giving up (FR-10).
@@ -75,3 +68,29 @@ git_timeout_secs = 10
 #   "(?i)api[_-]?key\\s*[:=]\\s*\\S+",
 #   "(?i)bearer\\s+[A-Za-z0-9._\\-]{8,}",
 # ]
+
+# The chat surfaces to run (SPEC-004 D-09): one name or a list; the default
+# is ["discord"]. Selecting "signal" is refused until the Signal surface
+# ships — carrying a [signal] section while running Discord-only is fine.
+# channel = ["discord"]
+
+[discord]
+# The ops channel. DMs with the operator are always allowed (FR-2).
+ops_channel = 123456789012345678
+# The operator Discord user id. Env ALLOWED_USER_ID overrides it.
+allowed_user_id = 123456789012345678
+# How much of a report reaches Discord: "full" | "excerpt" | "off" (D-12).
+# report_excerpt = "excerpt"
+# Whether report.md attachments leave the host at all (D-12: default false).
+# report_attachments = false
+
+[signal]
+# The signal-cli JSON-RPC daemon's unix socket and the operator's E.164
+# number (the single allowlisted sender). Env SIGNAL_OPERATOR overrides.
+# socket = "/run/signal-cli/socket"
+# operator_number = "+15551234567"
+# E2E to the operator's phone: full reports and attachments by default (D-12).
+# report_excerpt = "full"
+# report_attachments = true
+# Inbound command token bucket (D-11.4).
+# rate_limit = { capacity = 10, refill_per_sec = 1.0 }

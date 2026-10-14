@@ -11,7 +11,6 @@ use ocbot_core::State;
 use crate::app::context::AppContext;
 use crate::app::error::AppError;
 use crate::app::handlers::run;
-use crate::app::handlers::support;
 
 /// Adopt `session_id` with `prompt` as the next instruction.
 pub async fn adopt(
@@ -19,7 +18,7 @@ pub async fn adopt(
     session_id: &str,
     prompt: &str,
     channel: u64,
-    user_id: u64,
+    user_id: &str,
 ) -> Result<(), AppError> {
     let prompt = prompt.trim();
     if prompt.is_empty() {
@@ -57,10 +56,9 @@ pub async fn adopt(
 
     let run_id = ctx.store.insert_run(&dir, "adopted").await?;
     let label: String = prompt.chars().take(40).collect();
-    let channel_id = i64::try_from(channel).unwrap_or(i64::MAX);
     let action_id = ctx
         .store
-        .insert_action(run_id, Some(channel_id), &label, prompt, 1)
+        .insert_action(run_id, Some(&channel.to_string()), &label, prompt, 1)
         .await?;
     let action = ctx
         .store
@@ -85,7 +83,7 @@ pub async fn adopt(
         .audit(user_id, "adopt", Some(action_id), state.as_str())
         .await?;
 
-    let message = support::simple(
+    let message = crate::app::handlers::support::simple(
         format!(
             "adopted `{}` on session `{session_id}` — {}",
             label,
@@ -93,6 +91,8 @@ pub async fn adopt(
         ),
         user_id,
     );
-    ctx.discord.post(channel, &message).await?;
+    ctx.chat
+        .post(&ocbot_core::Destination::discord(channel), &message)
+        .await?;
     Ok(())
 }

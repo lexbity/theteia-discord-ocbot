@@ -29,7 +29,7 @@ use wiremock::Request as WireRequest;
 use wiremock::matchers::any;
 use wiremock::{Mock, MockServer, Respond, ResponseTemplate};
 
-use common::{FakeDiscord, FakeGit, context};
+use common::{FakeChat, FakeGit, context};
 
 const OPERATOR: u64 = 42;
 const CHANNEL: u64 = 7;
@@ -125,7 +125,7 @@ fn modal_source(custom_id: &str, values: Vec<(&str, &str)>) -> InteractionSource
                 })
                 .collect(),
         },
-        user_id: OPERATOR,
+        user_id: format!("discord:{OPERATOR}"),
         channel_id: CHANNEL,
         guild_id: Some(1),
         message_id: None,
@@ -138,7 +138,7 @@ fn button_source(custom_id: &str) -> InteractionSource {
         kind: SourceKind::Component {
             custom_id: custom_id.to_owned(),
         },
-        user_id: OPERATOR,
+        user_id: format!("discord:{OPERATOR}"),
         channel_id: CHANNEL,
         guild_id: Some(1),
         message_id: Some(10),
@@ -170,7 +170,7 @@ async fn run_to_report_end_to_end() {
     let opencode: Arc<dyn OpenCodePort> = Arc::new(OpenCodeAdapter::new(Arc::new(
         opencode_v2_client::Client::new(&server.uri(), "secret").expect("client"),
     )));
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = context(
         store.clone(),
         opencode,

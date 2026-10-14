@@ -20,7 +20,7 @@ pub async fn execute_permission_reply(
     ctx: &Arc<AppContext>,
     rowid: i64,
     decision: &str,
-    operatore_id: u64,
+    operator: &str,
 ) -> Result<Option<String>, AppError> {
     let decision = match decision {
         "once" => ocbot_core::GateDecision::Once,
@@ -61,9 +61,9 @@ pub async fn execute_permission_reply(
         &row,
         &format!("✅ answered: **{}**", decision.as_str()),
     )
-    .await?;
+    .await;
     ctx.store
-        .audit(operatore_id, "gate-reply", row.action_id, decision.as_str())
+        .audit(operator, "gate-reply", row.action_id, decision.as_str())
         .await?;
     Ok(Some(format!("answered {}.", decision.as_str())))
 }
@@ -121,7 +121,7 @@ pub async fn execute_form_submit(
         let value = coerce_field_value(field, raw)?;
         answer.insert(field.key.clone(), value);
     }
-    commit_form_answer(ctx, row, serde_json::Value::Object(answer), source.user_id).await
+    commit_form_answer(ctx, row, serde_json::Value::Object(answer), &source.user_id).await
 }
 
 /// Execute `v1:formpick:<rowid>:<value>`: the one-tap answer of a
@@ -130,7 +130,7 @@ pub async fn execute_form_pick(
     ctx: &Arc<AppContext>,
     rowid: i64,
     raw_value: &str,
-    user_id: u64,
+    user_id: &str,
 ) -> Result<Option<String>, AppError> {
     let row = load_pending(ctx, rowid).await?;
     let gate = gate_from_row(&row)?;
@@ -155,7 +155,7 @@ async fn commit_form_answer(
     ctx: &Arc<AppContext>,
     row: GateRow,
     answer: serde_json::Value,
-    user_id: u64,
+    user_id: &str,
 ) -> Result<Option<String>, AppError> {
     let answer_json = answer.to_string();
     if !ctx
@@ -172,7 +172,7 @@ async fn commit_form_answer(
         .ok_or_else(|| AppError::NotFound(format!("gate {}", row.id)))?;
     post_with_retry(ctx, &row).await?;
     set_action_clear(ctx, &row).await?;
-    edit_gate_message(ctx, &row, "✅ answered in Discord").await?;
+    edit_gate_message(ctx, &row, "✅ answered in Discord").await;
     ctx.store
         .audit(user_id, "form-reply", row.action_id, "answered")
         .await?;
@@ -316,26 +316,20 @@ async fn set_action_clear(ctx: &Arc<AppContext>, row: &GateRow) -> Result<(), Ap
 
 /// Edit the gate message in place to show the outcome (P10: edits don't
 /// notify, which is what we want for a settled gate).
-async fn edit_gate_message(
-    ctx: &Arc<AppContext>,
-    row: &GateRow,
-    summary: &str,
-) -> Result<(), AppError> {
-    let (Some(msg_id), Some(channel)) = (
-        row.msg_id.as_deref(),
-        row.channel_id
-            .and_then(|channel| u64::try_from(channel).ok()),
-    ) else {
-        return Ok(());
+async fn edit_gate_message(ctx: &Arc<AppContext>, row: &GateRow, summary: &str) {
+    let Some(msg_id) = row.msg_id.as_deref() else {
+        return;
     };
     let message = OutgoingMessage {
         content: format!("{summary} — gate #{}", row.id),
         attachment: None,
         components: Vec::new(),
-        mentioned_users: vec![ctx.guard.allowed_user_id],
+        mention_allowlist: ctx.guard.discord_operator().into_iter().collect(),
     };
-    ctx.discord
-        .edit(channel, msg_id.parse().unwrap_or_default(), &message)
-        .await
-        .map_err(AppError::Discord)
+    ctx.chat
+        .edit(
+            &crate::app::handlers::support::discord_receipt_str(msg_id),
+            &message,
+        )
+        .await;
 }

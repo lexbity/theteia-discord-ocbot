@@ -23,7 +23,7 @@ async fn cas_transitions_are_rows_changed_based() {
     common::seed_project(&store, "/tmp/r").await;
     let run = store.insert_run("/tmp/r", "free").await.expect("run");
     let action = store
-        .insert_action(run, Some(7), "label", "prompt", 1)
+        .insert_action(run, Some("7"), "label", "prompt", 1)
         .await
         .expect("action");
 
@@ -78,7 +78,7 @@ async fn deliver_report_is_exactly_once() {
     common::seed_project(&store, "/tmp/r").await;
     let run = store.insert_run("/tmp/r", "free").await.expect("run");
     let action = store
-        .insert_action(run, Some(3), "label", "prompt", 1)
+        .insert_action(run, Some("3"), "label", "prompt", 1)
         .await
         .expect("action");
     let session = "ses_report";
@@ -204,6 +204,17 @@ async fn migrates_a_v1_database_forward_to_v2() {
              ALTER TABLE gate DROP COLUMN channel_id;
              ALTER TABLE action DROP COLUMN template;
              ALTER TABLE ui_state DROP COLUMN draft_path;
+             ALTER TABLE action DROP COLUMN surface;
+             ALTER TABLE action ADD COLUMN channel_id INTEGER;
+             UPDATE action SET channel_id = CAST(chat_ref AS INTEGER) WHERE chat_ref IS NOT NULL;
+             ALTER TABLE action DROP COLUMN chat_ref;
+             ALTER TABLE notified RENAME COLUMN receipts TO discord_msg_id;
+             DROP TABLE component_map;
+             DROP TABLE pending_input;
+             CREATE TABLE msg_map_v1 (discord_msg_id TEXT PRIMARY KEY, session_id TEXT, action_id INTEGER);
+             INSERT INTO msg_map_v1 (discord_msg_id, session_id, action_id) SELECT msg_id, session_id, action_id FROM msg_map;
+             DROP TABLE msg_map;
+             ALTER TABLE msg_map_v1 RENAME TO msg_map;
              DELETE FROM schema_version;
              INSERT INTO schema_version (v) VALUES (1);",
         )

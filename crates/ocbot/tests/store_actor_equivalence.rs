@@ -38,7 +38,6 @@ async fn store_actor_equivalence() {
     let tmp = TempDir::new().expect("tmp");
     let db = tmp.path().join("equivalence.db");
     let dir = "/tmp/equivalence";
-    let operator = 42_i64;
 
     // Drive the typed actor through a broad operation sequence.
     let action = {
@@ -49,7 +48,7 @@ async fn store_actor_equivalence() {
             .expect("project");
         let run = store.insert_run(dir, "free").await.expect("run");
         let action = store
-            .insert_action(run, Some(7), "label", "prompt", 1)
+            .insert_action(run, Some("7"), "label", "prompt", 1)
             .await
             .expect("action");
         store.set_origin(action, "origin").await.expect("origin");
@@ -124,16 +123,25 @@ async fn store_actor_equivalence() {
 
         store.upsert_seen("ses_eq", Some(dir)).await.expect("seen");
         store.upsert_cursor("ses_eq", 9).await.expect("cursor");
-        store.set_ui_cwd(42, "/cwd").await.expect("ui cwd");
-        store.set_draft_path(42, "/draft").await.expect("draft");
-        store.insert_msg_map("dm", "ses_eq").await.expect("msg map");
+        store
+            .set_ui_cwd("discord:42", "/cwd")
+            .await
+            .expect("ui cwd");
+        store
+            .set_draft_path("discord:42", "/draft")
+            .await
+            .expect("draft");
+        store
+            .insert_msg_map("discord", "dm", "ses_eq", None)
+            .await
+            .expect("msg map");
         assert!(store.claim_notified("ses_eq", "1").await.expect("claim"));
         store
             .finish_notified("ses_eq", "1", "posted")
             .await
             .expect("finish notified");
         store
-            .audit(42, "run", Some(action), "ok")
+            .audit("discord:42", "run", Some(action), "ok")
             .await
             .expect("audit");
         store
@@ -312,7 +320,7 @@ async fn store_actor_equivalence() {
         scalar::<String>(
             &connection,
             "SELECT cwd FROM ui_state WHERE user_id = ?1",
-            &[&operator.to_string()]
+            &[&"discord:42"]
         ),
         "/cwd"
     );
@@ -320,14 +328,14 @@ async fn store_actor_equivalence() {
         scalar::<String>(
             &connection,
             "SELECT draft_path FROM ui_state WHERE user_id = ?1",
-            &[&operator.to_string()]
+            &[&"discord:42"]
         ),
         "/draft"
     );
     assert_eq!(
         scalar::<String>(
             &connection,
-            "SELECT discord_msg_id FROM notified WHERE session_id = ?1 AND seq = ?2",
+            "SELECT receipts FROM notified WHERE session_id = ?1 AND seq = ?2",
             &[&"ses_eq", &"1"]
         ),
         "posted"
@@ -343,7 +351,7 @@ async fn store_actor_equivalence() {
     assert_eq!(
         scalar::<String>(
             &connection,
-            "SELECT session_id FROM msg_map WHERE discord_msg_id = ?1",
+            "SELECT session_id FROM msg_map WHERE surface = 'discord' AND msg_id = ?1",
             &[&"dm"]
         ),
         "ses_eq"

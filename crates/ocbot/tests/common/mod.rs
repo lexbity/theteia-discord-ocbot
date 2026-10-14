@@ -22,10 +22,10 @@ use ocbot_core::ports::{
     Activity, Clock, FsPort, GateDecision, GateRequest, GitPort, HookFailure, OpenCodePort,
     PermissionRule, PortSession, PromptAdmission, ServerFacts, SessionId,
 };
-use ocbot_core::{GitError, OcError, OutgoingMessage};
+use ocbot_core::{Destination, GitError, MsgId, OcError, OutgoingMessage, PostReceipt, Surface};
 
 use ocbot::adapters::store::StoreHandle;
-use ocbot::app::context::{AppContext, DiscordPort, SendError};
+use ocbot::app::context::{AppContext, BroadcastOutcome, ChatPort, SendError};
 use ocbot::app::guard::Guard;
 use ocbot::app::metrics::Metrics;
 use ocbot::config::Templates;
@@ -521,7 +521,7 @@ impl GitPort for FakeGit {
 /// A posted message.
 #[derive(Debug, Clone)]
 pub struct Posted {
-    /// The channel.
+    /// The destination's chat ref (a Discord channel snowflake in PH-1 tests).
     pub channel: u64,
     /// The message spec.
     pub message: OutgoingMessage,
@@ -529,21 +529,21 @@ pub struct Posted {
     pub id: u64,
 }
 
-/// Recording fake discord surface.
+/// Recording fake chat port (the e2e suite's `ChatPort`).
 #[derive(Clone, Default)]
-pub struct FakeDiscord {
-    inner: Arc<Mutex<FakeDiscordInner>>,
+pub struct FakeChat {
+    inner: Arc<Mutex<FakeChatInner>>,
 }
 
 #[derive(Default)]
-struct FakeDiscordInner {
+struct FakeChatInner {
     posts: Vec<Posted>,
     edits: Vec<(u64, u64, OutgoingMessage)>,
     reactions: Vec<(u64, u64, char)>,
     next_id: u64,
 }
 
-impl FakeDiscord {
+impl FakeChat {
     /// Build an empty fake.
     pub fn new() -> Self {
         Self::default()
@@ -571,41 +571,54 @@ impl FakeDiscord {
 }
 
 #[async_trait]
-impl DiscordPort for FakeDiscord {
-    async fn post(&self, channel: u64, message: &OutgoingMessage) -> Result<u64, SendError> {
+impl ChatPort for FakeChat {
+    async fn post(
+        &self,
+        dest: &Destination,
+        message: &OutgoingMessage,
+    ) -> Result<PostReceipt, SendError> {
         let mut inner = self.inner.lock().expect("lock");
         let id = inner.next_id;
         inner.next_id += 1;
         inner.posts.push(Posted {
-            channel,
+            channel: dest.chat_ref.0.parse().unwrap_or(u64::MAX),
             message: message.clone(),
             id,
         });
-        Ok(id)
+        Ok(PostReceipt {
+            surface: Surface::Discord,
+            msg_id: MsgId(id.to_string()),
+        })
     }
 
-    async fn edit(
-        &self,
-        channel: u64,
-        message: u64,
-        replacement: &OutgoingMessage,
-    ) -> Result<(), SendError> {
-        self.inner
-            .lock()
-            .expect("lock")
-            .edits
-            .push((channel, message, replacement.clone()));
-        Ok(())
+    async fn edit(&self, receipt: &PostReceipt, replacement: &OutgoingMessage) {
+        self.inner.lock().expect("lock").edits.push((
+            receipt.msg_id.0.parse().unwrap_or(u64::MAX),
+            receipt.msg_id.0.parse().unwrap_or(u64::MAX),
+            replacement.clone(),
+        ));
     }
 
-    async fn react(&self, channel: u64, message: u64, emoji: char) -> Result<(), SendError> {
-        self.inner
-            .lock()
-            .expect("lock")
-            .reactions
-            .push((channel, message, emoji));
-        Ok(())
+    async fn react(&self, receipt: &PostReceipt, emoji: char) {
+        self.inner.lock().expect("lock").reactions.push((
+            receipt.msg_id.0.parse().unwrap_or(u64::MAX),
+            receipt.msg_id.0.parse().unwrap_or(u64::MAX),
+            emoji,
+        ));
     }
+
+    async fn broadcast(&self, _message: &OutgoingMessage) -> BroadcastOutcome {
+        BroadcastOutcome::default()
+    }
+
+    fn surfaces(&self) -> Vec<Surface> {
+        vec![Surface::Discord]
+    }
+}
+
+/// The namespaced `ActorId` for a Discord snowflake (test sources key on it).
+pub fn actor(id: u64) -> String {
+    format!("discord:{id}")
 }
 
 /// The real template files from `templates/` (they are load-time validated).
@@ -623,7 +636,7 @@ pub fn context(
     store: StoreHandle,
     opencode: Arc<dyn OpenCodePort>,
     git: Arc<dyn GitPort>,
-    discord: Arc<dyn DiscordPort>,
+    discord: Arc<dyn ChatPort>,
     operator: u64,
     ops_channel: Option<u64>,
 ) -> Arc<AppContext> {
@@ -656,7 +669,7 @@ pub fn context_with(
     clock: Arc<dyn Clock>,
     permission_ruleset: Option<Vec<PermissionRule>>,
     abort_timeout_secs: u64,
-    discord: Arc<dyn DiscordPort>,
+    discord: Arc<dyn ChatPort>,
     operator: u64,
     ops_channel: Option<u64>,
 ) -> Arc<AppContext> {
@@ -688,7 +701,7 @@ pub fn context_with_fs(
     clock: Arc<dyn Clock>,
     permission_ruleset: Option<Vec<PermissionRule>>,
     abort_timeout_secs: u64,
-    discord: Arc<dyn DiscordPort>,
+    discord: Arc<dyn ChatPort>,
     operator: u64,
     ops_channel: Option<u64>,
 ) -> Arc<AppContext> {
@@ -700,12 +713,15 @@ pub fn context_with_fs(
         clock,
         abort_timeout_secs,
         permission_ruleset,
-        discord,
+        chat: discord,
         metrics: Arc::new(Metrics::new()),
         redactor: Arc::new(ocbot_core::Redactor::default()),
         health: Arc::new(ocbot::app::degraded::HealthMonitor::new()),
         guard: Guard {
-            allowed_user_id: operator,
+            allowed_actors: vec![ocbot_core::ActorId::from_parts(
+                Surface::Discord,
+                &operator.to_string(),
+            )],
             ops_channel,
             inbox_channel: None,
         },
@@ -807,13 +823,7 @@ pub async fn seed_reported(
         .expect("upsert project");
     let run_id = store.insert_run(dir, "free").await.expect("run");
     let action_id = store
-        .insert_action(
-            run_id,
-            Some(i64::try_from(channel).expect("channel fits i64")),
-            label,
-            prompt,
-            1,
-        )
+        .insert_action(run_id, Some(&channel.to_string()), label, prompt, 1)
         .await
         .expect("action");
     assert!(
@@ -855,13 +865,7 @@ pub async fn seed_running(
         .expect("upsert project");
     let run_id = store.insert_run(dir, "free").await.expect("run");
     let action_id = store
-        .insert_action(
-            run_id,
-            Some(i64::try_from(channel).expect("channel fits i64")),
-            label,
-            "prompt",
-            1,
-        )
+        .insert_action(run_id, Some(&channel.to_string()), label, "prompt", 1)
         .await
         .expect("action");
     assert!(

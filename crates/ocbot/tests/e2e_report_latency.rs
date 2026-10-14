@@ -26,7 +26,7 @@ use serde_json::Value;
 use wiremock::matchers::any;
 use wiremock::{Mock, MockServer, Respond, ResponseTemplate};
 
-use common::{FakeDiscord, FakeGit, FakeOpenCode};
+use common::{FakeChat, FakeGit, FakeOpenCode};
 
 const OPERATOR: u64 = 42;
 const CHANNEL: u64 = 7;
@@ -91,7 +91,7 @@ async fn one_hundred_reports_stay_under_the_p95_budget() {
     let opencode = OpenCodeAdapter::new(Arc::new(
         opencode_v2_client::Client::new(&server.uri(), "secret").expect("client"),
     ));
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = common::context(
         store.clone(),
         Arc::new(opencode),
@@ -142,20 +142,14 @@ async fn plan_phase_stays_under_the_ack_budget() {
         .expect("project");
     let run = store.insert_run("/tmp/ack", "free").await.expect("run");
     let action = store
-        .insert_action(
-            run,
-            Some(i64::try_from(CHANNEL).expect("channel")),
-            "ack",
-            "prompt",
-            1,
-        )
+        .insert_action(run, Some(&CHANNEL.to_string()), "ack", "prompt", 1)
         .await
         .expect("action");
     let ctx = common::context(
         store,
         Arc::new(FakeOpenCode::new()),
         Arc::new(FakeGit::inert()),
-        Arc::new(FakeDiscord::new()),
+        Arc::new(FakeChat::new()),
         OPERATOR,
         Some(CHANNEL),
     );
@@ -163,7 +157,7 @@ async fn plan_phase_stays_under_the_ack_budget() {
         kind: SourceKind::Component {
             custom_id: format!("v1:send:{action}"),
         },
-        user_id: OPERATOR,
+        user_id: format!("discord:{OPERATOR}"),
         channel_id: CHANNEL,
         guild_id: Some(1),
         message_id: Some(1),

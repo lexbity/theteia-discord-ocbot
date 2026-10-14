@@ -31,8 +31,9 @@ pub async fn scan(ctx: &Arc<AppContext>, stall_secs: i64) -> Result<usize, AppEr
             continue;
         }
         let channel = action
-            .channel_id
-            .and_then(|channel| u64::try_from(channel).ok())
+            .chat_ref
+            .as_deref()
+            .and_then(|chat_ref| chat_ref.parse::<u64>().ok())
             .or(ctx.guard.ops_channel)
             .or(ctx.guard.inbox_channel);
         if let Some(channel) = channel {
@@ -44,9 +45,11 @@ pub async fn scan(ctx: &Arc<AppContext>, stall_secs: i64) -> Result<usize, AppEr
                 ),
                 attachment: None,
                 components: Vec::new(),
-                mentioned_users: vec![ctx.guard.allowed_user_id],
+                mention_allowlist: ctx.guard.discord_operator().into_iter().collect(),
             };
-            ctx.discord.post(channel, &message).await?;
+            ctx.chat
+                .post(&ocbot_core::Destination::discord(channel), &message)
+                .await?;
         }
         ctx.store.set_stall_ping(action.id, now).await?;
         tracing::info!(action = action.id, "stall ping posted");

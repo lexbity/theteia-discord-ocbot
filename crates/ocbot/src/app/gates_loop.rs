@@ -96,8 +96,11 @@ async fn handle_gate(
 
     let label = action.as_ref().map(|action| action.label.clone());
     let action_id = action.as_ref().map(|action| action.id);
-    let channel = match action.as_ref().and_then(|action| action.channel_id) {
-        Some(channel) => Some(channel),
+    let channel = match action
+        .as_ref()
+        .and_then(|action| action.chat_ref.as_deref())
+    {
+        Some(chat_ref) => chat_ref.parse::<i64>().ok(),
         None => ctx
             .guard
             .ops_channel
@@ -147,15 +150,23 @@ async fn handle_gate(
         .await?
         .ok_or_else(|| AppError::NotFound(format!("gate {rowid}")))?;
     if row.msg_id.is_none() {
-        let message = gate_message(label.as_deref(), gate, rowid, ctx.guard.allowed_user_id);
+        let message = gate_message(
+            label.as_deref(),
+            gate,
+            rowid,
+            ctx.guard.discord_operator().unwrap_or(0),
+        );
         match row
             .channel_id
             .and_then(|channel| u64::try_from(channel).ok())
         {
             Some(channel) => {
-                let msg_id = ctx.discord.post(channel, &message).await?;
+                let receipt = ctx
+                    .chat
+                    .post(&ocbot_core::Destination::discord(channel), &message)
+                    .await?;
                 ctx.store
-                    .set_gate_msg(rowid, &msg_id.to_string(), row.channel_id)
+                    .set_gate_msg(rowid, &receipt.msg_id.0, row.channel_id)
                     .await?;
                 tracing::info!(gate = %gate.id, rowid, "gate message posted");
             }
@@ -221,9 +232,11 @@ pub async fn reping(ctx: &Arc<AppContext>, reping_secs: i64) -> Result<(), AppEr
                 content,
                 attachment: None,
                 components: Vec::new(),
-                mentioned_users: vec![ctx.guard.allowed_user_id],
+                mention_allowlist: ctx.guard.discord_operator().into_iter().collect(),
             };
-            ctx.discord.post(channel, &message).await?;
+            ctx.chat
+                .post(&ocbot_core::Destination::discord(channel), &message)
+                .await?;
             tracing::info!(gate = row.id, pings, "gate re-ping posted");
         }
     }

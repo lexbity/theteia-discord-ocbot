@@ -133,7 +133,7 @@ pub async fn reconcile_git_states(ctx: &Arc<AppContext>) -> usize {
     match ctx.store.actions_in_states(&[State::Parking]).await {
         Ok(actions) => {
             for action in &actions {
-                match park::resume(ctx, action, ctx.guard.allowed_user_id).await {
+                match park::resume(ctx, action, &ctx.guard.operator().0).await {
                     Ok(_) => {
                         repaired += 1;
                         ctx.metrics.inc_reconcile_repair("park");
@@ -150,7 +150,7 @@ pub async fn reconcile_git_states(ctx: &Arc<AppContext>) -> usize {
     match ctx.store.pending_reset_intents().await {
         Ok(intents) => {
             for intent in &intents {
-                match reset::resume(ctx, intent, ctx.guard.allowed_user_id, None).await {
+                match reset::resume(ctx, intent, &ctx.guard.operator().0, None).await {
                     Ok(_) => {
                         repaired += 1;
                         ctx.metrics.inc_reconcile_repair("reset");

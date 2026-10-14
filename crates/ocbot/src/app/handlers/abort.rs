@@ -10,7 +10,6 @@ use ocbot_core::ports::Activity;
 use crate::app::completion::{DetectedBy, finalize_action};
 use crate::app::context::AppContext;
 use crate::app::error::AppError;
-use crate::app::handlers::support;
 use crate::app::interaction::InteractionSource;
 
 /// How often the idle confirmation polls.
@@ -18,7 +17,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Execute `/abort`: the running action in the operator's current directory.
 pub async fn execute(ctx: &Arc<AppContext>, source: &InteractionSource) -> Result<(), AppError> {
-    let dir = support::history_dir(ctx, source.user_id).await?;
+    let dir = crate::app::handlers::support::history_dir(ctx, &source.user_id).await?;
     let action = ctx
         .store
         .running_action_for_dir(&dir)
@@ -47,7 +46,7 @@ pub async fn execute(ctx: &Arc<AppContext>, source: &InteractionSource) -> Resul
 
     finalize_action(ctx, &action, true, DetectedBy::Fallback).await?;
     ctx.store
-        .audit(source.user_id, "abort", Some(action.id), "aborted")
+        .audit(&source.user_id, "abort", Some(action.id), "aborted")
         .await?;
     Ok(())
 }

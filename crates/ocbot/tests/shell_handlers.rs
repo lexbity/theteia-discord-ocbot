@@ -14,7 +14,7 @@ mod common;
 use std::sync::Arc;
 
 use common::{
-    FakeClock, FakeDiscord, FakeGit, FakeOpenCode, context_with, seed_reported, seed_running,
+    FakeChat, FakeClock, FakeGit, FakeOpenCode, context_with, seed_reported, seed_running,
 };
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::handlers::{discard, mute, release, status};
@@ -31,7 +31,7 @@ fn slash(name: &str) -> InteractionSource {
         kind: SourceKind::SlashCommand {
             name: name.to_owned(),
         },
-        user_id: OPERATOR,
+        user_id: format!("discord:{OPERATOR}"),
         channel_id: CHANNEL,
         guild_id: Some(1),
         message_id: None,
@@ -42,7 +42,7 @@ fn slash(name: &str) -> InteractionSource {
 fn ctx_for(
     store: &StoreHandle,
     opencode: FakeOpenCode,
-    discord: &FakeDiscord,
+    discord: &FakeChat,
     now: i64,
 ) -> Arc<ocbot::app::context::AppContext> {
     let opencode_port: Arc<dyn OpenCodePort> = Arc::new(opencode);
@@ -72,7 +72,7 @@ async fn status_posts_a_digest_with_the_running_action() {
         "ses_status",
     )
     .await;
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, FakeOpenCode::new(), &discord, 1_000);
 
     status::execute(&ctx, &slash("status"))
@@ -89,8 +89,11 @@ async fn status_posts_a_digest_with_the_running_action() {
 #[tokio::test]
 async fn mute_toggles_inbox_reporting_for_the_current_directory() {
     let store = StoreHandle::open_in_memory().expect("store");
-    store.set_ui_cwd(OPERATOR, "/tmp/mute").await.expect("cwd");
-    let discord = FakeDiscord::new();
+    store
+        .set_ui_cwd(&format!("discord:{OPERATOR}"), "/tmp/mute")
+        .await
+        .expect("cwd");
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, FakeOpenCode::new(), &discord, 1_000);
 
     mute::execute(&ctx, &slash("mute")).await.expect("mute");
@@ -131,10 +134,10 @@ async fn discard_seals_the_attempt_and_releases_the_lock() {
         "ses_discard",
     )
     .await;
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, FakeOpenCode::new(), &discord, 1_000);
 
-    let outcome = discard::execute_discard(&ctx, seeded.action_id, OPERATOR)
+    let outcome = discard::execute_discard(&ctx, seeded.action_id, &format!("discord:{OPERATOR}"))
         .await
         .expect("discard")
         .expect("ephemeral");
@@ -151,7 +154,7 @@ async fn discard_seals_the_attempt_and_releases_the_lock() {
     assert_eq!(store.lock_holder("/tmp/discard").await.expect("lock"), None);
     // A second discard is a replay, not a panic.
     assert!(
-        discard::execute_discard(&ctx, seeded.action_id, OPERATOR)
+        discard::execute_discard(&ctx, seeded.action_id, &format!("discord:{OPERATOR}"))
             .await
             .is_err()
     );
@@ -171,7 +174,7 @@ async fn release_lists_confirms_and_frees_the_lock() {
         "ses_release",
     )
     .await;
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, FakeOpenCode::new(), &discord, 1_000);
 
     release::list(&ctx, &slash("release")).await.expect("list");
@@ -239,7 +242,7 @@ async fn ops_tick_refreshes_gauges_and_announces_health() {
     )
     .await;
     let opencode = FakeOpenCode::new();
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, opencode.clone(), &discord, 1_000);
 
     ops::tick(&ctx, 45 * 60).await.expect("tick");
@@ -283,7 +286,7 @@ async fn watcher_skips_busy_sessions_and_counts_probe_failures() {
     let opencode = FakeOpenCode::new();
     opencode.set_activity("ses_busy", Activity::Busy);
     opencode.set_unreachable(true);
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, opencode, &discord, 1_000);
     let watcher = Watcher::new(ctx.clone(), std::time::Duration::from_millis(10));
 
@@ -323,7 +326,7 @@ async fn ops_tick_runs_the_stall_watchdog() {
     .await;
     // 46 minutes of silence on the injected clock (threshold 45 min).
     set_times(&store, seeded.action_id, NOW - 2_760, NOW - 2_760).await;
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, FakeOpenCode::new(), &discord, NOW);
 
     ops::tick(&ctx, 45 * 60).await.expect("tick stall");

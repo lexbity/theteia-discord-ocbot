@@ -15,7 +15,7 @@ mod common;
 
 use std::sync::Arc;
 
-use common::{FakeDiscord, FakeGit, FakeOpenCode, context};
+use common::{FakeChat, FakeGit, FakeOpenCode, context};
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::reconcile::{ReconcileReport, reconcile};
 use ocbot_core::ports::Activity;
@@ -28,13 +28,7 @@ async fn seed_running(store: &StoreHandle, session: &str) -> i64 {
     common::seed_project(store, "/tmp/seed").await;
     let run = store.insert_run("/tmp/seed", "free").await.expect("run");
     let action = store
-        .insert_action(
-            run,
-            Some(i64::try_from(CHANNEL).unwrap()),
-            "label",
-            "prompt",
-            1,
-        )
+        .insert_action(run, Some(&CHANNEL.to_string()), "label", "prompt", 1)
         .await
         .expect("action");
     assert!(
@@ -50,7 +44,7 @@ async fn seed_running(store: &StoreHandle, session: &str) -> i64 {
 async fn boot_reconcile_delivers_exactly_once() {
     let store = StoreHandle::open_in_memory().expect("store");
     let opencode = FakeOpenCode::new();
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = context(
         store.clone(),
         Arc::new(opencode.clone()),
@@ -110,7 +104,7 @@ async fn boot_reconcile_delivers_exactly_once() {
 async fn reconcile_never_touches_non_running_actions() {
     let store = StoreHandle::open_in_memory().expect("store");
     let opencode = FakeOpenCode::new();
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = context(
         store.clone(),
         Arc::new(opencode.clone()),
@@ -143,7 +137,7 @@ async fn reconcile_never_touches_non_running_actions() {
     common::seed_project(&store, "/tmp/y").await;
     let run2 = store.insert_run("/tmp/y", "free").await.expect("run");
     let action2 = store
-        .insert_action(run2, Some(i64::try_from(CHANNEL).unwrap()), "l2", "p2", 1)
+        .insert_action(run2, Some(&CHANNEL.to_string()), "l2", "p2", 1)
         .await
         .expect("action");
     assert!(
@@ -187,7 +181,7 @@ async fn premarked_report_is_never_reposted() {
     // guard is what makes this exactly-once (AC-14).
     let store = StoreHandle::open_in_memory().expect("store");
     let opencode = FakeOpenCode::new();
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = context(
         store.clone(),
         Arc::new(opencode.clone()),

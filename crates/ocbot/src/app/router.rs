@@ -233,11 +233,12 @@ pub async fn execute(
             } else if let Some(id) = custom_id.strip_prefix("v1:runany:") {
                 handlers::run::execute_runany(ctx, parse_action_id(id)?, source).await
             } else if let Some(id) = custom_id.strip_prefix("v1:accept:") {
-                handlers::accept::execute_mark_done(ctx, parse_action_id(id)?, source.user_id).await
+                handlers::accept::execute_mark_done(ctx, parse_action_id(id)?, &source.user_id)
+                    .await
             } else if let Some(id) = custom_id.strip_prefix("v1:park:") {
-                handlers::park::begin_park(ctx, parse_action_id(id)?, source.user_id).await
+                handlers::park::begin_park(ctx, parse_action_id(id)?, &source.user_id).await
             } else if let Some(id) = custom_id.strip_prefix("v1:discard:") {
-                handlers::discard::execute_discard(ctx, parse_action_id(id)?, source.user_id).await
+                handlers::discard::execute_discard(ctx, parse_action_id(id)?, &source.user_id).await
             } else if let Some(sha) = custom_id.strip_prefix("v1:reset:") {
                 handlers::reset::confirm(ctx, source, sha).await
             } else if let Some(sha) = custom_id.strip_prefix("v1:resetgo:") {
@@ -251,10 +252,10 @@ pub async fn execute(
                 Ok(None)
             } else if let Some(rest) = custom_id.strip_prefix("v1:gate:") {
                 let (id, decision) = split_gate_id(rest)?;
-                handlers::gate::execute_permission_reply(ctx, id, decision, source.user_id).await
+                handlers::gate::execute_permission_reply(ctx, id, decision, &source.user_id).await
             } else if let Some(rest) = custom_id.strip_prefix("v1:formpick:") {
                 let (id, value) = parse_form_pick(rest)?;
-                handlers::gate::execute_form_pick(ctx, id, &value, source.user_id).await
+                handlers::gate::execute_form_pick(ctx, id, &value, &source.user_id).await
             } else if custom_id.starts_with("v1:formgo:") {
                 // A Component `v1:formgo` plans a modal and never executes; a
                 // stale press is a no-op.
@@ -301,7 +302,7 @@ pub async fn execute(
                     ctx,
                     parse_action_id(id)?,
                     prompt,
-                    source.user_id,
+                    &source.user_id,
                 )
                 .await
             } else if let Some(id) = custom_id.strip_prefix("v1:formgo:") {
@@ -314,7 +315,7 @@ pub async fn execute(
                     parse_action_id(id)?,
                     subject,
                     body,
-                    source.user_id,
+                    &source.user_id,
                 )
                 .await
             } else {

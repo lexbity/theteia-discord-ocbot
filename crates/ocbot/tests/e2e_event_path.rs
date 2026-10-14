@@ -16,7 +16,7 @@ mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{FakeDiscord, FakeEventSource, FakeGit, FakeOpenCode, session_frame};
+use common::{FakeChat, FakeEventSource, FakeGit, FakeOpenCode, session_frame};
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::supervisor::Supervisor;
 use ocbot::app::wake::Dispatcher;
@@ -24,7 +24,7 @@ use ocbot::app::wake::Dispatcher;
 /// AC-E2: an idle-class frame ×3 ⇒ one report, one `activity` read.
 #[tokio::test(start_paused = true)]
 async fn triple_idle_frame_produces_exactly_one_report() {
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let opencode = FakeOpenCode::new();
     let store = StoreHandle::open_in_memory().expect("store");
     common::seed_running(

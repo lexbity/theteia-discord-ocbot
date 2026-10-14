@@ -30,7 +30,8 @@ const ACTION_COLUMNS: &[(&str, &str)] = &[
     ("run_id", "INTEGER NOT NULL"),
     ("session_id", "TEXT"),
     ("parent_action_id", "INTEGER"),
-    ("channel_id", "INTEGER"),
+    ("surface", "TEXT NOT NULL DEFAULT 'discord'"),
+    ("chat_ref", "TEXT"),
     ("label", "TEXT NOT NULL"),
     ("prompt_sent", "TEXT NOT NULL"),
     ("state", "TEXT NOT NULL"),
@@ -115,7 +116,8 @@ fn insert_action(conn: &Connection) {
             11,          // run_id
             "ses_x",     // session_id
             3,           // parent_action_id
-            42,          // channel_id
+            "discord",   // surface
+            "42",        // chat_ref
             "lbl",       // label
             "prompt",    // prompt_sent
             "running",   // state
@@ -194,7 +196,7 @@ fn seed_custom_db(path: &Path, table: &str, columns: &[(&str, &str)], seed: fn(&
     let conn = Connection::open(path).expect("open raw db");
     conn.execute_batch("CREATE TABLE schema_version (v INTEGER PRIMARY KEY);")
         .expect("schema_version");
-    conn.execute("INSERT INTO schema_version (v) VALUES (4)", [])
+    conn.execute("INSERT INTO schema_version (v) VALUES (5)", [])
         .expect("version");
     create_table(&conn, table, columns);
     seed(&conn);
@@ -219,7 +221,8 @@ async fn action_row_named_access() {
     assert_eq!(action.run_id, 11);
     assert_eq!(action.session_id.as_deref(), Some("ses_x"));
     assert_eq!(action.parent_action_id, Some(3));
-    assert_eq!(action.channel_id, Some(42));
+    assert_eq!(action.chat_ref.as_deref(), Some("42"));
+    assert_eq!(action.surface, "discord");
     assert_eq!(action.label, "lbl");
     assert_eq!(action.prompt_sent, "prompt");
     assert_eq!(action.state, State::Running);
@@ -305,7 +308,8 @@ async fn action_schema_reorder_safety() {
     assert_eq!(action.state, State::Running);
     assert_eq!(action.template, "resume");
     assert_eq!(action.label, "lbl");
-    assert_eq!(action.channel_id, Some(42));
+    assert_eq!(action.chat_ref.as_deref(), Some("42"));
+    assert_eq!(action.surface, "discord");
     assert_eq!(action.stall_ping_at, Some(400));
 }
 

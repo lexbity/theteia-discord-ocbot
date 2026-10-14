@@ -28,6 +28,8 @@ pub const DEFAULT_PERMISSIONS_FILE: &str = "config/opencode.permissions.jsonc";
 pub const ENV_DISCORD_TOKEN: &str = "DISCORD_TOKEN";
 /// Environment variable with the opencode server password.
 pub const ENV_OPENCODE_PASSWORD: &str = "OPENCODE_PASSWORD";
+/// Environment variable overriding the Signal operator number (D-09).
+pub const ENV_SIGNAL_OPERATOR: &str = "SIGNAL_OPERATOR";
 
 /// The on-disk config. All known keys; anything else is a load error.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -41,21 +43,23 @@ pub struct Config {
     /// Directory holding `fresh.md` / `resume.md`.
     #[serde(default = "default_templates")]
     pub templates_dir: String,
-    /// The ops channel id (interactions are also allowed in DMs, FR-2).
+    /// The chat surfaces to run (SPEC-004 D-09): a single name or a list;
+    /// default `["discord"]`.
+    #[serde(default = "default_channel")]
+    pub channel: ChannelSelection,
+    /// The Discord surface section (required iff discord is selected).
     #[serde(default)]
-    pub ops_channel: Option<u64>,
-    /// Where external (TUI) completions post; defaults to `ops_channel` (P14).
+    pub discord: DiscordSection,
+    /// The Signal surface section (parsed now; the surface itself arrives in
+    /// a later slice — selecting it is a loud load error until then).
     #[serde(default)]
-    pub inbox_channel: Option<u64>,
+    pub signal: SignalSection,
     /// Inbox root-session poll interval in ms (S-7 locked default 5 s).
     #[serde(default = "default_inbox_poll")]
     pub inbox_poll_interval_ms: u64,
     /// How long `/abort` waits for the server to confirm idle (FR-10).
     #[serde(default = "default_abort_timeout")]
     pub abort_timeout_secs: u64,
-    /// The operator discord user id (env `ALLOWED_USER_ID` overrides).
-    #[serde(default)]
-    pub allowed_user_id: Option<u64>,
     /// Watcher poll interval in ms (S-2 locked default).
     #[serde(default = "default_poll")]
     pub poll_interval_ms: u64,
@@ -154,6 +158,172 @@ impl EventsConfig {
 
 fn default_db() -> String {
     "ocbot.db".to_owned()
+}
+
+/// The surface selection: one name or a list (SPEC-004 D-09, FR-117).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum ChannelSelection {
+    /// `channel = "discord"`.
+    Single(String),
+    /// `channel = ["discord", "signal"]`.
+    Multiple(Vec<String>),
+}
+
+impl ChannelSelection {
+    /// The selected surface names, in order.
+    pub fn names(&self) -> Vec<&str> {
+        match self {
+            ChannelSelection::Single(name) => vec![name.as_str()],
+            ChannelSelection::Multiple(names) => names.iter().map(String::as_str).collect(),
+        }
+    }
+}
+
+impl Default for ChannelSelection {
+    fn default() -> Self {
+        ChannelSelection::Multiple(vec!["discord".to_owned()])
+    }
+}
+
+fn default_channel() -> ChannelSelection {
+    ChannelSelection::default()
+}
+
+/// The `[discord]` section (SPEC-004 D-09). The flat top-level keys this
+/// section replaces were removed — a hard config break at a pre-1.0 boundary.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct DiscordSection {
+    /// The ops channel id (interactions are also allowed in DMs, FR-2).
+    pub ops_channel: Option<u64>,
+    /// Where external (TUI) completions post; defaults to `ops_channel` (P14).
+    pub inbox_channel: Option<u64>,
+    /// The operator discord user id (env `ALLOWED_USER_ID` overrides).
+    pub allowed_user_id: Option<u64>,
+    /// How much of a report reaches Discord (D-12; enforced from PH-6).
+    pub report_excerpt: Option<ReportExcerpt>,
+    /// Whether `report.md` attachments leave the host at all (D-12: default
+    /// **false** — was implicitly true before SPEC-004).
+    pub report_attachments: Option<bool>,
+}
+
+impl DiscordSection {
+    /// The excerpt policy with its default applied.
+    pub fn excerpt(&self) -> ReportExcerpt {
+        self.report_excerpt.unwrap_or(ReportExcerpt::Excerpt)
+    }
+
+    /// The attachment policy with its default applied.
+    pub fn attachments(&self) -> bool {
+        self.report_attachments.unwrap_or(false)
+    }
+
+    /// The operator id after the env override rule.
+    pub fn resolved_operator(&self) -> Option<u64> {
+        self.allowed_user_id.or_else(|| {
+            std::env::var(ENV_ALLOWED_USER_ID)
+                .ok()
+                .and_then(|value| value.parse().ok())
+        })
+    }
+}
+
+impl SignalSection {
+    /// Whether any key was actually set (drives the unselected-section
+    /// warning, D-09).
+    pub fn is_configured(&self) -> bool {
+        self.socket.is_some() || self.operator_number.is_some()
+    }
+}
+
+/// The unselected-but-configured-section warning (D-09): a box may carry
+/// Signal config while running Discord-only (phased rollout support).
+fn warn_unselected_section(surface: &str) {
+    tracing::warn!(
+        surface,
+        "[{surface}] section is configured but not selected by `channel`; ignoring it"
+    );
+}
+
+/// The E.164 shape required of `[signal].operator_number` (§5.8):
+/// `+` then 7..15 digits not starting with 0.
+fn is_e164(number: &str) -> bool {
+    let mut bytes = number.bytes();
+    bytes.next() == Some(b'+')
+        && bytes.next().is_some_and(|b| (b'1'..=b'9').contains(&b))
+        && (6..=14).contains(&bytes.len())
+        && bytes.all(|b| b.is_ascii_digit())
+}
+
+/// The `[signal]` section (SPEC-004 D-09). Parsed and validated from PH-1;
+/// the surface itself boots in a later slice.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct SignalSection {
+    /// The unix socket of the signal-cli JSON-RPC daemon.
+    pub socket: Option<String>,
+    /// The operator's E.164 number — the single allowlisted identity (D-11).
+    /// Env `SIGNAL_OPERATOR` overrides.
+    pub operator_number: Option<String>,
+    /// How much of a report reaches the operator's phone (E2E, D-12).
+    pub report_excerpt: Option<ReportExcerpt>,
+    /// Whether `report.md` attachments are sent (default true — E2E).
+    pub report_attachments: Option<bool>,
+    /// The inbound command token bucket (D-11.4).
+    pub rate_limit: RateLimit,
+}
+
+impl SignalSection {
+    /// The operator number after the env override rule.
+    pub fn resolved_operator_number(&self) -> Option<String> {
+        self.operator_number
+            .clone()
+            .or_else(|| std::env::var(ENV_SIGNAL_OPERATOR).ok())
+    }
+
+    /// The excerpt policy with its default applied.
+    pub fn excerpt(&self) -> ReportExcerpt {
+        self.report_excerpt.unwrap_or(ReportExcerpt::Full)
+    }
+
+    /// The attachment policy with its default applied.
+    pub fn attachments(&self) -> bool {
+        self.report_attachments.unwrap_or(true)
+    }
+}
+
+/// Per-surface report excerpt policy (D-12).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum ReportExcerpt {
+    /// The whole report inline.
+    #[serde(rename = "full")]
+    Full,
+    /// The report inline up to the excerpt budget (Discord's default).
+    #[serde(rename = "excerpt")]
+    Excerpt,
+    /// Headline + verdict only.
+    #[serde(rename = "off")]
+    Off,
+}
+
+/// The inbound token bucket (D-11.4).
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RateLimit {
+    /// Bucket capacity (burst).
+    pub capacity: u32,
+    /// Tokens per second.
+    pub refill_per_sec: f64,
+}
+
+impl Default for RateLimit {
+    fn default() -> Self {
+        RateLimit {
+            capacity: 10,
+            refill_per_sec: 1.0,
+        }
+    }
 }
 
 fn default_templates() -> String {
@@ -406,14 +576,65 @@ impl Config {
             ));
         }
 
-        let operator = self.allowed_user_id.or_else(|| {
-            std::env::var(ENV_ALLOWED_USER_ID)
-                .ok()
-                .and_then(|value| value.parse().ok())
-        });
-        if operator.is_none() {
+        // --- Surface selection (SPEC-004 D-09/FR-117) ------------------------
+        let selected = self.channel.names();
+        if selected.is_empty() {
+            errors.push("channel must select at least one surface".to_owned());
+        }
+        for name in &selected {
+            if ocbot_core::Surface::parse(name).is_none() {
+                errors.push(format!(
+                    "channel lists unknown surface {name:?} (known: discord, signal)"
+                ));
+            }
+        }
+        let duplicates = {
+            let mut seen = selected.clone();
+            seen.sort_unstable();
+            seen.windows(2).any(|pair| pair[0] == pair[1])
+        };
+        if duplicates {
             errors.push(format!(
-                "allowed_user_id is required (config or env {ENV_ALLOWED_USER_ID})"
+                "channel lists a surface twice: {selected:?} (one entry per surface)"
+            ));
+        }
+
+        let discord_selected = selected.contains(&"discord");
+        let signal_selected = selected.contains(&"signal");
+
+        if discord_selected {
+            let operator = self.discord.resolved_operator();
+            if operator.is_none() {
+                errors.push(format!(
+                    "[discord] allowed_user_id is required when discord is selected (config or env {ENV_ALLOWED_USER_ID})"
+                ));
+            }
+        } else {
+            warn_unselected_section("discord");
+        }
+
+        // Honest loud failure until the Signal surface ships (PH-4): selecting
+        // it is a configuration the binary cannot honor yet.
+        if signal_selected {
+            errors.push(
+                "channel selects `signal`, which is not implemented until SPEC-004 PH-4".to_owned(),
+            );
+        } else if self.signal.is_configured() {
+            warn_unselected_section("signal");
+        }
+
+        if let Some(number) = self.signal.resolved_operator_number()
+            && !is_e164(&number)
+        {
+            errors.push(format!(
+                "[signal] operator_number must match +E.164 (^\\+[1-9][0-9]{{6,}}$), got {number:?}"
+            ));
+        }
+        if let Some(socket) = &self.signal.socket
+            && !std::path::Path::new(socket).is_absolute()
+        {
+            errors.push(format!(
+                "[signal] socket must be an absolute path, got {socket:?}"
             ));
         }
 
@@ -424,13 +645,9 @@ impl Config {
         }
     }
 
-    /// The resolved operator id, after the env override rule.
+    /// The resolved Discord operator id, after the env override rule.
     pub fn resolved_operator(&self) -> Option<u64> {
-        self.allowed_user_id.or_else(|| {
-            std::env::var(ENV_ALLOWED_USER_ID)
-                .ok()
-                .and_then(|value| value.parse().ok())
-        })
+        self.discord.resolved_operator()
     }
 
     /// Whether the per-session ruleset (FR-42) is active: the config flag or
@@ -585,6 +802,7 @@ mod tests {
 
     const GOOD: &str = r#"
 opencode_url = "http://127.0.0.1:8080"
+[discord]
 allowed_user_id = 42
 "#;
 
@@ -617,14 +835,14 @@ typo_key = 1
             opencode_url: "example.com".to_owned(),
             db_path: "x.db".to_owned(),
             templates_dir: "templates".to_owned(),
-            ops_channel: None,
-            inbox_channel: None,
+            channel: super::ChannelSelection::default(),
+            discord: super::DiscordSection::default(),
+            signal: super::SignalSection::default(),
             inbox_poll_interval_ms: 10, // too fast
             abort_timeout_secs: 0,      // too fast
-            allowed_user_id: None,
-            poll_interval_ms: 10,     // too fast
-            gate_poll_interval_ms: 5, // too fast
-            perm_reping_minutes: 0,   // too fast
+            poll_interval_ms: 10,       // too fast
+            gate_poll_interval_ms: 5,   // too fast
+            perm_reping_minutes: 0,     // too fast
             per_session_ruleset: false,
             permissions_file: "config/opencode.permissions.jsonc".to_owned(),
             metrics_bind: String::new(),
@@ -765,7 +983,7 @@ typo_key = 1
         std::fs::write(
             &config_path,
             format!(
-                "opencode_url = \"http://127.0.0.1:8080\"\nallowed_user_id = 42\ntemplates_dir = {:?}\n",
+                "opencode_url = \"http://127.0.0.1:8080\"\ntemplates_dir = {:?}\n[discord]\nallowed_user_id = 42\n",
                 dir.path().to_string_lossy()
             ),
         )
@@ -787,7 +1005,7 @@ typo_key = 1
         std::fs::write(
             &config_path,
             format!(
-                "opencode_url = \"http://127.0.0.1:8080\"\nallowed_user_id = 42\ntemplates_dir = {:?}\n",
+                "opencode_url = \"http://127.0.0.1:8080\"\ntemplates_dir = {:?}\n[discord]\nallowed_user_id = 42\n",
                 dir.path().to_string_lossy()
             ),
         )

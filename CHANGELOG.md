@@ -10,6 +10,14 @@ Versions apply to the workspace; the publishable artifact today is the `opencode
 
 ## [Unreleased]
 
+### Changed (breaking — config)
+
+- **SPEC-004 PH-1: multi-surface chat transport, vocabulary unification.** The core now speaks `Surface`/`Destination`/`ActorId`/`PostReceipt` through one `ChatPort` instead of `DiscordPort` + `u64` snowflakes. Discord behavior is unchanged byte-for-byte.
+- **Breaking config change:** the flat top-level `ops_channel`, `inbox_channel`, and `allowed_user_id` keys moved into a `[discord]` section, and a new `channel` key (single name or list, default `["discord"]`) selects the surfaces to run. **Mechanical fix:** indent those three keys under `[discord]`. A `[signal]` section now parses (socket, operator_number, per-surface report policy, rate limit) but selecting `signal` is refused until the Signal surface ships; `SIGNAL_OPERATOR` is the new env override for the operator number.
+- Database migration v5 (the de-Discord reshape, transactional under the schema-version guard): `action.channel_id` → `action.surface` + `action.chat_ref`, `msg_map` keyed by `(surface, msg_id)`, `notified.discord_msg_id` renamed to the informational `receipts` column, and the new `component_map`/`pending_input` tables created for the later Signal slices. Old databases migrate in place at boot; unclaim semantics are preserved exactly.
+- `OutgoingMessage.mentioned_users` was renamed `mention_allowlist` (Discord-rendered FR-3 allowlist; other surfaces ignore it).
+- `SendError` lost its `"discord: "` text prefix and gained a typed `surface` field.
+
 ### Added
 
 - Deterministic Discord controller for a local opencode v2 server: `/run`, `/prompt`, `/abort`, `/history`, `/reset`, `/release`, `/mute`, `/ls`, `/cd`, `/status`.

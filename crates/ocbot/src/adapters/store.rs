@@ -60,8 +60,11 @@ pub struct ActionRow {
     pub session_id: Option<String>,
     /// The parent action (park-redo chain), when any.
     pub parent_action_id: Option<i64>,
-    /// The Discord channel reports must go to (Phase 2 delta).
-    pub channel_id: Option<i64>,
+    /// The surface reports must go to (SPEC-004 D-08).
+    pub surface: String,
+    /// The surface's conversation reference (NULL only for legacy
+    /// non-routed rows).
+    pub chat_ref: Option<String>,
     /// The operator label.
     pub label: String,
     /// The exact prompt sent (verbatim, P13).
@@ -184,6 +187,26 @@ pub struct GateRow {
     pub last_ping_at: Option<i64>,
 }
 
+/// One open pending-input flow (SPEC-004 D-06): a Signal-side modal
+/// replacement state machine, one row per `(surface, chat_ref)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingInputRow {
+    /// The surface the flow lives on.
+    pub surface: String,
+    /// The conversation the flow lives in.
+    pub chat_ref: String,
+    /// The flow name (`run`, `edit`, `cd`).
+    pub flow: String,
+    /// The current step (`await_prompt`, …).
+    pub step: String,
+    /// The persisted draft (JSON; the only crash-surviving state).
+    pub draft: String,
+    /// Last update (unix seconds).
+    pub updated_at: i64,
+    /// Expiry (unix seconds; the ops sweep consumes past-due rows).
+    pub expires_at: i64,
+}
+
 /// The typed reply channel for one [`StoreRequest`].
 type Reply<T> = oneshot::Sender<Result<T, StoreError>>;
 
@@ -243,6 +266,13 @@ impl StoreArg for Option<i64> {
     type Owned = Option<i64>;
     fn into_store_arg(self) -> Self::Owned {
         self
+    }
+}
+
+impl StoreArg for &[(String, String)] {
+    type Owned = Vec<(String, String)>;
+    fn into_store_arg(self) -> Self::Owned {
+        self.to_vec()
     }
 }
 
@@ -410,13 +440,15 @@ store_method! {
         }
     };
 
-    /// Insert a staged action; returns its id.
-    InsertAction as insert_action(run_id: i64 => i64, channel_id: Option<i64> => Option<i64>, label: &str => String, prompt_sent: &str => String, attempt: i64 => i64) -> i64 {
+    /// Insert a staged action; returns its id. `chat_ref` is the surface's
+    /// conversation reference (SPEC-004 D-08); the surface column keeps its
+    /// 'discord' default until a second surface exists.
+    InsertAction as insert_action(run_id: i64 => i64, chat_ref: Option<&str> => Option<String>, label: &str => String, prompt_sent: &str => String, attempt: i64 => i64) -> i64 {
         |connection: &mut Connection| -> rusqlite::Result<i64> {
             connection.execute(
-                "INSERT INTO action (run_id, channel_id, label, prompt_sent, state, attempt)
+                "INSERT INTO action (run_id, chat_ref, label, prompt_sent, state, attempt)
                  VALUES (?1, ?2, ?3, ?4, 'staged', ?5)",
-                params![run_id, channel_id, label, prompt_sent, attempt],
+                params![run_id, chat_ref, label, prompt_sent, attempt],
             )?;
             Ok(connection.last_insert_rowid())
         }
@@ -427,15 +459,15 @@ store_method! {
         clippy::too_many_arguments,
         reason = "one column per argument mirrors the insert; a struct would not reduce the call-site clarity"
     )]
-    InsertStagedChild as insert_staged_child(run_id: i64 => i64, channel_id: Option<i64> => Option<i64>, label: &str => String, prompt_sent: &str => String, template: &str => String, attempt: i64 => i64, parent_action_id: i64 => i64) -> i64 {
+    InsertStagedChild as insert_staged_child(run_id: i64 => i64, chat_ref: Option<&str> => Option<String>, label: &str => String, prompt_sent: &str => String, template: &str => String, attempt: i64 => i64, parent_action_id: i64 => i64) -> i64 {
         |connection: &mut Connection| -> rusqlite::Result<i64> {
             connection.execute(
                 "INSERT INTO action
-                    (run_id, channel_id, label, prompt_sent, template, state, attempt, parent_action_id)
+                    (run_id, chat_ref, label, prompt_sent, template, state, attempt, parent_action_id)
                  VALUES (?1, ?2, ?3, ?4, ?5, 'staged', ?6, ?7)",
                 params![
                     run_id,
-                    channel_id,
+                    chat_ref,
                     label,
                     prompt_sent,
                     template,
@@ -444,6 +476,18 @@ store_method! {
                 ],
             )?;
             Ok(connection.last_insert_rowid())
+        }
+    };
+
+    /// Record where an action's messages go (SPEC-004 §5.7).
+    SetActionDestination as set_action_destination(action_id: i64 => i64, surface: &str => String, chat_ref: &str => String) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            connection
+                .execute(
+                    "UPDATE action SET surface = ?1, chat_ref = ?2 WHERE id = ?3",
+                    params![surface, chat_ref, action_id],
+                )
+                .map(|_| ())
         }
     };
 
@@ -752,12 +796,13 @@ store_method! {
     };
 
     /// The last selected/uploaded path for a user (browser + attachment draft).
-    DraftPath as draft_path(user_id: u64 => u64) -> Option<String> {
+    /// Keys are namespaced `ActorId`s (SPEC-004 D-03).
+    DraftPath as draft_path(user_id: &str => String) -> Option<String> {
         |connection: &mut Connection| -> rusqlite::Result<Option<String>> {
             connection
                 .query_row(
                     "SELECT draft_path FROM ui_state WHERE user_id = ?1",
-                    params![user_id.to_string()],
+                    params![user_id],
                     |row| row.get::<_, Option<String>>("draft_path"),
                 )
                 .optional()
@@ -766,25 +811,25 @@ store_method! {
     };
 
     /// Remember the last selected/uploaded path for a user.
-    SetDraftPath as set_draft_path(user_id: u64 => u64, path: &str => String) -> () {
+    SetDraftPath as set_draft_path(user_id: &str => String, path: &str => String) -> () {
         |connection: &mut Connection| -> rusqlite::Result<()> {
             connection
                 .execute(
                     "INSERT INTO ui_state (user_id, draft_path) VALUES (?1, ?2)
                      ON CONFLICT(user_id) DO UPDATE SET draft_path = excluded.draft_path",
-                    params![user_id.to_string(), path],
+                    params![user_id, path],
                 )
                 .map(|_| ())
         }
     };
 
     /// Forget the draft path (consumed by a prompt).
-    ClearDraftPath as clear_draft_path(user_id: u64 => u64) -> () {
+    ClearDraftPath as clear_draft_path(user_id: &str => String) -> () {
         |connection: &mut Connection| -> rusqlite::Result<()> {
             connection
                 .execute(
                     "UPDATE ui_state SET draft_path = NULL WHERE user_id = ?1",
-                    params![user_id.to_string()],
+                    params![user_id],
                 )
                 .map(|_| ())
         }
@@ -792,12 +837,12 @@ store_method! {
 
     /// The remembered cwd for a user (modal prefill); a `set_draft_path`-only
     /// row leaves `cwd` NULL, so the read is nullable.
-    UiCwd as ui_cwd(user_id: u64 => u64) -> Option<String> {
+    UiCwd as ui_cwd(user_id: &str => String) -> Option<String> {
         |connection: &mut Connection| -> rusqlite::Result<Option<String>> {
             connection
                 .query_row(
                     "SELECT cwd FROM ui_state WHERE user_id = ?1",
-                    params![user_id.to_string()],
+                    params![user_id],
                     |row| row.get::<_, Option<String>>("cwd"),
                 )
                 .optional()
@@ -806,13 +851,13 @@ store_method! {
     };
 
     /// Remember a cwd for a user.
-    SetUiCwd as set_ui_cwd(user_id: u64 => u64, cwd: &str => String) -> () {
+    SetUiCwd as set_ui_cwd(user_id: &str => String, cwd: &str => String) -> () {
         |connection: &mut Connection| -> rusqlite::Result<()> {
             connection
                 .execute(
                     "INSERT INTO ui_state (user_id, cwd) VALUES (?1, ?2)
                      ON CONFLICT(user_id) DO UPDATE SET cwd = excluded.cwd",
-                    params![user_id.to_string(), cwd],
+                    params![user_id, cwd],
                 )
                 .map(|_| ())
         }
@@ -876,13 +921,14 @@ store_method! {
         }
     };
 
-    /// Record an audit line (FR-5).
-    Audit as audit(user_id: u64 => u64, verb: &str => String, action_id: Option<i64> => Option<i64>, result: &str => String) -> () {
+    /// Record an audit line (FR-5). The actor is a namespaced `ActorId` string
+    /// (SPEC-004 D-03).
+    Audit as audit(user_id: &str => String, verb: &str => String, action_id: Option<i64> => Option<i64>, result: &str => String) -> () {
         |connection: &mut Connection| -> rusqlite::Result<()> {
             connection
                 .execute(
                     "INSERT INTO audit (ts, user_id, verb, action_id, result) VALUES (?1, ?2, ?3, ?4, ?5)",
-                    params![now_unix(), user_id.to_string(), verb, action_id, result],
+                    params![now_unix(), user_id, verb, action_id, result],
                 )
                 .map(|_| ())
         }
@@ -1186,7 +1232,7 @@ store_method! {
     ClaimNotified as claim_notified(session_id: &str => String, seq: &str => String) -> bool {
         |connection: &mut Connection| -> rusqlite::Result<bool> {
             let changed = connection.execute(
-                "INSERT OR IGNORE INTO notified (session_id, seq, discord_msg_id)
+                "INSERT OR IGNORE INTO notified (session_id, seq, receipts)
                  VALUES (?1, ?2, '')",
                 params![session_id, seq],
             )?;
@@ -1194,50 +1240,54 @@ store_method! {
         }
     };
 
-    /// Record the posted message id on a claimed notification.
-    FinishNotified as finish_notified(session_id: &str => String, seq: &str => String, discord_msg_id: &str => String) -> () {
+    /// Record the joined receipts (`discord:1|signal:2`, SPEC-004 D-08) on a
+    /// claimed notification. The column is informational; the claim is the
+    /// dedupe key and is never parsed.
+    FinishNotified as finish_notified(session_id: &str => String, seq: &str => String, receipts: &str => String) -> () {
         |connection: &mut Connection| -> rusqlite::Result<()> {
             connection
                 .execute(
-                    "UPDATE notified SET discord_msg_id = ?1 WHERE session_id = ?2 AND seq = ?3",
-                    params![discord_msg_id, session_id, seq],
+                    "UPDATE notified SET receipts = ?1 WHERE session_id = ?2 AND seq = ?3",
+                    params![receipts, session_id, seq],
                 )
                 .map(|_| ())
         }
     };
 
-    /// Give a claimed-but-unposted notification back so the next tick retries.
+    /// Give a claimed-but-unposted notification back so the next tick retries
+    /// (empty receipts = never posted; semantics unchanged from v1).
     UnclaimNotified as unclaim_notified(session_id: &str => String, seq: &str => String) -> () {
         |connection: &mut Connection| -> rusqlite::Result<()> {
             connection
                 .execute(
-                    "DELETE FROM notified WHERE session_id = ?1 AND seq = ?2 AND discord_msg_id = ''",
+                    "DELETE FROM notified WHERE session_id = ?1 AND seq = ?2 AND receipts = ''",
                     params![session_id, seq],
                 )
                 .map(|_| ())
         }
     };
 
-    /// Record `discord_msg_id → session` so a reply can continue that session
-    /// (P14 / FR-32).
-    InsertMsgMap as insert_msg_map(discord_msg_id: &str => String, session_id: &str => String) -> () {
+    /// Record `(surface, msg_id) → session` so a reply can continue that
+    /// session (P14 / FR-32; SPEC-004 D-08 namespaced PK).
+    InsertMsgMap as insert_msg_map(surface: &str => String, msg_id: &str => String, session_id: &str => String, action_id: Option<i64> => Option<i64>) -> () {
         |connection: &mut Connection| -> rusqlite::Result<()> {
             connection
                 .execute(
-                    "INSERT OR IGNORE INTO msg_map (discord_msg_id, session_id) VALUES (?1, ?2)",
-                    params![discord_msg_id, session_id],
+                    "INSERT OR IGNORE INTO msg_map (surface, msg_id, session_id, action_id)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![surface, msg_id, session_id, action_id],
                 )
                 .map(|_| ())
         }
     };
 
-    /// Resolve a replied-to Discord message to its session.
-    LookupMsgMap as lookup_msg_map(discord_msg_id: &str => String) -> Option<(String, Option<i64>)> {
+    /// Resolve a replied-to message (on its surface) to its session.
+    LookupMsgMap as lookup_msg_map(surface: &str => String, msg_id: &str => String) -> Option<(String, Option<i64>)> {
         |connection: &mut Connection| -> rusqlite::Result<Option<(String, Option<i64>)>> {
             connection
                 .query_row(
-                    "SELECT session_id, action_id FROM msg_map WHERE discord_msg_id = ?1",
-                    params![discord_msg_id],
+                    "SELECT session_id, action_id FROM msg_map WHERE surface = ?1 AND msg_id = ?2",
+                    params![surface, msg_id],
                     |row| {
                         Ok((
                             row.get::<_, String>("session_id")?,
@@ -1246,6 +1296,91 @@ store_method! {
                     },
                 )
                 .optional()
+        }
+    };
+
+    /// Record the reaction→custom-id map for one posted message (SPEC-004
+    /// D-05; used by the Signal surface from PH-5, created in migration v5).
+    InsertComponentMap as insert_component_map(surface: &str => String, msg_id: &str => String, entries: &[(String, String)] => Vec<(String, String)>) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            let now = now_unix();
+            for (emoji, custom_id) in entries {
+                connection.execute(
+                    "INSERT OR REPLACE INTO component_map (surface, msg_id, emoji, custom_id, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![surface, msg_id, emoji, custom_id, now],
+                )?;
+            }
+            Ok(())
+        }
+    };
+
+    /// Resolve `(surface, msg_id, emoji)` to the custom id a button would have
+    /// carried.
+    LookupComponentMap as lookup_component_map(surface: &str => String, msg_id: &str => String, emoji: &str => String) -> Option<String> {
+        |connection: &mut Connection| -> rusqlite::Result<Option<String>> {
+            connection
+                .query_row(
+                    "SELECT custom_id FROM component_map
+                     WHERE surface = ?1 AND msg_id = ?2 AND emoji = ?3",
+                    params![surface, msg_id, emoji],
+                    |row| row.get::<_, String>("custom_id"),
+                )
+                .optional()
+        }
+    };
+
+    /// Open (or replace) the pending-input flow for one chat (SPEC-004 D-06:
+    /// one row per `(surface, chat_ref)`).
+    PutPending as put_pending(surface: &str => String, chat_ref: &str => String, flow: &str => String, step: &str => String, draft: &str => String, ttl_secs: i64 => i64) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            let now = now_unix();
+            connection
+                .execute(
+                    "INSERT INTO pending_input (surface, chat_ref, flow, step, draft, updated_at, expires_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                     ON CONFLICT(surface, chat_ref) DO UPDATE SET
+                        flow = excluded.flow,
+                        step = excluded.step,
+                        draft = excluded.draft,
+                        updated_at = excluded.updated_at,
+                        expires_at = excluded.expires_at",
+                    params![surface, chat_ref, flow, step, draft, now, now + ttl_secs],
+                )
+                .map(|_| ())
+        }
+    };
+
+    /// Consume the pending-input flow for one chat (delete + return).
+    TakePending as take_pending(surface: &str => String, chat_ref: &str => String) -> Option<PendingInputRow> {
+        |connection: &mut Connection| -> rusqlite::Result<Option<PendingInputRow>> {
+            let row = connection
+                .query_row(
+                    "SELECT surface, chat_ref, flow, step, draft, updated_at, expires_at
+                     FROM pending_input WHERE surface = ?1 AND chat_ref = ?2",
+                    params![surface, chat_ref],
+                    pending_input_row,
+                )
+                .optional()?;
+            connection.execute(
+                "DELETE FROM pending_input WHERE surface = ?1 AND chat_ref = ?2",
+                params![surface, chat_ref],
+            )?;
+            Ok(row)
+        }
+    };
+
+    /// Every pending-input rows past expiry (the ops sweep, FR-113).
+    PendingExpired as pending_expired(now: i64 => i64) -> Vec<PendingInputRow> {
+        |connection: &mut Connection| -> rusqlite::Result<Vec<PendingInputRow>> {
+            let mut statement = connection.prepare(
+                "SELECT surface, chat_ref, flow, step, draft, updated_at, expires_at
+                 FROM pending_input WHERE expires_at <= ?1 ORDER BY expires_at",
+            )?;
+            let rows = statement
+                .query_map(params![now], pending_input_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
         }
     };
 
@@ -1422,7 +1557,7 @@ fn configure_and_migrate(connection: &mut Connection) -> Result<(), StoreError> 
     Ok(())
 }
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
     connection
@@ -1453,6 +1588,9 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
     }
     if current < 4 {
         transaction.execute_batch(MIGRATION_V4)?;
+    }
+    if current < 5 {
+        transaction.execute_batch(MIGRATION_V5)?;
     }
     transaction.execute(
         "INSERT INTO schema_version (v) VALUES (?1)",
@@ -1606,6 +1744,53 @@ ALTER TABLE action ADD COLUMN template TEXT NOT NULL DEFAULT 'fresh';
 ALTER TABLE ui_state ADD COLUMN draft_path TEXT;
 ";
 
+/// v5 — the de-Discord migration (SPEC-004 D-08): destinations become
+/// `(surface, chat_ref)`, `msg_map` gets a namespaced PK, `notified`'s message
+/// column becomes an informational receipts list, and the `component_map` /
+/// `pending_input` tables (Signal, PH-4/5) are created so the migration count
+/// stays one. All five parts are one conceptual change and run in the single
+/// boot transaction above.
+const MIGRATION_V5: &str = "
+ALTER TABLE action ADD COLUMN surface TEXT NOT NULL DEFAULT 'discord';
+ALTER TABLE action ADD COLUMN chat_ref TEXT;
+UPDATE action SET chat_ref = CAST(channel_id AS TEXT) WHERE channel_id IS NOT NULL;
+ALTER TABLE action DROP COLUMN channel_id;
+
+CREATE TABLE msg_map_v5 (
+  surface TEXT NOT NULL,
+  msg_id TEXT NOT NULL,
+  session_id TEXT,
+  action_id INTEGER,
+  PRIMARY KEY (surface, msg_id)
+);
+INSERT INTO msg_map_v5 (surface, msg_id, session_id, action_id)
+  SELECT 'discord', discord_msg_id, session_id, action_id FROM msg_map;
+DROP TABLE msg_map;
+ALTER TABLE msg_map_v5 RENAME TO msg_map;
+
+ALTER TABLE notified RENAME COLUMN discord_msg_id TO receipts;
+
+CREATE TABLE component_map (
+  surface TEXT NOT NULL,
+  msg_id TEXT NOT NULL,
+  emoji TEXT NOT NULL,
+  custom_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (surface, msg_id, emoji)
+);
+
+CREATE TABLE pending_input (
+  surface TEXT NOT NULL,
+  chat_ref TEXT NOT NULL,
+  flow TEXT NOT NULL,
+  step TEXT NOT NULL,
+  draft TEXT NOT NULL DEFAULT '{}',
+  updated_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  PRIMARY KEY (surface, chat_ref)
+);
+";
+
 impl std::fmt::Debug for StoreHandle {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("StoreHandle(_)")
@@ -1716,7 +1901,8 @@ fn action_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ActionRow> {
         run_id: row.get("run_id")?,
         session_id: row.get("session_id")?,
         parent_action_id: row.get("parent_action_id")?,
-        channel_id: row.get("channel_id")?,
+        surface: row.get("surface")?,
+        chat_ref: row.get("chat_ref")?,
         label: row.get("label")?,
         prompt_sent: row.get("prompt_sent")?,
         state: action_state(row)?,
@@ -1741,6 +1927,18 @@ fn action_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ActionRow> {
         last_event_at: row.get("last_event_at")?,
         stall_ping_at: row.get("stall_ping_at")?,
         template: row.get("template")?,
+    })
+}
+
+fn pending_input_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PendingInputRow> {
+    Ok(PendingInputRow {
+        surface: row.get("surface")?,
+        chat_ref: row.get("chat_ref")?,
+        flow: row.get("flow")?,
+        step: row.get("step")?,
+        draft: row.get("draft")?,
+        updated_at: row.get("updated_at")?,
+        expires_at: row.get("expires_at")?,
     })
 }
 

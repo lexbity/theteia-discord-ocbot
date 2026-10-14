@@ -18,7 +18,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{FakeDiscord, FakeOpenCode, context, init_repo, spawn_harness, write_file};
+use common::{FakeChat, FakeOpenCode, context, init_repo, spawn_harness, write_file};
 use ocbot::adapters::git::GitAdapter;
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::reconcile::reconcile_git_states;
@@ -73,7 +73,7 @@ fn reconcile_ctx(store: &StoreHandle) -> Arc<ocbot::app::context::AppContext> {
         store.clone(),
         Arc::new(FakeOpenCode::new()),
         Arc::new(GitAdapter::new()),
-        Arc::new(FakeDiscord::new()),
+        Arc::new(FakeChat::new()),
         OPERATOR,
         Some(CHANNEL),
     )

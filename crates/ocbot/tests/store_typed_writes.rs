@@ -51,7 +51,7 @@ async fn store_typed_writes() {
 
     // --- staged action writes ---
     let action = store
-        .insert_action(run, Some(7), "lbl", "p0", 1)
+        .insert_action(run, Some("7"), "lbl", "p0", 1)
         .await
         .expect("insert action");
     assert_eq!(
@@ -93,7 +93,7 @@ async fn store_typed_writes() {
     );
 
     let child = store
-        .insert_staged_child(run, Some(7), "child", "pc", "fresh", 2, action)
+        .insert_staged_child(run, Some("7"), "child", "pc", "fresh", 2, action)
         .await
         .expect("staged child");
     let child_row = store.action(child).await.expect("read").expect("row");
@@ -263,20 +263,35 @@ async fn store_typed_writes() {
 
     // --- audit / ui state / seen / cursor / inbox / mute ---
     store
-        .audit(CHANNEL, "run", Some(action), "ok")
+        .audit(&format!("discord:{CHANNEL}"), "run", Some(action), "ok")
         .await
         .expect("audit");
-    store.set_ui_cwd(CHANNEL, "/cwd").await.expect("ui cwd");
     store
-        .set_draft_path(CHANNEL, "/draft")
+        .set_ui_cwd(&format!("discord:{CHANNEL}"), "/cwd")
+        .await
+        .expect("ui cwd");
+    store
+        .set_draft_path(&format!("discord:{CHANNEL}"), "/draft")
         .await
         .expect("set draft");
     assert_eq!(
-        store.draft_path(CHANNEL).await.expect("draft"),
+        store
+            .draft_path(&format!("discord:{CHANNEL}"))
+            .await
+            .expect("draft"),
         Some("/draft".to_owned())
     );
-    store.clear_draft_path(CHANNEL).await.expect("clear draft");
-    assert_eq!(store.draft_path(CHANNEL).await.expect("draft"), None);
+    store
+        .clear_draft_path(&format!("discord:{CHANNEL}"))
+        .await
+        .expect("clear draft");
+    assert_eq!(
+        store
+            .draft_path(&format!("discord:{CHANNEL}"))
+            .await
+            .expect("draft"),
+        None
+    );
     store
         .upsert_seen("ses_seen", Some("/tmp/seen"))
         .await
@@ -292,7 +307,7 @@ async fn store_typed_writes() {
         .await
         .expect("unclaim notified");
     store
-        .insert_msg_map("dm_1", "ses")
+        .insert_msg_map("discord", "dm_1", "ses", None)
         .await
         .expect("insert msg map");
     assert!(store.toggle_mute("kind", "key").await.expect("mute on"));

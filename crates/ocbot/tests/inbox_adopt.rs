@@ -17,7 +17,7 @@ mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{FakeDiscord, FakeGit, FakeOpenCode, context};
+use common::{FakeChat, FakeGit, FakeOpenCode, context};
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::completion::DetectedBy;
 use ocbot::app::handlers::adopt;
@@ -51,7 +51,7 @@ fn ext_snapshot() -> AssistantSnapshot {
 fn ctx_for(
     store: &StoreHandle,
     opencode: Arc<dyn ocbot_core::ports::OpenCodePort>,
-    discord: &FakeDiscord,
+    discord: &FakeChat,
 ) -> Arc<ocbot::app::context::AppContext> {
     context(
         store.clone(),
@@ -83,7 +83,7 @@ async fn external_completion_posts_once_and_a_reply_adopts() {
     opencode.set_sessions(vec![ext_session()]);
     opencode.set_activity(EXT_SESSION, Activity::Idle);
     opencode.set_snapshot(EXT_SESSION, ext_snapshot());
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, Arc::new(opencode.clone()), &discord);
 
     // First poll: the external completion lands in the inbox.
@@ -111,7 +111,7 @@ async fn external_completion_posts_once_and_a_reply_adopts() {
     let msg_id = inbox_posts[0].id;
     assert!(
         store
-            .lookup_msg_map(&msg_id.to_string())
+            .lookup_msg_map("discord", &msg_id.to_string())
             .await
             .expect("msg_map")
             .is_some()
@@ -135,9 +135,15 @@ async fn external_completion_posts_once_and_a_reply_adopts() {
     );
 
     // Replying to the inbox post adopts the session (AC-11).
-    adopt::adopt(&ctx, EXT_SESSION, "keep going", CHANNEL, OPERATOR)
-        .await
-        .expect("adopt");
+    adopt::adopt(
+        &ctx,
+        EXT_SESSION,
+        "keep going",
+        CHANNEL,
+        &format!("discord:{OPERATOR}"),
+    )
+    .await
+    .expect("adopt");
     let adopted = store.running_actions().await.expect("running");
     assert_eq!(adopted.len(), 1);
     let run = store
@@ -201,7 +207,7 @@ async fn a_muted_directory_is_silent() {
     opencode.set_sessions(vec![ext_session()]);
     opencode.set_activity(EXT_SESSION, Activity::Idle);
     opencode.set_snapshot(EXT_SESSION, ext_snapshot());
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, Arc::new(opencode), &discord);
 
     inbox::tick(&ctx, DetectedBy::Fallback)

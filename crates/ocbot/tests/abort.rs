@@ -16,7 +16,7 @@ mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{FakeDiscord, FakeGit, FakeOpenCode, context_with, seed_running};
+use common::{FakeChat, FakeGit, FakeOpenCode, context_with, seed_running};
 use ocbot::adapters::clock::SystemClock;
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::handlers::abort;
@@ -34,7 +34,7 @@ fn slash_abort() -> InteractionSource {
         kind: SourceKind::SlashCommand {
             name: "abort".to_owned(),
         },
-        user_id: OPERATOR,
+        user_id: format!("discord:{OPERATOR}"),
         channel_id: CHANNEL,
         guild_id: Some(1),
         message_id: None,
@@ -45,7 +45,7 @@ fn slash_abort() -> InteractionSource {
 async fn ctx_for(
     store: &StoreHandle,
     opencode: Arc<dyn ocbot_core::ports::OpenCodePort>,
-    discord: &FakeDiscord,
+    discord: &FakeChat,
     abort_timeout: u64,
 ) -> Arc<ocbot::app::context::AppContext> {
     let ctx = context_with(
@@ -59,7 +59,10 @@ async fn ctx_for(
         OPERATOR,
         Some(CHANNEL),
     );
-    store.set_ui_cwd(OPERATOR, DIR).await.expect("cwd");
+    store
+        .set_ui_cwd(&format!("discord:{OPERATOR}"), DIR)
+        .await
+        .expect("cwd");
     ctx
 }
 
@@ -69,7 +72,7 @@ async fn abort_is_immediate_when_the_session_is_already_idle() {
     let seeded = seed_running(&store, DIR, Some("main"), None, CHANNEL, "poke", SESSION).await;
     let opencode = FakeOpenCode::new();
     opencode.set_activity(SESSION, Activity::Idle);
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let handle = opencode.clone();
     let ctx = ctx_for(&store, Arc::new(opencode), &discord, 30).await;
 
@@ -109,7 +112,7 @@ async fn abort_waits_for_the_server_to_confirm_idle() {
         tokio::time::sleep(Duration::from_millis(700)).await;
         opencode_clone.set_activity(SESSION, Activity::Idle);
     });
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let handle = opencode.clone();
     let ctx = ctx_for(&store, Arc::new(opencode), &discord, 30).await;
 
@@ -140,7 +143,7 @@ async fn a_still_busy_session_is_never_prematurely_aborted() {
     let seeded = seed_running(&store, DIR, Some("main"), None, CHANNEL, "poke", SESSION).await;
     let opencode = FakeOpenCode::new();
     opencode.set_activity(SESSION, Activity::Busy); // never goes idle
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     // A tight abort budget so the test does not wait the full default.
     let ctx = ctx_for(&store, Arc::new(opencode), &discord, 1).await;
 

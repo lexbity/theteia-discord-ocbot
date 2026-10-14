@@ -13,7 +13,7 @@
 
 mod common;
 
-use common::{FakeDiscord, FakeGit, FakeOpenCode, context};
+use common::{FakeChat, FakeGit, FakeOpenCode, context};
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::guard::Decision;
 use ocbot::app::interaction::{InteractionSource, SourceKind, TextInput};
@@ -28,7 +28,7 @@ fn slash_run(user: u64, channel: u64, guild: Option<u64>) -> InteractionSource {
         kind: SourceKind::SlashCommand {
             name: "run".to_owned(),
         },
-        user_id: user,
+        user_id: format!("discord:{user}"),
         channel_id: channel,
         guild_id: guild,
         message_id: None,
@@ -41,7 +41,7 @@ fn slash_status(user: u64, channel: u64, guild: Option<u64>) -> InteractionSourc
         kind: SourceKind::SlashCommand {
             name: "status".to_owned(),
         },
-        user_id: user,
+        user_id: format!("discord:{user}"),
         channel_id: channel,
         guild_id: guild,
         message_id: None,
@@ -60,7 +60,7 @@ fn button(
         kind: SourceKind::Component {
             custom_id: custom_id.to_owned(),
         },
-        user_id: user,
+        user_id: format!("discord:{user}"),
         channel_id: channel,
         guild_id: guild,
         message_id: Some(message),
@@ -80,7 +80,7 @@ fn modal(user: u64, channel: u64, custom_id: &str, values: Vec<(&str, &str)>) ->
                 })
                 .collect(),
         },
-        user_id: user,
+        user_id: format!("discord:{user}"),
         channel_id: channel,
         guild_id: Some(OPS),
         message_id: None,
@@ -93,7 +93,7 @@ fn slash_named(name: &str, user: u64, channel: u64, guild: Option<u64>) -> Inter
         kind: SourceKind::SlashCommand {
             name: name.to_owned(),
         },
-        user_id: user,
+        user_id: format!("discord:{user}"),
         channel_id: channel,
         guild_id: guild,
         message_id: None,
@@ -157,12 +157,7 @@ fn all_handler_sources(channel: u64, guild: Option<u64>) -> Vec<InteractionSourc
 }
 
 /// Asserts a source is refused and nothing reached any port.
-fn assert_quiet(
-    refused: &PlanOutcome,
-    opencode: &FakeOpenCode,
-    git: &FakeGit,
-    discord: &FakeDiscord,
-) {
+fn assert_quiet(refused: &PlanOutcome, opencode: &FakeOpenCode, git: &FakeGit, discord: &FakeChat) {
     assert!(
         matches!(refused, PlanOutcome::Deny | PlanOutcome::Ignore),
         "refused: {refused:?}"
@@ -186,13 +181,13 @@ async fn wrong_user_is_denied_with_zero_port_calls_for_every_handler() {
     common::seed_project(&store, "/tmp/x").await;
     let run = store.insert_run("/tmp/x", "free").await.expect("run");
     store
-        .insert_action(run, Some(i64::try_from(OPS).unwrap()), "label", "prompt", 1)
+        .insert_action(run, Some(&OPS.to_string()), "label", "prompt", 1)
         .await
         .expect("action");
 
     let opencode = FakeOpenCode::new();
     let git = FakeGit::inert();
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = context(
         store,
         Arc::new(opencode.clone()),
@@ -204,7 +199,7 @@ async fn wrong_user_is_denied_with_zero_port_calls_for_every_handler() {
 
     for source in all_handler_sources(OPS, Some(OPS)) {
         let mut impostor = source.clone();
-        impostor.user_id = OPERATOR + 1;
+        impostor.user_id = format!("discord:{}", OPERATOR + 1);
         let outcome = router::guarded_plan(&ctx, &impostor).await;
         assert_eq!(
             outcome_kind(&outcome),
@@ -221,13 +216,13 @@ async fn foreign_channel_is_ignored_with_zero_port_calls_for_every_handler() {
     common::seed_project(&store, "/tmp/x").await;
     let run = store.insert_run("/tmp/x", "free").await.expect("run");
     store
-        .insert_action(run, Some(i64::try_from(OPS).unwrap()), "label", "prompt", 1)
+        .insert_action(run, Some(&OPS.to_string()), "label", "prompt", 1)
         .await
         .expect("action");
 
     let opencode = FakeOpenCode::new();
     let git = FakeGit::inert();
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = context(
         store,
         Arc::new(opencode.clone()),
@@ -256,13 +251,13 @@ async fn allowed_operator_plans_without_any_port_calls() {
     common::seed_project(&store, "/tmp/x").await;
     let run = store.insert_run("/tmp/x", "free").await.expect("run");
     store
-        .insert_action(run, Some(i64::try_from(OPS).unwrap()), "label", "prompt", 1)
+        .insert_action(run, Some(&OPS.to_string()), "label", "prompt", 1)
         .await
         .expect("action");
 
     let opencode = FakeOpenCode::new();
     let git = FakeGit::inert();
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = context(
         store,
         Arc::new(opencode.clone()),
@@ -298,7 +293,10 @@ fn guard_decides_per_fr1_fr2() {
     // The pure part of the chokepoint, independent of routing.
     use ocbot::app::guard::Guard;
     let guard = Guard {
-        allowed_user_id: 42,
+        allowed_actors: vec![ocbot_core::ActorId::from_parts(
+            ocbot_core::Surface::Discord,
+            "42",
+        )],
         ops_channel: Some(7),
         inbox_channel: None,
     };

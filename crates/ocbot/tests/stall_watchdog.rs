@@ -13,7 +13,7 @@ mod common;
 
 use std::sync::Arc;
 
-use common::{FakeClock, FakeDiscord, FakeGit, FakeOpenCode, context_with, seed_running};
+use common::{FakeChat, FakeClock, FakeGit, FakeOpenCode, context_with, seed_running};
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::stall;
 use ocbot_core::ports::Clock;
@@ -42,7 +42,7 @@ async fn set_times(store: &StoreHandle, action_id: i64, started: i64, last: i64)
 async fn stall_pings_once_then_resets_with_activity() {
     let store = StoreHandle::open_in_memory().expect("store");
     let opencode: Arc<dyn ocbot_core::ports::OpenCodePort> = Arc::new(FakeOpenCode::new());
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let clock = Arc::new(FakeClock::at(100_000));
     let ctx = context_with(
         store.clone(),

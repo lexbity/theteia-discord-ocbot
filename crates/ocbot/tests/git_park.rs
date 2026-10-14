@@ -17,7 +17,7 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::sync::Arc;
 
-use common::{FakeDiscord, FakeGit, FakeOpenCode, append_file, context, init_repo, write_file};
+use common::{FakeChat, FakeGit, FakeOpenCode, append_file, context, init_repo, write_file};
 use ocbot::adapters::git::GitAdapter;
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::handlers::park;
@@ -44,7 +44,7 @@ fn make_repo(tmp: &TempDir) -> (std::path::PathBuf, String) {
 fn ctx_for(
     store: &StoreHandle,
     repo: &Path,
-    discord: &FakeDiscord,
+    discord: &FakeChat,
 ) -> Arc<ocbot::app::context::AppContext> {
     context(
         store.clone(),
@@ -77,9 +77,9 @@ async fn park_branches_the_attempt_and_returns_to_a_clean_tree() {
     append_file(&repo, "README.md", "edit\n");
     write_file(&repo, "new.txt", "untracked content\n");
 
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, &repo, &discord);
-    let outcome = park::begin_park(&ctx, seeded.action_id, OPERATOR)
+    let outcome = park::begin_park(&ctx, seeded.action_id, &format!("discord:{OPERATOR}"))
         .await
         .expect("park");
     assert!(outcome.unwrap_or_default().contains("parked"));
@@ -152,9 +152,9 @@ async fn park_refuses_an_oversized_untracked_file() {
     let file = std::fs::File::create(&big).expect("create");
     file.set_len(51 * 1024 * 1024).expect("set_len");
 
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, &repo, &discord);
-    let outcome = park::begin_park(&ctx, seeded.action_id, OPERATOR)
+    let outcome = park::begin_park(&ctx, seeded.action_id, &format!("discord:{OPERATOR}"))
         .await
         .expect("park returns a refusal, not an error");
     assert!(
@@ -190,9 +190,9 @@ async fn park_of_a_no_change_attempt_still_branches() {
     )
     .await;
 
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, &repo, &discord);
-    park::begin_park(&ctx, seeded.action_id, OPERATOR)
+    park::begin_park(&ctx, seeded.action_id, &format!("discord:{OPERATOR}"))
         .await
         .expect("park");
     assert_eq!(
@@ -259,9 +259,9 @@ async fn park_commit_failure_unstages_the_index_and_keeps_files() {
     write_file(&repo, "new.txt", "attempt content\n");
     install_failing_ref_hook(&repo);
 
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = ctx_for(&store, &repo, &discord);
-    let outcome = park::begin_park(&ctx, seeded.action_id, OPERATOR)
+    let outcome = park::begin_park(&ctx, seeded.action_id, &format!("discord:{OPERATOR}"))
         .await
         .expect("a failed commit is a handled park failure, not an error");
     assert!(

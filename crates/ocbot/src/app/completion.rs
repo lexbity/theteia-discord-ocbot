@@ -107,13 +107,13 @@ async fn build_and_deliver(
     let context = ReportContext {
         action_id: action.id,
         is_git: action_is_git(ctx, action).await,
-        operator_id: ctx.guard.allowed_user_id,
+        operator_id: ctx.guard.discord_operator().unwrap_or(0),
         followups: action.followups,
     };
     let message = report(&action.label, outcome, &footer, &context, &ctx.redactor);
-    let channel = action.channel_id;
+    let dest = crate::app::handlers::support::destination_for(action)?;
 
-    let message_id = post_report(ctx, channel, &message).await?;
+    let receipt = post_report(ctx, &dest, &message).await?;
 
     let outcome_kind = match outcome {
         Outcome::Completed { .. } => "completed",
@@ -131,7 +131,7 @@ async fn build_and_deliver(
         .deliver_report(
             action.id,
             target,
-            &message_id,
+            &receipt,
             outcome_kind,
             Some(&full_body),
             &footer_json,
@@ -146,12 +146,10 @@ async fn build_and_deliver(
             ctx.metrics
                 .observe_idle_to_report((secs_to_f64(now_unix()) - secs_to_f64(started)).max(0.0));
         }
-        if let (Some(origin), Some(channel)) = (action.origin_msg_id.clone(), channel) {
-            let _ = ctx
-                .discord
+        if let Some(origin) = action.origin_msg_id.clone() {
+            ctx.chat
                 .react(
-                    u64::try_from(channel).unwrap_or(u64::MAX),
-                    origin.parse().unwrap_or_default(),
+                    &crate::app::handlers::support::discord_receipt_str(&origin),
                     '✅',
                 )
                 .await;
@@ -174,19 +172,11 @@ async fn build_and_deliver(
 /// Post the report where the run originated (P10: reports are new messages).
 async fn post_report(
     ctx: &Arc<AppContext>,
-    channel: Option<i64>,
+    dest: &ocbot_core::Destination,
     message: &ocbot_core::OutgoingMessage,
 ) -> Result<String, AppError> {
-    match channel {
-        Some(channel) => {
-            let channel = u64::try_from(channel).unwrap_or(u64::MAX);
-            let message_id = ctx.discord.post(channel, message).await?;
-            Ok(message_id.to_string())
-        }
-        None => Err(AppError::Other(
-            "action has no channel (invariant)".to_owned(),
-        )),
-    }
+    let receipt = ctx.chat.post(dest, message).await?;
+    Ok(receipt.to_receipt_string())
 }
 
 fn report_body(outcome: &Outcome) -> String {

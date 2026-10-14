@@ -16,12 +16,12 @@ use std::sync::Arc;
 
 use ocbot::adapters::fs::FsAdapter;
 use ocbot::adapters::store::StoreHandle;
-use ocbot::app::context::{AppContext, DiscordPort};
+use ocbot::app::context::{AppContext, ChatPort};
 use ocbot::app::handlers::{files, ls};
 use ocbot::app::interaction::{InteractionSource, SourceKind, TextInput};
 use ocbot_core::ports::{FsPort, GitPort, OpenCodePort};
 
-use common::{FakeClock, FakeDiscord, FakeGit, FakeOpenCode};
+use common::{FakeChat, FakeClock, FakeGit, FakeOpenCode};
 
 const OPERATOR: u64 = 42;
 const CHANNEL: u64 = 7;
@@ -29,7 +29,7 @@ const CHANNEL: u64 = 7;
 struct Rig {
     ctx: Arc<AppContext>,
     store: StoreHandle,
-    discord: FakeDiscord,
+    discord: FakeChat,
     root: PathBuf,
     inbox: PathBuf,
     tmp: tempfile::TempDir,
@@ -47,8 +47,8 @@ fn rig() -> Rig {
     let fs: Arc<dyn FsPort> = Arc::new(
         FsAdapter::new(vec![root.clone()], inbox.clone(), false, clock.clone()).expect("fs"),
     );
-    let discord = FakeDiscord::new();
-    let discord_port: Arc<dyn DiscordPort> = Arc::new(discord.clone());
+    let discord = FakeChat::new();
+    let discord_port: Arc<dyn ChatPort> = Arc::new(discord.clone());
     let ctx = common::context_with_fs(
         store.clone(),
         opencode,
@@ -76,7 +76,7 @@ fn button_source(custom_id: &str) -> InteractionSource {
         kind: SourceKind::Component {
             custom_id: custom_id.to_owned(),
         },
-        user_id: OPERATOR,
+        user_id: format!("discord:{OPERATOR}"),
         channel_id: CHANNEL,
         guild_id: Some(1),
         message_id: Some(10),
@@ -93,7 +93,7 @@ fn modal_source(custom_id: &str, id: &str, value: &str) -> InteractionSource {
                 value: value.to_owned(),
             }],
         },
-        user_id: OPERATOR,
+        user_id: format!("discord:{OPERATOR}"),
         channel_id: CHANNEL,
         guild_id: Some(1),
         message_id: None,
@@ -124,7 +124,7 @@ async fn symlink_swapped_between_browse_and_select_is_refused() {
     assert!(selected.unwrap().contains("inside.txt"));
     let first_draft = rig
         .store
-        .draft_path(OPERATOR)
+        .draft_path(&format!("discord:{OPERATOR}"))
         .await
         .expect("draft")
         .unwrap();
@@ -147,7 +147,10 @@ async fn symlink_swapped_between_browse_and_select_is_refused() {
     );
     // The refused selection did not overwrite the draft.
     assert_eq!(
-        rig.store.draft_path(OPERATOR).await.expect("draft"),
+        rig.store
+            .draft_path(&format!("discord:{OPERATOR}"))
+            .await
+            .expect("draft"),
         Some(first_draft)
     );
 }
@@ -175,9 +178,14 @@ async fn out_of_root_cd_has_zero_side_effects() {
 #[tokio::test]
 async fn attachments_are_sanitized_under_the_inbox() {
     let rig = rig();
-    let path = files::ingest(&rig.ctx, OPERATOR, "../evil name.txt", b"payload")
-        .await
-        .expect("ingest");
+    let path = files::ingest(
+        &rig.ctx,
+        &format!("discord:{OPERATOR}"),
+        "../evil name.txt",
+        b"payload",
+    )
+    .await
+    .expect("ingest");
     let path = PathBuf::from(path);
     assert!(
         path.starts_with(&rig.inbox),
@@ -191,7 +199,10 @@ async fn attachments_are_sanitized_under_the_inbox() {
     );
     assert!(path.exists());
     assert_eq!(
-        rig.store.draft_path(OPERATOR).await.expect("draft"),
+        rig.store
+            .draft_path(&format!("discord:{OPERATOR}"))
+            .await
+            .expect("draft"),
         Some(path.to_string_lossy().into_owned())
     );
 }

@@ -12,7 +12,6 @@ use crate::adapters::store::ResetIntentRow;
 use crate::app::context::AppContext;
 use crate::app::crashpoint::checkpoint;
 use crate::app::error::AppError;
-use crate::app::handlers::support;
 use crate::app::interaction::InteractionSource;
 
 /// Execute `v1:reset:<sha>`: post the confirmation message (a reset is not
@@ -22,20 +21,25 @@ pub async fn confirm(
     source: &InteractionSource,
     sha: &str,
 ) -> Result<Option<String>, AppError> {
-    let dir = support::history_dir(ctx, source.user_id).await?;
+    let dir = crate::app::handlers::support::history_dir(ctx, &source.user_id).await?;
     let content = format!(
         "Reset `{}` to `{}`?\nThis creates `superseded/<ts>` first, then runs `git reset --hard` (FR-28). The tree must be clean.",
         dir,
         short(sha)
     );
-    let message = support::with_button(
+    let message = crate::app::handlers::support::with_button(
         content,
         "Confirm reset",
         format!("v1:resetgo:{sha}"),
         ButtonKind::Danger,
-        source.user_id,
+        &source.user_id,
     );
-    ctx.discord.post(source.channel_id, &message).await?;
+    ctx.chat
+        .post(
+            &ocbot_core::Destination::discord(source.channel_id),
+            &message,
+        )
+        .await?;
     Ok(Some("confirm to reset".to_owned()))
 }
 
@@ -45,8 +49,8 @@ pub async fn execute_reset(
     source: &InteractionSource,
     sha: &str,
 ) -> Result<Option<String>, AppError> {
-    let dir = support::history_dir(ctx, source.user_id).await?;
-    begin_reset(ctx, &dir, sha, source.user_id, Some(source.channel_id)).await
+    let dir = crate::app::handlers::support::history_dir(ctx, &source.user_id).await?;
+    begin_reset(ctx, &dir, sha, &source.user_id, Some(source.channel_id)).await
 }
 
 /// Validate, record the intent, and drive the sequence.
@@ -54,11 +58,11 @@ pub async fn begin_reset(
     ctx: &Arc<AppContext>,
     dir_text: &str,
     sha: &str,
-    operator_id: u64,
+    operator: &str,
     channel: Option<u64>,
 ) -> Result<Option<String>, AppError> {
     let dir = Path::new(dir_text);
-    if !support::is_git_dir(ctx, dir).await? {
+    if !crate::app::handlers::support::is_git_dir(ctx, dir).await? {
         return Err(AppError::Other("not a git repository".to_owned()));
     }
     if let Some(holder) = ctx.store.lock_holder(dir_text).await? {
@@ -95,14 +99,14 @@ pub async fn begin_reset(
         sup_branch,
         step: 0,
     };
-    resume(ctx, &intent, operator_id, channel).await
+    resume(ctx, &intent, operator, channel).await
 }
 
 /// Resume a recorded reset intent from its `step`. Idempotent.
 pub async fn resume(
     ctx: &Arc<AppContext>,
     intent: &ResetIntentRow,
-    operator_id: u64,
+    operator: &str,
     channel: Option<u64>,
 ) -> Result<Option<String>, AppError> {
     let dir = Path::new(&intent.dir);
@@ -133,7 +137,7 @@ pub async fn resume(
     ctx.store.delete_reset_intent(intent.id).await?;
     ctx.store.retire_active_session(&intent.dir).await?;
     ctx.store
-        .audit(operator_id, "reset", None, &intent.target_sha)
+        .audit(operator, "reset", None, &intent.target_sha)
         .await?;
 
     let summary = format!(
@@ -141,8 +145,11 @@ pub async fn resume(
         short(&intent.target_sha)
     );
     if let Some(channel) = channel {
-        ctx.discord
-            .post(channel, &support::simple(summary.clone(), operator_id))
+        ctx.chat
+            .post(
+                &ocbot_core::Destination::discord(channel),
+                &crate::app::handlers::support::simple(summary.clone(), operator),
+            )
             .await?;
     }
     Ok(Some(summary))

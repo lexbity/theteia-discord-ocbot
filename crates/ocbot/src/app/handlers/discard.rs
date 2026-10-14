@@ -17,7 +17,7 @@ const DISCARD_FROM: [State; 3] = [State::Reported, State::Errored, State::Aborte
 pub async fn execute_discard(
     ctx: &Arc<AppContext>,
     action_id: i64,
-    operator_id: u64,
+    operator: &str,
 ) -> Result<Option<String>, AppError> {
     let action = ctx
         .store
@@ -47,7 +47,7 @@ pub async fn execute_discard(
         .await?;
     ctx.store.retire_active_session(&text).await?;
     ctx.store
-        .audit(operator_id, "discard", Some(action_id), "discarded")
+        .audit(operator, "discard", Some(action_id), "discarded")
         .await?;
     Ok(Some(format!("discarded **{}**", action.label)))
 }

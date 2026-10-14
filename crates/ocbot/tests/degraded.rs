@@ -13,7 +13,7 @@ mod common;
 
 use std::sync::Arc;
 
-use common::{FakeClock, FakeDiscord, FakeGit, FakeOpenCode, context_with, seed_running};
+use common::{FakeChat, FakeClock, FakeGit, FakeOpenCode, context_with, seed_running};
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::degraded;
 use ocbot_core::State;
@@ -37,7 +37,7 @@ async fn announces_each_transition_once_and_never_touches_actions() {
     .await;
     let opencode = FakeOpenCode::new();
     let opencode_port: Arc<dyn OpenCodePort> = Arc::new(opencode.clone());
-    let discord = FakeDiscord::new();
+    let discord = FakeChat::new();
     let ctx = context_with(
         store.clone(),
         opencode_port,
