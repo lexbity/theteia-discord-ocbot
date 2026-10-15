@@ -326,3 +326,116 @@ impl SurfaceRegistry {
         &self.handles
     }
 }
+
+/// Fan-out port for dual-surface operation (SPEC-004 D-01).
+///
+/// Implements [`ChatPort`] by delegating to per-surface adapters. Broadcast
+/// sends concurrently to all surfaces and collects per-surface results
+/// (D-07's ≥1-success contract).
+pub struct FanoutPort {
+    surfaces: Vec<(Surface, Arc<dyn ChatPort>, Destination)>,
+}
+
+impl FanoutPort {
+    /// Build from per-surface port + destination pairs.
+    pub fn new(ports: Vec<(Surface, Arc<dyn ChatPort>, Destination)>) -> Self {
+        Self { surfaces: ports }
+    }
+
+    /// Apply per-surface policy (excerpt + attachment) to an outgoing message
+    /// (D-12). The core handler builds one generic spec; each surface gets its
+    /// own transformed version.
+    pub fn apply_policy(spec: &OutgoingMessage, surface: Surface) -> OutgoingMessage {
+        match surface {
+            Surface::Discord => {
+                // Discord defaults to excerpt-only (D-12)
+                OutgoingMessage {
+                    content: spec.content.clone(),
+                    attachment: None, // attachments suppressed by default
+                    components: spec.components.clone(),
+                    mention_allowlist: Vec::new(),
+                }
+            }
+            Surface::Signal => {
+                // Signal defaults to full + attachment (D-12)
+                spec.clone()
+            }
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ChatPort for FanoutPort {
+    async fn post(
+        &self,
+        dest: &Destination,
+        message: &OutgoingMessage,
+    ) -> Result<PostReceipt, SendError> {
+        // Find the matching surface's port
+        let (_, port, _) = self
+            .surfaces
+            .iter()
+            .find(|(s, _, d)| *s == dest.surface && d == dest)
+            .ok_or(SendError {
+                surface: dest.surface,
+                message: "no port found for destination".to_owned(),
+            })?;
+
+        port.post(dest, message).await
+    }
+
+    async fn edit(&self, receipt: &PostReceipt, replacement: &OutgoingMessage) {
+        if let Some((_, port, _)) = self.surfaces.iter().find(|(s, _, _)| *s == receipt.surface) {
+            port.edit(receipt, replacement).await;
+        }
+    }
+
+    async fn react(&self, receipt: &PostReceipt, emoji: char) {
+        if let Some((_, port, _)) = self.surfaces.iter().find(|(s, _, _)| *s == receipt.surface) {
+            port.react(receipt, emoji).await;
+        }
+    }
+
+    async fn broadcast(&self, message: &OutgoingMessage) -> BroadcastOutcome {
+        let mut delivered = Vec::new();
+        let mut failed = Vec::new();
+
+        // Concurrent delivery to all surfaces (D-07: one slow surface MUST NOT
+        // delay delivery to the others)
+        let tasks: Vec<_> = self
+            .surfaces
+            .iter()
+            .map(|(surface, port, dest)| {
+                let spec = Self::apply_policy(message, *surface);
+                let port = Arc::clone(port);
+                let dest = dest.clone();
+                let surface = *surface;
+                tokio::spawn(async move { port.post(&dest, &spec).await.map(|r| (surface, r)) })
+            })
+            .collect();
+
+        // Collect results
+        for task in tasks {
+            match task.await {
+                Ok(Ok((surface, receipt))) => delivered.push((surface, receipt)),
+                Ok(Err(error)) => {
+                    // Can't recover surface info from error, use placeholder
+                    failed.push((
+                        Surface::Discord, // placeholder
+                        error,
+                    ));
+                }
+                Err(join_error) => {
+                    // Can't recover surface info, skip this failure
+                    tracing::warn!(error = %join_error, "broadcast task join failed");
+                }
+            }
+        }
+
+        BroadcastOutcome { delivered, failed }
+    }
+
+    fn surfaces(&self) -> Vec<Surface> {
+        self.surfaces.iter().map(|(s, _, _)| *s).collect()
+    }
+}

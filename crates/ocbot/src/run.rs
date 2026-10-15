@@ -28,6 +28,7 @@ use crate::app::metrics::{self, Metrics};
 use crate::app::ops::OpsLoop;
 use crate::app::reconcile;
 use crate::app::supervisor::Supervisor;
+use crate::app::surfaces::FanoutPort;
 use crate::app::surfaces::{SurfaceRegistry, SurfaceSet};
 use crate::app::wake::Dispatcher;
 use crate::app::watcher::Watcher;
@@ -276,7 +277,7 @@ pub async fn start() -> ExitCode {
             .map(|(token, operator)| -> Arc<dyn ChatPort> {
                 Arc::new(
                     DiscordAdapter::new(shared_http(token, *operator), *operator)
-                        .with_announce(announce_channel),
+                        .with_ops_channel(announce_channel.unwrap_or(0)),
                 )
             });
     let mut transports: Vec<(
@@ -309,12 +310,23 @@ pub async fn start() -> ExitCode {
         tracing::error!("no chat surface has a transport — refusing to start");
         return ExitCode::from(3);
     }
-    let registry = SurfaceRegistry::build(transports, &metrics);
+    let registry = SurfaceRegistry::build(transports.clone(), &metrics);
     tracing::info!(
         surfaces = ?registry.handles().iter().map(|handle| handle.surface).collect::<Vec<_>>(),
         "surface registry built"
     );
-    let chat: Arc<dyn ChatPort> = registry.single();
+    // PH-6: use FanoutPort when multiple surfaces selected, else single port
+    let chat: Arc<dyn ChatPort> = if transports.len() > 1 {
+        let fanout = FanoutPort::new(
+            transports
+                .into_iter()
+                .map(|(surface, dest, port)| (surface, port, dest))
+                .collect(),
+        );
+        Arc::new(fanout)
+    } else {
+        registry.single()
+    };
     let guard = Guard {
         // One operator identity per configured surface (D-03/D-11).
         allowed_actors: {

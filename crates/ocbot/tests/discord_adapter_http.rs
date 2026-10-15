@@ -256,20 +256,20 @@ async fn broadcast_posts_to_the_announce_channel_or_reports_the_miss() {
     let server = MockServer::start().await;
     mount_message_route(&server, "/api/v10/channels/9/messages", "POST").await;
 
-    let with_announce = adapter(&server).with_announce(Some(9));
-    let outcome = with_announce.broadcast(&message("degraded notice")).await;
+    let with_ops = adapter(&server).with_ops_channel(9);
+    let outcome = with_ops.broadcast(&message("degraded notice")).await;
     assert!(outcome.any_delivered(), "{outcome:?}");
     assert_eq!(outcome.delivered[0].0, Surface::Discord);
     assert!(outcome.failed.is_empty());
 
-    let without_announce = adapter(&server);
-    let outcome = without_announce.broadcast(&message("nowhere to go")).await;
+    let without_ops = adapter(&server);
+    let outcome = without_ops.broadcast(&message("nowhere to go")).await;
     assert!(!outcome.any_delivered());
     assert!(
         outcome.failed[0]
             .1
             .message
-            .contains("no announce destination configured"),
+            .contains("no ops channel configured"),
         "{outcome:?}"
     );
 

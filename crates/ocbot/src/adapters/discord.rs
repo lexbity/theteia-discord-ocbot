@@ -68,9 +68,8 @@ pub fn operator_allowed_mentions(operator: u64) -> CreateAllowedMentions {
 pub struct DiscordAdapter {
     http: Arc<Http>,
     operator: u64,
-    /// The announce destination for `broadcast` (the ops channel; PH-1's
-    /// single-surface stand-in for the PH-6 fan-out).
-    announce: Option<u64>,
+    /// The ops channel for posting (used by FanoutPort in dual-surface mode).
+    ops_channel: u64,
     /// Bounded `msg_id → channel` memory for receipt-addressed quiet ops.
     channels: Arc<Mutex<HashMap<u64, u64>>>,
 }
@@ -84,15 +83,15 @@ impl DiscordAdapter {
         Self {
             http,
             operator,
-            announce: None,
+            ops_channel: 0,
             channels: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    /// Set the announce destination used by `broadcast`.
+    /// Set the ops channel (used by FanoutPort in dual-surface mode).
     #[must_use]
-    pub fn with_announce(mut self, channel: Option<u64>) -> Self {
-        self.announce = channel;
+    pub fn with_ops_channel(mut self, channel: u64) -> Self {
+        self.ops_channel = channel;
         self
     }
 
@@ -204,20 +203,23 @@ impl ChatPort for DiscordAdapter {
 
     async fn broadcast(&self, message: &OutgoingMessage) -> BroadcastOutcome {
         let mut outcome = BroadcastOutcome::default();
-        match self.announce {
-            Some(channel) => match self.post(&Destination::discord(channel), message).await {
-                Ok(receipt) => outcome.delivered.push((Surface::Discord, receipt)),
-                Err(error) => outcome.failed.push((Surface::Discord, error)),
-            },
-            None => {
-                outcome.failed.push((
-                    Surface::Discord,
-                    SendError {
-                        surface: Surface::Discord,
-                        message: "no announce destination configured".to_owned(),
-                    },
-                ));
-            }
+        if self.ops_channel == 0 {
+            // No ops_channel configured, cannot broadcast
+            outcome.failed.push((
+                Surface::Discord,
+                SendError {
+                    surface: Surface::Discord,
+                    message: "no ops channel configured".to_owned(),
+                },
+            ));
+            return outcome;
+        }
+        match self
+            .post(&Destination::discord(self.ops_channel), message)
+            .await
+        {
+            Ok(receipt) => outcome.delivered.push((Surface::Discord, receipt)),
+            Err(error) => outcome.failed.push((Surface::Discord, error)),
         }
         outcome
     }
