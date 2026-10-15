@@ -74,6 +74,7 @@ struct Inner {
     pending_flows_open: Mutex<BTreeMap<String, u64>>,
     /// Component-map row count (GC health).
     component_map_rows: AtomicU64,
+    msg_map_rows: AtomicU64,
 }
 
 /// Histogram bucket upper bounds (seconds) for idle→report latency (NFR-2).
@@ -116,6 +117,7 @@ impl Metrics {
                 signal_envelope_duplicates: AtomicU64::new(0),
                 pending_flows_open: Mutex::new(BTreeMap::new()),
                 component_map_rows: AtomicU64::new(0),
+                msg_map_rows: AtomicU64::new(0),
             }),
         }
     }
@@ -369,6 +371,13 @@ impl Metrics {
             .store(u64::try_from(count).unwrap_or(0), Ordering::Relaxed);
     }
 
+    /// Msg-map row count (GC health, §5.10).
+    pub fn set_msg_map_rows(&self, count: usize) {
+        self.inner
+            .msg_map_rows
+            .store(u64::try_from(count).unwrap_or(0), Ordering::Relaxed);
+    }
+
     /// Render the Prometheus text format (modelines + family blocks).
     pub fn render_text(&self) -> String {
         let inner = &self.inner;
@@ -464,6 +473,11 @@ impl Metrics {
             &mut out,
             "ocbot_component_map_rows",
             inner.component_map_rows.load(Ordering::Relaxed),
+        );
+        gauge(
+            &mut out,
+            "ocbot_msg_map_rows",
+            inner.msg_map_rows.load(Ordering::Relaxed),
         );
         render_idle_histogram(inner, &mut out);
         out

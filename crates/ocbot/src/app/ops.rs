@@ -43,6 +43,7 @@ pub async fn tick(ctx: &Arc<AppContext>, stall_secs: i64) -> Result<(), AppError
     degraded::probe_and_record(ctx).await?;
     refresh_gauges(ctx).await?;
     sweep_pending(ctx).await?;
+    sweep_maps(ctx).await?;
     stall::scan(ctx, stall_secs).await?;
     Ok(())
 }
@@ -88,6 +89,18 @@ async fn recount_pending(ctx: &Arc<AppContext>) -> Result<(), AppError> {
         ctx.metrics
             .set_pending_flows_open(flow, counts.get(flow).copied().unwrap_or(0));
     }
+    Ok(())
+}
+
+/// Sweep expired `msg_map` and `component_map` rows (7-day retention).
+async fn sweep_maps(ctx: &Arc<AppContext>) -> Result<(), AppError> {
+    let now = ctx.clock.now();
+    ctx.store.gc_maps(now, 7).await?;
+    ctx.metrics.set_component_map_rows(
+        usize::try_from(ctx.store.component_map_count().await?).unwrap_or(usize::MAX),
+    );
+    ctx.metrics
+        .set_msg_map_rows(usize::try_from(ctx.store.msg_map_count().await?).unwrap_or(usize::MAX));
     Ok(())
 }
 

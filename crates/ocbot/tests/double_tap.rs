@@ -1,5 +1,4 @@
-//! AC-5: 1,000 randomized interleavings of two Accept interactions against one
-//! real repository must produce exactly one commit per trial.
+//! PH-5: Cross-surface CAS race tests (SPEC-004 FR-103).
 
 // Integration tests assert via unwrap/panic; production code remains strict
 // (workspace lint floor + G3). See common/mod.rs for the shared harness.
@@ -106,4 +105,72 @@ async fn double_tap_accept_commits_exactly_once() {
         .parse::<usize>()
         .expect("commit count");
     assert_eq!(commits, TRIALS + 1, "exactly one commit per trial");
+}
+
+/// PH-5: Cross-surface race test (AC-3: same action, accept by Discord button
+/// and accept by Signal reaction fired concurrently → exactly one wins).
+#[tokio::test]
+async fn cross_surface_race_one_wins() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo: PathBuf = tmp.path().join("work");
+    std::fs::create_dir_all(&repo).expect("mkdir");
+    init_repo(&repo);
+    write_file(&repo, "README.md", "# work\n");
+    let base = common::commit_all(&repo, "initial");
+    let repo_text = repo.to_string_lossy().into_owned();
+
+    let store = StoreHandle::open_in_memory().expect("store");
+    let discord = FakeChat::new();
+    // Build a context with Discord only for now
+    let ctx = Arc::new(context(
+        store.clone(),
+        Arc::new(FakeOpenCode::new()),
+        Arc::new(FakeGit::with_repo(Some(repo.clone()))),
+        Arc::new(discord.clone()),
+        OPERATOR,
+        Some(CHANNEL),
+    ));
+
+    // Seed a reported action
+    let seeded = common::seed_reported(
+        &store,
+        &repo_text,
+        Some("main"),
+        Some(&base),
+        CHANNEL,
+        "work",
+        "prompt",
+        "ses_cross",
+    )
+    .await;
+
+    // Simulate accept by Discord button (actor: discord:42)
+    let discord_accept = async {
+        accept::execute_accept(
+            &ctx,
+            seeded.action_id,
+            "s",
+            "",
+            &format!("discord:{OPERATOR}"),
+        )
+        .await
+    };
+
+    // Simulate accept by Signal reaction (actor: signal:+15551234567)
+    let signal_accept = async {
+        accept::execute_accept(&ctx, seeded.action_id, "s", "", "signal:+15551234567").await
+    };
+
+    // Fire concurrently
+    let (discord_result, signal_result) = tokio::join!(discord_accept, signal_accept);
+
+    // Exactly one should succeed
+    let discord_won = discord_result.is_ok();
+    let signal_won = signal_result.is_ok();
+    let wins = [discord_won, signal_won].iter().filter(|&ok| *ok).count();
+
+    assert_eq!(
+        wins, 1,
+        "exactly one surface wins cross-surface race (discord={discord_won}, signal={signal_won})"
+    );
 }

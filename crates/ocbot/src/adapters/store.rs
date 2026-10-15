@@ -1417,11 +1417,64 @@ store_method! {
         }
     };
 
+    /// Sweep expired `component_map` and `msg_map` rows (7-day retention).
+    /// GC sweeps happen in the ops loop, not the adapter loop.
+    /// `now` and `created_at` are in milliseconds since epoch.
+    GcMaps as gc_maps(
+        now: i64 => i64,
+        days: i64 => i64,
+    ) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            let cutoff = now - (days * 24 * 3600 * 1000); // 7 days in ms
+            connection.execute_batch(&format!(
+                "DELETE FROM component_map WHERE created_at <= {cutoff};
+                 DELETE FROM msg_map WHERE created_at <= {cutoff};"
+            ))?;
+            Ok(())
+        }
+    };
+
     /// The number of `component_map` rows (the GC-health gauge, §5.10).
     ComponentMapCount as component_map_count() -> u64 {
         |connection: &mut Connection| -> rusqlite::Result<u64> {
             let count: i64 = connection.query_row(
                 "SELECT COUNT(*) AS n FROM component_map",
+                [],
+                |row| row.get("n"),
+            )?;
+            Ok(u64::try_from(count).unwrap_or(0))
+        }
+    };
+
+    /// The number of `msg_map` rows (the GC-health gauge, §5.10).
+    MsgMapCount as msg_map_count() -> u64 {
+        |connection: &mut Connection| -> rusqlite::Result<u64> {
+            let count: i64 = connection.query_row(
+                "SELECT COUNT(*) AS n FROM msg_map",
+                [],
+                |row| row.get("n"),
+            )?;
+            Ok(u64::try_from(count).unwrap_or(0))
+        }
+    };
+
+    /// The number of `action` rows (the GC-health gauge, §5.10).
+    ActionCount as action_count() -> u64 {
+        |connection: &mut Connection| -> rusqlite::Result<u64> {
+            let count: i64 = connection.query_row(
+                "SELECT COUNT(*) AS n FROM action",
+                [],
+                |row| row.get("n"),
+            )?;
+            Ok(u64::try_from(count).unwrap_or(0))
+        }
+    };
+
+    /// The number of `notified` rows (the GC-health gauge, §5.10).
+    NotifiedCount as notified_count() -> u64 {
+        |connection: &mut Connection| -> rusqlite::Result<u64> {
+            let count: i64 = connection.query_row(
+                "SELECT COUNT(*) AS n FROM notified",
                 [],
                 |row| row.get("n"),
             )?;
@@ -1848,10 +1901,11 @@ CREATE TABLE msg_map_v5 (
   msg_id TEXT NOT NULL,
   session_id TEXT,
   action_id INTEGER,
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000),
   PRIMARY KEY (surface, msg_id)
 );
-INSERT INTO msg_map_v5 (surface, msg_id, session_id, action_id)
-  SELECT 'discord', discord_msg_id, session_id, action_id FROM msg_map;
+INSERT INTO msg_map_v5 (surface, msg_id, session_id, action_id, created_at)
+  SELECT 'discord', discord_msg_id, session_id, action_id, strftime('%s', 'now') * 1000 FROM msg_map;
 DROP TABLE msg_map;
 ALTER TABLE msg_map_v5 RENAME TO msg_map;
 
