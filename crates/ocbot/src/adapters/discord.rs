@@ -68,7 +68,7 @@ pub fn operator_allowed_mentions(operator: u64) -> CreateAllowedMentions {
 pub struct DiscordAdapter {
     http: Arc<Http>,
     operator: u64,
-    /// The ops channel for posting (used by FanoutPort in dual-surface mode).
+    /// The ops channel for posting (used by the `FanoutPort` in dual-surface mode).
     ops_channel: u64,
     /// Bounded `msg_id → channel` memory for receipt-addressed quiet ops.
     channels: Arc<Mutex<HashMap<u64, u64>>>,
@@ -88,7 +88,7 @@ impl DiscordAdapter {
         }
     }
 
-    /// Set the ops channel (used by FanoutPort in dual-surface mode).
+    /// Set the ops channel (used by the `FanoutPort` in dual-surface mode).
     #[must_use]
     pub fn with_ops_channel(mut self, channel: u64) -> Self {
         self.ops_channel = channel;

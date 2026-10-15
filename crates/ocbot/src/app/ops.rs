@@ -60,11 +60,10 @@ pub async fn sweep_pending(ctx: &Arc<AppContext>) -> Result<(), AppError> {
             surface,
             chat_ref: ocbot_core::ChatRef(row.chat_ref.clone()),
         };
+        // The notice text is core vocabulary, so every surface's expiry reads
+        // the same (PH-7: no prompt text lives in the shell).
         let message = ocbot_core::OutgoingMessage {
-            content: format!(
-                "the `{}` flow expired (10 minutes); send a command to start again",
-                row.flow
-            ),
+            content: ocbot_core::expired(&row.flow),
             attachment: None,
             components: Vec::new(),
             mention_allowlist: Vec::new(),
@@ -85,7 +84,7 @@ async fn recount_pending(ctx: &Arc<AppContext>) -> Result<(), AppError> {
     for row in rows {
         *counts.entry(row.flow).or_insert(0) += 1;
     }
-    for flow in ["run", "modal", "prompt", "cd"] {
+    for flow in ocbot_core::FLOW_NAMES {
         ctx.metrics
             .set_pending_flows_open(flow, counts.get(flow).copied().unwrap_or(0));
     }

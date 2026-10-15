@@ -50,9 +50,10 @@ Most offline suites finish in well under a second — the e2e report-latency sui
 
 - Unit tests live inline in `#[cfg(test)] mod tests` inside each module.
 - Integration tests live in `crates/<crate>/tests/`, one file per behavior, named after it: `double_tap.rs` (exactly-once decisions), `chaos_sigkill.rs`, `drift.rs`, `e2e_report_latency.rs`.
-- `crates/ocbot/tests/common/mod.rs` is the shared harness: `FakeOpenCode`, `FakeDiscord`, `FakeGit`, plus helpers that create real temporary git repositories (`init_repo`, `write_file`) and wire a full app `context`.
+- `crates/ocbot/tests/common/mod.rs` is the shared harness: `FakeOpenCode`, `FakeChat`, `FakeGit`, plus helpers that create real temporary git repositories (`init_repo`, `write_file`) and wire a full app `context`. `common/signal_fake.rs` is the pinned signal-cli daemon; `common/signal_surface.rs` builds the live Signal surface the two Signal suites drive.
 - Client tests feed canned SSE fixtures through wiremock (`tests/streams.rs`) and the vendored OpenAPI spec (`tests/drift.rs`).
 - Integration tests assert by unwrapping; the crate-level `#![allow(...)]` with a reason covers the lint floor's test exemption.
+- `signal_flows.rs` holds the modal-parity proof: `assert_modal_parity` compares the Signal text form's synthesized `ModalSubmit` against the Discord harness's, and a meta-test fails when the router accepts a modal that no Signal flow covers.
 
 ## Coverage
 

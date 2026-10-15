@@ -73,6 +73,24 @@ pub(crate) fn destination_for(action: &ActionRow) -> Result<Destination, AppErro
     })
 }
 
+/// Where a message about `action` goes: the action's own persisted
+/// destination (SPEC-004 §5.4 reply routing), else the ops/inbox announce
+/// channel. Shared by the gate loop and the stall watchdog — the two loops
+/// that talk about an action without having received an interaction.
+pub(crate) fn about_destination(ctx: &Arc<AppContext>, action: Option<&ActionRow>) -> Destination {
+    if let Some(action) = action
+        && let Ok(destination) = destination_for(action)
+    {
+        return destination;
+    }
+    Destination::discord(
+        ctx.guard
+            .ops_channel
+            .or(ctx.guard.inbox_channel)
+            .unwrap_or(0),
+    )
+}
+
 /// The FR-3 mention allowlist for one actor: Discord ids are parsed and
 /// allowlisted; other surfaces have no mention mechanism (the field is a
 /// Discord-rendered allowlist, SPEC-004 §5.2).

@@ -3,8 +3,10 @@
 //! the connection machine that owns the socket honestly — connect → subscribe
 //! → pump → backoff, mirroring SPEC-003's supervisor discipline (§5.9).
 //!
-//! PH-3 ships the contract layer and the boot doctor only: nothing posts and
-//! nothing subscribes into the router yet (PH-4 wires the behavior).
+//! `rpc` owns the wire, `envelope` the inbound shapes, `adapter` the outbound
+//! `ChatPort`, `inbound` the pump that normalizes envelopes into router
+//! interactions, and `flows` the pending-input state machine that stands in
+//! for Discord modals (D-06/§5.6).
 //!
 //! The wire shapes this module pins are the documented signal-cli JSON-RPC
 //! subset (`version`, `listAccounts`, `subscribe`, `send`, `sendReaction`),
@@ -13,11 +15,13 @@
 
 pub mod adapter;
 pub mod envelope;
+pub mod flows;
 pub mod inbound;
 pub mod rpc;
 
 pub use adapter::SignalAdapter;
 pub use envelope::Envelope;
+pub use flows::{Advance, FlowEngine, FlowField, ModalDraft, RunDraft, advance, run_draft};
 pub use inbound::SignalInbound;
 pub use rpc::{ConnectionSlot, RpcError, SignalMachine, SignalRpc, signal_backoff};
 

@@ -58,13 +58,14 @@ And because every conclusion is a CAS transition over a fact read, restarts and 
 |---|---|
 | `state` | The `State`/`Event` enums, the exhaustive transition table, CAS intent types |
 | `outcome` | Pure classification of a finished session: Completed / Errored / Aborted / Empty |
-| `render` | Every outgoing Discord message as a data spec (never serenity types), redaction, truncation, footer |
+| `render` | Every outgoing message as a data spec (never serenity types), redaction, truncation, footer, the reaction legend for surfaces without buttons, and the pending-input flow vocabulary |
 | `gates` | The shared permission + form playbook: what is renderable, what the buttons mean |
 | `history` | Merging `git log` rows with action rows into one list |
 | `plan` | Markdown plan parsing into picker options |
 | `paths` | Containment checks, sanitization, slugs — the file-safety vocabulary |
 | `templates` | Strict slot renderer (`{label}`, `{plan_path}`, `{git_log}`, `{git_status}`); unknown slot is a load error |
 | `events` | The event vocabulary (`OcEvent`, frame classifier) and the pure `WakePolicy` |
+| `grammar` | The pure text-command grammar for surfaces without components |
 
 ### The shell's moving parts
 
@@ -75,12 +76,13 @@ And because every conclusion is a CAS transition over a fact read, restarts and 
 | `app/router` | The `custom_id`/slash-command grammar; splits the fast ack (plan) pass from side effects (execute) |
 | `app/handlers/*` | One module per verb: `run`, `prompt`, `accept`, `park`, `reset`, `abort`, `followup`, `history`, `ls`, `status`, `gate`, … |
 | `adapters/store` | The SQLite actor: one connection on a dedicated thread behind a typed message-passing handle |
+| `adapters/signal` | The Signal surface: the JSON-RPC client over signal-cli's socket, the inbound pump, and the flow engine that stands in for modals |
 | `adapters/git` | The only place `process::Command` may appear; argv-only, never a shell, never pushes |
 | `app/supervisor` | Owns the single SSE connection to `/api/event` with a read deadline and backoff |
 | `app/wake` | The dispatcher: frames → hints → wake policy → one targeted fact read each |
 | `app/watcher`, `app/gates_loop`, `app/inbox` | The fallback ticks that bound latency if wakes stop |
 | `app/ops` | The slow loop: health monitor, derived gauges, stall watchdog |
-| `app/reconcile` | Boot and reconnect recovery from facts |
+| `app/reconcile` | Boot and reconnect recovery from facts — git intents, session completion, and the pending-flow announcement |
 | `app/completion` | The idle path: classify, render, deliver the report exactly once |
 
 ## Runtime shape
@@ -91,6 +93,8 @@ Two paths feed the same decision layer.
 The plan phase returns an ack (modal or defer) before any slow work — the ack budget is p99 < 1 s (NFR-1).
 The execute phase does the port calls and store writes; every state change is a CAS transition.
 The core never sees a platform shape: `AppContext.chat` is one `ChatPort`, and a fan-out implements it for multi-surface deployments. Signal has no buttons, so its adapter renders a reaction legend (recorded in `component_map`) and turns modal acks into short text conversations (`pending_input`); the router and handlers are identical on both surfaces.
+
+**Modal parity.** A Discord modal and a Signal text form are the same request in two vocabularies. `ocbot-core::render::flow` owns the words (prompt texts, the cancel hint, the lifecycle notices) and the step tables that say what a reply fills and what comes next; `adapters/signal/flows.rs` owns the transition and the persistence. The transition is a pure function, so `tests/signal_flows.rs` asserts that a completed text form synthesizes the **byte-identical** `ModalSubmit` the Discord modal would have produced (`assert_modal_parity`) — that is what makes "handlers cannot tell the surfaces apart" a test rather than a hope. A flow open across a crash is announced once at boot (`reconcile::reconcile_pending_flows`, echoing what the draft held) and stays closable; full draft resume is deliberately not built — the accepted cost in spec D-06 is one message, not a restored draft. A meta-test crosses the router's own `modal_ids()` against the core's `MODAL_FAMILIES` catalog, so a new modal that no surface can open as a text form fails CI instead of silently degrading.
 
 **The loop path (doorbell + fallback ticks).**
 The supervisor holds one SSE connection to `/api/event`.
@@ -199,10 +203,12 @@ Supporting tables, each with one job:
 | `session_cursor` | Log cursor, optimization only — correctness never depends on it |
 | `session_seen` | Root sessions the inbox has observed, with their directory |
 | `notified` | `(session_id, seq)` dedupe keys for inbox and report delivery |
-| `msg_map` | Discord message → session/action, so a reply adopts the right session |
+| `msg_map` | `(surface, message id)` → session/action, so a reply or quote adopts the right session |
 | `mute` | Suppressed inbox reports per session or directory |
 | `ui_state` | Browser cwd and hidden-file preference per user |
 | `audit` | Timestamp, user, verb, action, result — never prompt bodies at INFO |
+| `component_map` | `(surface, message id, emoji)` → `custom_id`, so a reaction acts as a button |
+| `pending_input` | The open text form per chat (flow, step, draft JSON, expiry) — a modal's stand-in on surfaces without modals |
 | `schema_version` | Single-row migration marker applied by the store actor at boot |
 
 ## External integrations

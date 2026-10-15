@@ -28,8 +28,7 @@ use crate::app::metrics::{self, Metrics};
 use crate::app::ops::OpsLoop;
 use crate::app::reconcile;
 use crate::app::supervisor::Supervisor;
-use crate::app::surfaces::FanoutPort;
-use crate::app::surfaces::{SurfaceRegistry, SurfaceSet};
+use crate::app::surfaces::{FanoutPort, PolicyPort, SurfaceRegistry, SurfaceSet};
 use crate::app::wake::Dispatcher;
 use crate::app::watcher::Watcher;
 use crate::config::{Config, Secrets, config_path};
@@ -289,7 +288,11 @@ pub async fn start() -> ExitCode {
         match surface {
             ocbot_core::Surface::Discord => {
                 if let Some(port) = &discord_transport {
-                    transports.push((surface, announce.clone(), port.clone()));
+                    // D-12: the delivery path enforces the surface's report
+                    // policy; handlers stay policy-free (FR-107).
+                    let port: Arc<dyn ChatPort> =
+                        Arc::new(PolicyPort::new(config.discord.policy(), port.clone()));
+                    transports.push((surface, announce.clone(), port));
                 } else {
                     // Unreachable: the credentials above are required iff the
                     // surface is selected.
@@ -298,7 +301,9 @@ pub async fn start() -> ExitCode {
             }
             ocbot_core::Surface::Signal => {
                 if let Some(adapter) = &signal_adapter {
-                    transports.push((surface, adapter.destination(), adapter.clone()));
+                    let port: Arc<dyn ChatPort> =
+                        Arc::new(PolicyPort::new(config.signal.policy(), adapter.clone()));
+                    transports.push((surface, adapter.destination(), port));
                 } else {
                     // Unreachable: the doctor gate above drops the surface.
                     tracing::error!("signal selected but no transport was built");
@@ -315,15 +320,17 @@ pub async fn start() -> ExitCode {
         surfaces = ?registry.handles().iter().map(|handle| handle.surface).collect::<Vec<_>>(),
         "surface registry built"
     );
-    // PH-6: use FanoutPort when multiple surfaces selected, else single port
-    let chat: Arc<dyn ChatPort> = if transports.len() > 1 {
-        let fanout = FanoutPort::new(
-            transports
-                .into_iter()
-                .map(|(surface, dest, port)| (surface, port, dest))
+    // PH-6 (D-01): one surface collapses to its instrumented port; two or
+    // more fan out over the registry's instrumented ports — the core cannot
+    // tell the difference.
+    let chat: Arc<dyn ChatPort> = if registry.handles().len() > 1 {
+        Arc::new(FanoutPort::new(
+            registry
+                .handles()
+                .iter()
+                .map(|handle| handle.port.clone())
                 .collect(),
-        );
-        Arc::new(fanout)
+        ))
     } else {
         registry.single()
     };
@@ -383,6 +390,14 @@ pub async fn start() -> ExitCode {
         ));
         tokio::spawn(inbound.run(envelopes));
         tracing::info!("signal inbound pump started");
+    }
+
+    // SPEC-004 PH-7 (D-06): a text form that was open when the process died is
+    // announced once here — the draft survived in SQLite, so the operator learns
+    // it can reply to continue instead of typing into a bot that ignores them.
+    let resumed_flows = reconcile::reconcile_pending_flows(&ctx).await;
+    if resumed_flows > 0 {
+        tracing::info!(resumed_flows, "announced pending-input flows at boot");
     }
 
     if let Ok(counts) = store.action_counts_by_state().await {

@@ -4,15 +4,16 @@
 //! surface-blind; this module owns only the text→interaction translation and
 //! the text-form replacement for modals (D-06).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
-use serde::{Deserialize, Serialize};
-
 use ocbot_core::grammar::{self, DecisionVerb, Intent};
-use ocbot_core::render::help_text;
-use ocbot_core::{ActorId, Destination, MsgId, OutgoingMessage, PostReceipt, Surface};
+use ocbot_core::render::{
+    FLOW_CD, FLOW_PROMPT, FLOW_RUN, cancelled as flow_cancelled, help_text,
+    unknown_flow as unknown_flow_text, with_cancel_hint,
+};
+use ocbot_core::{Destination, MsgId, OutgoingMessage, PostReceipt, Surface};
 
 use crate::adapters::store::StoreHandle;
 use crate::app::context::AppContext;
@@ -24,38 +25,10 @@ use crate::config::RateLimit;
 
 use super::adapter::SignalAdapter;
 use super::envelope::{Attachment, Envelope, Quote, Reaction};
+use super::flows::{Advance, FlowEngine, advance as advance_flow, run_draft, run_label};
 
 /// The dedupe cache bound (SPEC-004 D-11.5: 4096 entries).
 const SEEN_CAPACITY: usize = 4096;
-/// The pending-flow time-to-live (D-06: 10 minutes).
-const FLOW_TTL_SECS: i64 = 600;
-
-/// One required modal input to ask for, in the text form (D-04/D-06).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct AskInput {
-    id: String,
-    label: String,
-    value: Option<String>,
-}
-
-/// The persisted draft of a generic modal flow.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct ModalDraft {
-    custom_id: String,
-    #[serde(default)]
-    ask: Vec<AskInput>,
-    #[serde(default)]
-    defaults: Vec<(String, String)>,
-    #[serde(default)]
-    collected: Vec<(String, String)>,
-}
-
-/// The persisted draft of the run flow.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct RunDraft {
-    #[serde(default)]
-    dir: String,
-}
 
 /// The bounded `(sender, timestamp)` seen-cache (D-11.5).
 struct SeenCache {
@@ -126,6 +99,7 @@ pub struct SignalInbound {
     operator: String,
     store: StoreHandle,
     metrics: Arc<Metrics>,
+    flows: FlowEngine,
     seen: Mutex<SeenCache>,
     bucket: Mutex<TokenBucket>,
 }
@@ -138,14 +112,17 @@ impl SignalInbound {
         operator: impl Into<String>,
         limit: RateLimit,
     ) -> Self {
+        let operator = operator.into();
         let store = ctx.store.clone();
         let metrics = ctx.metrics.clone();
+        let flows = FlowEngine::new(ctx.clone(), adapter.clone(), operator.clone());
         Self {
             ctx,
             adapter,
-            operator: operator.into(),
+            operator,
             store,
             metrics,
+            flows,
             seen: Mutex::new(SeenCache::new()),
             bucket: Mutex::new(TokenBucket::new(limit)),
         }
@@ -164,7 +141,7 @@ impl SignalInbound {
 
     /// The actor id for the operator on this surface.
     fn actor(&self) -> String {
-        ActorId::from_parts(Surface::Signal, &self.operator).0
+        self.flows.actor()
     }
 
     /// The destination of every reply on this surface.
@@ -258,7 +235,7 @@ impl SignalInbound {
 
         // 6. An open pending flow consumes the next text (D-06).
         if let Some(text) = envelope.text.as_deref()
-            && let Some(row) = self.take_pending().await
+            && let Some(row) = self.take_flow().await
         {
             self.handle_pending(row, text).await;
             return;
@@ -383,7 +360,7 @@ impl SignalInbound {
                     )
                     .await;
                 }
-                None => self.open_pending("prompt", "await_text", "{}").await,
+                None => self.open_flow(FLOW_PROMPT).await,
             },
             Intent::Status => self.slash("status").await,
             Intent::Abort => self.slash("abort").await,
@@ -406,7 +383,7 @@ impl SignalInbound {
                     self.submit_modal(ls::CD_MODAL, vec![("path".to_owned(), path)])
                         .await;
                 }
-                None => self.open_pending("cd", "await_path", "{}").await,
+                None => self.open_flow(FLOW_CD).await,
             },
             Intent::History { page } => match page {
                 Some(page) => self.component(format!("v1:page:history:{page}")).await,
@@ -555,211 +532,89 @@ impl SignalInbound {
 
     // --- pending flows (D-06) -------------------------------------------------
 
-    /// Open (replacing any open flow) a pending flow and post its first prompt.
-    async fn open_pending(&self, flow: &str, step: &str, draft: &str) {
-        if let Err(error) = self
-            .store
-            .put_pending(
-                Surface::Signal.as_str(),
-                &self.operator,
-                flow,
+    /// Handle text supplied to an open flow: the engine decides the transition
+    /// ([`super::flows::advance`] is pure), this method applies it.
+    async fn handle_pending(&self, row: crate::adapters::store::PendingInputRow, text: &str) {
+        let cwd = self.ui_cwd().await;
+        match advance_flow(&row, text, &cwd) {
+            Advance::Cancelled => self.flows.close(flow_cancelled()).await,
+            Advance::Unknown => self.flows.close(unknown_flow_text()).await,
+            Advance::Next {
                 step,
                 draft,
-                FLOW_TTL_SECS,
-                self.ctx.clock.now(),
-            )
-            .await
-        {
-            tracing::warn!(error = %error, "put_pending failed");
-            return;
-        }
-        self.refresh_pending_gauge().await;
-        let prompt = match (flow, step) {
-            ("run", "await_path") => "Send the directory to run in.",
-            ("run", "await_prompt") => "Send the prompt for this run.",
-            ("cd", "await_path") => "Send the directory to browse.",
-            ("prompt", "await_text") => "Send the prompt text.",
-            _ => "Send the next value.",
-        };
-        self.post_notice(format!("{prompt} (or `cancel`)")).await;
-    }
-
-    /// Take the open pending flow, if any.
-    async fn take_pending(&self) -> Option<crate::adapters::store::PendingInputRow> {
-        let row = self
-            .store
-            .take_pending(Surface::Signal.as_str(), &self.operator)
-            .await
-            .ok()
-            .flatten();
-        if row.is_some() {
-            self.refresh_pending_gauge().await;
-        }
-        row
-    }
-
-    /// Handle text supplied to an open flow.
-    async fn handle_pending(&self, row: crate::adapters::store::PendingInputRow, text: &str) {
-        if text.trim().eq_ignore_ascii_case("cancel") {
-            self.post_notice("flow cancelled").await;
-            self.refresh_pending_gauge().await;
-            return;
-        }
-        match (row.flow.as_str(), row.step.as_str()) {
-            ("run", "await_path") => {
-                let draft = serde_json::to_string(&RunDraft {
-                    dir: text.trim().to_owned(),
-                })
-                .unwrap_or_else(|_| "{}".to_owned());
-                self.open_pending("run", "await_prompt", &draft).await;
+                prompt,
+            } => {
+                if self.flows.persist(&row.flow, &step, &draft).await.is_some() {
+                    self.post_notice(with_cancel_hint(&prompt)).await;
+                }
             }
-            ("run", "await_prompt") => {
-                let draft: RunDraft = serde_json::from_str(&row.draft).unwrap_or_default();
-                self.submit_run(&draft.dir, text).await;
-            }
-            ("modal", _) => self.advance_modal(&row, text).await,
-            ("prompt", "await_text") => {
-                let directory = self.ui_cwd().await;
-                self.submit_modal(
-                    prompt::PROMPT_MODAL,
-                    vec![
-                        ("directory".to_owned(), directory),
-                        ("prompt".to_owned(), text.to_owned()),
-                    ],
-                )
-                .await;
-            }
-            ("cd", "await_path") => {
-                self.submit_modal(
-                    ls::CD_MODAL,
-                    vec![("path".to_owned(), text.trim().to_owned())],
-                )
-                .await;
-            }
-            _ => {
-                self.post_notice("unknown open flow; it has been cancelled")
-                    .await;
+            Advance::Submit { custom_id, values } => {
+                // The run flow chains the review's "Send as-is" button so a
+                // text `run` reaches the agent in one exchange (D-06).
+                if custom_id == run::NEW_RUN_MODAL {
+                    self.submit_run(values).await;
+                } else {
+                    self.submit_modal(&custom_id, values).await;
+                }
             }
         }
     }
 
-    /// Advance a generic modal flow by one field.
-    async fn advance_modal(&self, row: &crate::adapters::store::PendingInputRow, text: &str) {
-        let mut draft: ModalDraft = serde_json::from_str(&row.draft).unwrap_or_default();
-        let step = row.step.parse::<usize>().unwrap_or(0);
-        let Some(current) = draft.ask.get(step).cloned() else {
-            self.submit_modal(&draft.custom_id, Self::modal_values(&draft))
-                .await;
-            return;
-        };
-        let value = if text.trim().is_empty() {
-            current.value.clone().unwrap_or_default()
-        } else {
-            text.trim().to_owned()
-        };
-        draft.collected.push((current.id.clone(), value));
-        if step + 1 < draft.ask.len() {
-            draft.collected.truncate(step + 1);
-            let next = draft.ask.get(step + 1).cloned();
-            let serialized = serde_json::to_string(&draft).unwrap_or_else(|_| "{}".to_owned());
-            let next_step = (step + 1).to_string();
-            if let Err(error) = self
-                .store
-                .put_pending(
-                    Surface::Signal.as_str(),
-                    &self.operator,
-                    "modal",
-                    &next_step,
-                    &serialized,
-                    FLOW_TTL_SECS,
-                    self.ctx.clock.now(),
-                )
-                .await
-            {
-                tracing::warn!(error = %error, "put_pending (modal) failed");
-            }
-            self.refresh_pending_gauge().await;
-            if let Some(next) = next {
-                self.post_notice(Self::ask_prompt(&next, step + 1, draft.ask.len()))
-                    .await;
-            }
-        } else {
-            self.submit_modal(&draft.custom_id, Self::modal_values(&draft))
-                .await;
-        }
+    /// Open a named flow at its first step (replacing any open flow).
+    async fn open_flow(&self, flow: &str) {
+        self.flows.open(flow).await;
     }
 
-    /// The collected + default values of a modal draft.
-    fn modal_values(draft: &ModalDraft) -> Vec<(String, String)> {
-        let mut values = draft.defaults.clone();
-        for (id, value) in &draft.collected {
-            if let Some(existing) = values.iter_mut().find(|(key, _)| key == id) {
-                existing.1.clone_from(value);
-            } else {
-                values.push((id.clone(), value.clone()));
-            }
-        }
-        values
+    /// Open a named flow at `step` with a persisted draft.
+    async fn open_flow_at(&self, flow: &str, step: &str, draft: &str) {
+        self.flows.open_at(flow, step, draft).await;
     }
 
-    /// The text-form prompt for one modal field.
-    fn ask_prompt(input: &AskInput, index: usize, total: usize) -> String {
-        let hint = match &input.value {
-            Some(value) if !value.is_empty() => format!(" (empty keeps: {value})"),
-            _ => String::new(),
-        };
-        format!(
-            "{}/{} — {}: send the {}{hint}",
-            index + 1,
-            total,
-            input.label,
-            input.id
-        )
+    /// Take the open flow, if any.
+    async fn take_flow(&self) -> Option<crate::adapters::store::PendingInputRow> {
+        self.flows.take().await
     }
 
     // --- run flow (D-06) ------------------------------------------------------
 
     /// `run [path] [| prompt]`: open the run flow or start directly.
     async fn begin_run(&self, path: Option<String>, prompt: Option<String>) {
-        let directory = self.ui_cwd().await;
         match (path, prompt) {
             (path, Some(prompt)) => {
-                let dir = path.unwrap_or(directory);
-                self.submit_run(&dir, &prompt).await;
+                let directory = match path {
+                    Some(path) => path,
+                    None => self.ui_cwd().await,
+                };
+                self.submit_run(self.run_values(&directory, &prompt).await)
+                    .await;
             }
             (Some(path), None) => {
-                let draft = serde_json::to_string(&RunDraft { dir: path })
-                    .unwrap_or_else(|_| "{}".to_owned());
-                self.open_pending("run", "await_prompt", &draft).await;
+                self.open_flow_at(FLOW_RUN, "await_prompt", &run_draft(&path))
+                    .await;
             }
-            (None, None) => self.open_pending("run", "await_path", "{}").await,
+            (None, None) => self.open_flow(FLOW_RUN).await,
         }
     }
 
-    /// Submit the collected run: create the staged action, then send it.
-    async fn submit_run(&self, directory: &str, prompt: &str) {
+    /// The newrun modal values a text run produces (the pure engine derives the
+    /// label, so every text path agrees byte-for-byte).
+    async fn run_values(&self, directory: &str, prompt_text: &str) -> Vec<(String, String)> {
         let directory = if directory.trim().is_empty() {
             self.ui_cwd().await
         } else {
             directory.trim().to_owned()
         };
-        let label: String = prompt
-            .lines()
-            .next()
-            .unwrap_or("run")
-            .chars()
-            .take(40)
-            .collect();
+        vec![
+            ("directory".to_owned(), directory),
+            ("label".to_owned(), run_label(prompt_text)),
+            ("plan".to_owned(), String::new()),
+        ]
+    }
+
+    /// Submit the collected run: create the staged action, then send it.
+    async fn submit_run(&self, values: Vec<(String, String)>) {
         // The ModalSubmit-equivalent the Discord modal would produce (FR-109).
-        self.execute_modal(
-            run::NEW_RUN_MODAL,
-            vec![
-                ("directory".to_owned(), directory),
-                ("label".to_owned(), label),
-                ("plan".to_owned(), String::new()),
-            ],
-        )
-        .await;
+        self.execute_modal(run::NEW_RUN_MODAL, values).await;
         // Then send the staged action (the Discord "Send as-is" button).
         let action = self.resolve(Some(StateSet::Staged), None).await;
         match action {
@@ -822,67 +677,8 @@ impl SignalInbound {
     /// in order, defaulting the rest; submit immediately when nothing is left
     /// to ask.
     async fn open_modal_flow(&self, spec: &crate::app::interaction::ModalSpec) {
-        let mut ask = Vec::new();
-        let mut defaults = Vec::new();
-        for input in &spec.inputs {
-            if input.required {
-                ask.push(AskInput {
-                    id: input.id.clone(),
-                    label: input.label.clone(),
-                    value: input.value.clone(),
-                });
-            } else {
-                defaults.push((input.id.clone(), input.value.clone().unwrap_or_default()));
-            }
-        }
-        if ask.is_empty() {
-            self.submit_modal(&spec.custom_id, defaults).await;
-            return;
-        }
-        let draft = ModalDraft {
-            custom_id: spec.custom_id.clone(),
-            ask,
-            defaults,
-            collected: Vec::new(),
-        };
-        let serialized = serde_json::to_string(&draft).unwrap_or_else(|_| "{}".to_owned());
-        self.post_notice(format!("{} — text form", spec.title))
-            .await;
-        if let Err(error) = self
-            .store
-            .put_pending(
-                Surface::Signal.as_str(),
-                &self.operator,
-                "modal",
-                "0",
-                &serialized,
-                FLOW_TTL_SECS,
-                self.ctx.clock.now(),
-            )
-            .await
-        {
-            tracing::warn!(error = %error, "put_pending (modal open) failed");
-            return;
-        }
-        self.refresh_pending_gauge().await;
-        if let Some(first) = draft.ask.first() {
-            self.post_notice(Self::ask_prompt(first, 0, draft.ask.len()))
-                .await;
-        }
-    }
-
-    /// Refresh the `ocbot_pending_flows_open` gauge from the store.
-    async fn refresh_pending_gauge(&self) {
-        let Ok(rows) = self.store.all_pending().await else {
-            return;
-        };
-        let mut counts: HashMap<String, usize> = HashMap::new();
-        for row in rows {
-            *counts.entry(row.flow).or_insert(0) += 1;
-        }
-        for flow in ["run", "modal", "prompt", "cd"] {
-            let count = counts.get(flow).copied().unwrap_or(0);
-            self.metrics.set_pending_flows_open(flow, count);
+        if let Some(Advance::Submit { custom_id, values }) = self.flows.open_modal(spec).await {
+            self.submit_modal(&custom_id, values).await;
         }
     }
 }
@@ -920,7 +716,8 @@ pub fn receipt(msg_id: impl Into<String>) -> PostReceipt {
 
 #[cfg(test)]
 mod tests {
-    use super::{ModalDraft, SeenCache, StateSet, TokenBucket};
+    use super::super::flows::{RunDraft, run_draft, run_label};
+    use super::{SeenCache, StateSet, TokenBucket};
     use crate::config::RateLimit;
 
     #[test]
@@ -957,48 +754,12 @@ mod tests {
     }
 
     #[test]
-    fn modal_drafts_round_trip_and_prefer_collected_values() {
-        let draft = ModalDraft {
-            custom_id: "v1:acceptgo:7".to_owned(),
-            ask: vec![super::AskInput {
-                id: "subject".to_owned(),
-                label: "Commit subject".to_owned(),
-                value: Some("default".to_owned()),
-            }],
-            defaults: vec![("body".to_owned(), String::new())],
-            collected: vec![("subject".to_owned(), "typed".to_owned())],
-        };
-        let json = serde_json::to_string(&draft).expect("serialize");
-        let back: ModalDraft = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back.custom_id, draft.custom_id);
-        let values = super::SignalInbound::modal_values(&back);
-        assert_eq!(
-            values,
-            vec![
-                ("body".to_owned(), String::new()),
-                ("subject".to_owned(), "typed".to_owned()),
-            ]
-        );
-    }
-
-    #[test]
-    fn ask_prompts_name_the_field_and_its_default() {
-        let with_default = super::AskInput {
-            id: "subject".to_owned(),
-            label: "Commit subject".to_owned(),
-            value: Some("keep me".to_owned()),
-        };
-        let prompt = super::SignalInbound::ask_prompt(&with_default, 0, 2);
-        assert!(prompt.contains("1/2"));
-        assert!(prompt.contains("keep me"));
-        let without = super::AskInput {
-            id: "prompt".to_owned(),
-            label: "Prompt".to_owned(),
-            value: None,
-        };
-        let prompt = super::SignalInbound::ask_prompt(&without, 1, 2);
-        assert!(prompt.contains("2/2"));
-        assert!(!prompt.contains("keeps"));
+    fn the_run_draft_round_trips_the_directory() {
+        let draft = run_draft("/tmp/x");
+        let back: RunDraft = serde_json::from_str(&draft).expect("deserialize");
+        assert_eq!(back.dir, "/tmp/x");
+        assert_eq!(run_label("a prompt"), "a prompt");
+        assert_eq!(run_draft("/tmp/x"), r#"{"dir":"/tmp/x"}"#);
     }
 
     #[test]

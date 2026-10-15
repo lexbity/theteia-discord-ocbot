@@ -314,9 +314,9 @@ impl SurfaceRegistry {
         Self { handles }
     }
 
-    /// The port the app context carries. Config validation refuses to select
-    /// a second surface until the PH-6 fan-out exists, so the registry always
-    /// holds exactly one handle today.
+    /// The port the app context carries when exactly one surface is
+    /// selected; dual-surface deployments take [`FanoutPort`] over
+    /// [`SurfaceRegistry::handles`] instead.
     pub fn single(&self) -> Arc<dyn ChatPort> {
         self.handles[0].port.clone()
     }
@@ -327,40 +327,73 @@ impl SurfaceRegistry {
     }
 }
 
-/// Fan-out port for dual-surface operation (SPEC-004 D-01).
-///
-/// Implements [`ChatPort`] by delegating to per-surface adapters. Broadcast
-/// sends concurrently to all surfaces and collects per-surface results
-/// (D-07's ≥1-success contract).
+/// A policy-applying [`ChatPort`] decorator (SPEC-004 D-12/FR-102/FR-107):
+/// every posted/broadcast spec is transformed by [`apply_surface_policy`]
+/// with the surface's resolved config before reaching the transport. This is
+/// the *only* place report policy is enforced — handlers stay policy-free.
+/// Quiet ops (`edit`/`react`) pass through: they are status, not reports.
+pub struct PolicyPort {
+    policy: ocbot_core::SurfacePolicy,
+    inner: Arc<dyn ChatPort>,
+}
+
+impl PolicyPort {
+    /// Wrap one transport with its surface's resolved policy.
+    pub fn new(policy: ocbot_core::SurfacePolicy, inner: Arc<dyn ChatPort>) -> Self {
+        Self { policy, inner }
+    }
+}
+
+#[async_trait::async_trait]
+impl ChatPort for PolicyPort {
+    async fn post(
+        &self,
+        dest: &Destination,
+        message: &OutgoingMessage,
+    ) -> Result<PostReceipt, SendError> {
+        let spec = ocbot_core::apply_surface_policy(message, &self.policy);
+        self.inner.post(dest, &spec).await
+    }
+
+    async fn edit(&self, receipt: &PostReceipt, replacement: &OutgoingMessage) {
+        self.inner.edit(receipt, replacement).await;
+    }
+
+    async fn react(&self, receipt: &PostReceipt, emoji: char) {
+        self.inner.react(receipt, emoji).await;
+    }
+
+    async fn broadcast(&self, message: &OutgoingMessage) -> BroadcastOutcome {
+        let spec = ocbot_core::apply_surface_policy(message, &self.policy);
+        self.inner.broadcast(&spec).await
+    }
+
+    fn surfaces(&self) -> Vec<Surface> {
+        self.inner.surfaces()
+    }
+}
+
+/// Fan-out port for dual-surface operation (SPEC-004 D-01): implements
+/// [`ChatPort`] over the per-surface (instrumented, policy-wrapped) ports the
+/// registry built. Point sends route by surface — each child already knows
+/// its own destinations; broadcasts run concurrently over the children's own
+/// broadcast paths and merge per-surface results (D-07's ≥1-success
+/// contract, NFR-102: one slow surface never delays another).
 pub struct FanoutPort {
-    surfaces: Vec<(Surface, Arc<dyn ChatPort>, Destination)>,
+    children: Vec<Arc<dyn ChatPort>>,
 }
 
 impl FanoutPort {
-    /// Build from per-surface port + destination pairs.
-    pub fn new(ports: Vec<(Surface, Arc<dyn ChatPort>, Destination)>) -> Self {
-        Self { surfaces: ports }
+    /// Build over the registry's per-surface ports.
+    pub fn new(children: Vec<Arc<dyn ChatPort>>) -> Self {
+        Self { children }
     }
 
-    /// Apply per-surface policy (excerpt + attachment) to an outgoing message
-    /// (D-12). The core handler builds one generic spec; each surface gets its
-    /// own transformed version.
-    pub fn apply_policy(spec: &OutgoingMessage, surface: Surface) -> OutgoingMessage {
-        match surface {
-            Surface::Discord => {
-                // Discord defaults to excerpt-only (D-12)
-                OutgoingMessage {
-                    content: spec.content.clone(),
-                    attachment: None, // attachments suppressed by default
-                    components: spec.components.clone(),
-                    mention_allowlist: Vec::new(),
-                }
-            }
-            Surface::Signal => {
-                // Signal defaults to full + attachment (D-12)
-                spec.clone()
-            }
-        }
+    /// The child serving `surface`, if any.
+    fn child(&self, surface: Surface) -> Option<&Arc<dyn ChatPort>> {
+        self.children
+            .iter()
+            .find(|port| port.surfaces().contains(&surface))
     }
 }
 
@@ -371,71 +404,61 @@ impl ChatPort for FanoutPort {
         dest: &Destination,
         message: &OutgoingMessage,
     ) -> Result<PostReceipt, SendError> {
-        // Find the matching surface's port
-        let (_, port, _) = self
-            .surfaces
-            .iter()
-            .find(|(s, _, d)| *s == dest.surface && d == dest)
-            .ok_or(SendError {
+        match self.child(dest.surface) {
+            Some(port) => port.post(dest, message).await,
+            None => Err(SendError {
                 surface: dest.surface,
-                message: "no port found for destination".to_owned(),
-            })?;
-
-        port.post(dest, message).await
+                message: "no port configured for this surface".to_owned(),
+            }),
+        }
     }
 
     async fn edit(&self, receipt: &PostReceipt, replacement: &OutgoingMessage) {
-        if let Some((_, port, _)) = self.surfaces.iter().find(|(s, _, _)| *s == receipt.surface) {
+        if let Some(port) = self.child(receipt.surface) {
             port.edit(receipt, replacement).await;
         }
     }
 
     async fn react(&self, receipt: &PostReceipt, emoji: char) {
-        if let Some((_, port, _)) = self.surfaces.iter().find(|(s, _, _)| *s == receipt.surface) {
+        if let Some(port) = self.child(receipt.surface) {
             port.react(receipt, emoji).await;
         }
     }
 
     async fn broadcast(&self, message: &OutgoingMessage) -> BroadcastOutcome {
-        let mut delivered = Vec::new();
-        let mut failed = Vec::new();
-
-        // Concurrent delivery to all surfaces (D-07: one slow surface MUST NOT
-        // delay delivery to the others)
+        // Concurrent delivery (D-07): spawn per child so a slow or stalled
+        // surface cannot delay the others; each child's own broadcast applies
+        // its policy and announce destination.
         let tasks: Vec<_> = self
-            .surfaces
+            .children
             .iter()
-            .map(|(surface, port, dest)| {
-                let spec = Self::apply_policy(message, *surface);
+            .map(|port| {
                 let port = Arc::clone(port);
-                let dest = dest.clone();
-                let surface = *surface;
-                tokio::spawn(async move { port.post(&dest, &spec).await.map(|r| (surface, r)) })
+                let message = message.clone();
+                tokio::spawn(async move { port.broadcast(&message).await })
             })
             .collect();
-
-        // Collect results
+        let mut outcome = BroadcastOutcome::default();
         for task in tasks {
             match task.await {
-                Ok(Ok((surface, receipt))) => delivered.push((surface, receipt)),
-                Ok(Err(error)) => {
-                    // Can't recover surface info from error, use placeholder
-                    failed.push((
-                        Surface::Discord, // placeholder
-                        error,
-                    ));
+                Ok(child) => {
+                    outcome.delivered.extend(child.delivered);
+                    // The error already carries its surface (SendError.surface):
+                    // attribution is never guessed.
+                    outcome.failed.extend(child.failed);
                 }
                 Err(join_error) => {
-                    // Can't recover surface info, skip this failure
                     tracing::warn!(error = %join_error, "broadcast task join failed");
                 }
             }
         }
-
-        BroadcastOutcome { delivered, failed }
+        outcome
     }
 
     fn surfaces(&self) -> Vec<Surface> {
-        self.surfaces.iter().map(|(s, _, _)| *s).collect()
+        self.children
+            .iter()
+            .flat_map(|port| port.surfaces())
+            .collect()
     }
 }

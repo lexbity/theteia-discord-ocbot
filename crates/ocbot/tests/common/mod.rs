@@ -11,6 +11,7 @@
 )]
 
 pub mod signal_fake;
+pub mod signal_surface;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -31,6 +32,7 @@ use ocbot_core::{
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::context::{AppContext, BroadcastOutcome, ChatPort, SendError};
 use ocbot::app::guard::Guard;
+use ocbot::app::interaction::{InteractionSource, SourceKind, TextInput};
 use ocbot::app::metrics::Metrics;
 use ocbot::config::Templates;
 
@@ -525,6 +527,8 @@ impl GitPort for FakeGit {
 /// A posted message.
 #[derive(Debug, Clone)]
 pub struct Posted {
+    /// Where it went (the surface and chat the port addressed).
+    pub destination: Destination,
     /// The destination's chat ref (a Discord channel snowflake in PH-1 tests).
     pub channel: u64,
     /// The message spec.
@@ -594,6 +598,7 @@ impl ChatPort for FakeChat {
         let id = inner.next_id;
         inner.next_id += 1;
         inner.posts.push(Posted {
+            destination: dest.clone(),
             channel: dest.chat_ref.0.parse().unwrap_or(u64::MAX),
             message: message.clone(),
             id,
@@ -663,6 +668,67 @@ impl ChatPort for FakeChat {
 /// The namespaced `ActorId` for a Discord snowflake (test sources key on it).
 pub fn actor(id: u64) -> String {
     format!("discord:{id}")
+}
+
+/// Build a Discord `ModalSubmit` source the way the serenity adapter does: the
+/// `custom_id` plus one [`TextInput`] per submitted input, in the modal's own
+/// order. The PH-7 parity proof builds its expected value from this.
+pub fn modal(custom_id: &str, values: &[(&str, &str)]) -> InteractionSource {
+    InteractionSource {
+        kind: SourceKind::ModalSubmit {
+            custom_id: custom_id.to_owned(),
+            values: values
+                .iter()
+                .map(|(id, value)| TextInput {
+                    id: (*id).to_owned(),
+                    value: (*value).to_owned(),
+                })
+                .collect(),
+        },
+        user_id: actor(OPERATOR_ID),
+        destination: ocbot_core::Destination::discord(CHANNEL_ID),
+        guild_id: Some(1),
+        message_id: None,
+        is_dm: false,
+    }
+}
+
+/// The Discord operator snowflake the parity sources are built with.
+pub const OPERATOR_ID: u64 = 42;
+/// The Discord channel the parity sources are built with.
+pub const CHANNEL_ID: u64 = 7;
+
+/// Assert the Signal text flow synthesized **the same modal submit** the
+/// Discord harness builds for the same operator intent (FR-109/PH-7).
+///
+/// This is the parity proof: `discord` is what a Discord operator's submit
+/// looks like (built by [`modal`]), and `(custom_id, values)` is what the pure
+/// flow transition produced. Byte-identical or the test fails — a handler
+/// cannot tell the two surfaces apart only if this holds.
+pub fn assert_modal_parity(
+    discord: &InteractionSource,
+    custom_id: &str,
+    values: &[(String, String)],
+) {
+    let SourceKind::ModalSubmit {
+        custom_id: expected_id,
+        values: expected,
+    } = &discord.kind
+    else {
+        panic!("the Discord side of the parity assertion must be a modal submit");
+    };
+    assert_eq!(
+        expected_id, custom_id,
+        "the synthesized modal id must match the Discord modal"
+    );
+    let expected_values: Vec<(String, String)> = expected
+        .iter()
+        .map(|input| (input.id.clone(), input.value.clone()))
+        .collect();
+    assert_eq!(
+        &expected_values, values,
+        "the synthesized modal values must match the Discord modal"
+    );
 }
 
 /// The real template files from `templates/` (they are load-time validated).

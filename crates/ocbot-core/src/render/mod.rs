@@ -8,25 +8,36 @@
 //! The module is split by concern (SPEC-002 §4.3): `report` renders finished
 //! actions and the staged preview, `gate` renders permission/form requests,
 //! `browser` renders the `/ls`, plan-picker and history surfaces, `redact`
-//! scrubs secrets, and `label` holds the shared text helpers. The submodules are
-//! private; this facade re-exports the public API so `crate::render::...`
-//! imports are unchanged.
+//! scrubs secrets, `label` holds the shared text helpers, `legend` maps the
+//! reaction table for surfaces without buttons, and `flow` holds the
+//! pending-input step tables and their prompt texts (a modal's text form).
+//! The submodules are private; this facade re-exports the public API so
+//! `crate::render::...` imports are unchanged.
 
 mod browser;
+mod flow;
 mod gate;
 mod label;
 mod legend;
+mod policy;
 mod redact;
 mod report;
 
 pub use browser::{
     HISTORY_PAGE_SIZE, LS_PAGE_SIZE, LsEntry, history_page, ls_message, plan_picker_message,
 };
+pub use flow::{
+    CANCEL_WORD, FLOW_CD, FLOW_MODAL, FLOW_NAMES, FLOW_PROMPT, FLOW_RUN, FLOW_TTL_SECS,
+    MODAL_FAMILIES, RUN_STEPS, cancelled, default_hint, draft_echo, expired, field_prompt,
+    first_step, flow_steps, form_header, is_cancel, is_modal_id, modal_family_samples, next_step,
+    restart_notice, step_field, step_prompt, unknown_flow, with_cancel_hint,
+};
 pub use gate::gate_message;
 pub use legend::{
     ACCEPT_EMOJI, DISCARD_EMOJI, FOLLOWUP_EMOJI, Legend, LegendEntry, PARK_EMOJI,
     emoji_for_custom_id, help_text, keycap, normalize_emoji, render_legend, verb_label,
 };
+pub use policy::{ReportExcerpt, SUPPRESSED_ATTACHMENT_HINT, SurfacePolicy, apply_surface_policy};
 pub use redact::{REDACTED, RedactError, Redactor};
 pub use report::{
     DISCORD_MESSAGE_CAP, EXCERPT_TARGET, Footer, LABEL_MAX_CHARS, REPORT_ATTACHMENT_NAME,

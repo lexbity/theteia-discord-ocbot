@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+pub use ocbot_core::ReportExcerpt;
+use ocbot_core::render::SurfacePolicy;
 use ocbot_core::templates::{self, KNOWN_SLOTS};
 
 /// Environment variable naming the config file.
@@ -219,6 +221,14 @@ impl DiscordSection {
         self.report_attachments.unwrap_or(false)
     }
 
+    /// The resolved delivery policy (D-12: excerpt + attachments).
+    pub fn policy(&self) -> SurfacePolicy {
+        SurfacePolicy {
+            excerpt: self.excerpt(),
+            attachments: self.attachments(),
+        }
+    }
+
     /// The operator id after the env override rule.
     pub fn resolved_operator(&self) -> Option<u64> {
         self.allowed_user_id.or_else(|| {
@@ -291,20 +301,14 @@ impl SignalSection {
     pub fn attachments(&self) -> bool {
         self.report_attachments.unwrap_or(true)
     }
-}
 
-/// Per-surface report excerpt policy (D-12).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-pub enum ReportExcerpt {
-    /// The whole report inline.
-    #[serde(rename = "full")]
-    Full,
-    /// The report inline up to the excerpt budget (Discord's default).
-    #[serde(rename = "excerpt")]
-    Excerpt,
-    /// Headline + verdict only.
-    #[serde(rename = "off")]
-    Off,
+    /// The resolved delivery policy (D-12: excerpt + attachments).
+    pub fn policy(&self) -> SurfacePolicy {
+        SurfacePolicy {
+            excerpt: self.excerpt(),
+            attachments: self.attachments(),
+        }
+    }
 }
 
 /// The inbound token bucket (D-11.4).

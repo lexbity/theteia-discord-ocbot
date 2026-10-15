@@ -18,7 +18,7 @@ use std::sync::Arc;
 use common::{FakeChat, FakeGit, context};
 use ocbot::adapters::opencode::OpenCodeAdapter;
 use ocbot::adapters::store::StoreHandle;
-use ocbot::app::reconcile::reconcile;
+use ocbot::app::reconcile::{reconcile, reconcile_pending_flows};
 use ocbot_core::State;
 use serde_json::Value;
 use wiremock::matchers::any;
@@ -152,6 +152,101 @@ async fn a_restart_delivers_the_report_exactly_once() {
         let report = reconcile(&ctx).await;
         assert_eq!(report.completed, 0);
         assert!(discord.posts().is_empty(), "exactly once across restarts");
+        store.shutdown().await;
+    }
+}
+
+/// SPEC-004 PH-7 (D-06): the *other* thing a restart must not lose — a Signal
+/// text form (the stand-in for a Discord modal) that was open when the process
+/// died. The draft lives in SQLite, so boot announces it once and the operator
+/// can still reply to continue or `cancel` to close it. Same file-backed store
+/// pattern as the report test above: two processes, one database.
+#[tokio::test]
+async fn a_pending_flow_survives_the_restart_and_is_announced() {
+    let operator = "+15551234567";
+    let tmp = tempfile::tempdir().expect("tmp");
+    let db = tmp.path().join("ocbot-flows.db");
+
+    // Phase A: "boot" a store, open a run flow mid-way (directory collected,
+    // prompt awaited), and die before the prompt arrives.
+    {
+        let store = StoreHandle::open(&db).expect("open A");
+        let draft = serde_json::json!({ "dir": "/tmp/restarted" }).to_string();
+        store
+            .put_pending(
+                "signal",
+                operator,
+                "run",
+                "await_prompt",
+                &draft,
+                600,
+                1_700_000_000,
+            )
+            .await
+            .expect("put_pending");
+        store.shutdown().await;
+    }
+
+    // Phase B: a fresh process reopens the file. Boot's pending-flow pass
+    // announces the flow — and the row is still there, so the operator can
+    // reply to continue or `cancel` to close it.
+    {
+        let store = StoreHandle::open(&db).expect("open B");
+        let discord = FakeChat::new();
+        let ctx = context(
+            store.clone(),
+            Arc::new(common::FakeOpenCode::new()),
+            Arc::new(FakeGit::inert()),
+            Arc::new(discord.clone()),
+            OPERATOR,
+            Some(CHANNEL),
+        );
+        let announced = reconcile_pending_flows(&ctx).await;
+        assert_eq!(announced, 1, "one open flow is announced");
+        let posts = discord.posts();
+        let post = posts.last().expect("the notice was posted");
+        assert_eq!(post.destination.surface, ocbot_core::Surface::Signal);
+        assert_eq!(post.destination.chat_ref.0, operator);
+        assert!(
+            post.message.content.contains("a `run` draft was open"),
+            "{}",
+            post.message.content
+        );
+        // The notice echoes the draft, so the operator sees what was in flight.
+        assert!(
+            post.message.content.contains("dir: /tmp/restarted"),
+            "{}",
+            post.message.content
+        );
+        let still_open = store
+            .get_pending("signal", operator)
+            .await
+            .expect("get_pending")
+            .expect("the flow survived the restart");
+        assert_eq!(still_open.flow, "run");
+        assert!(still_open.draft.contains("/tmp/restarted"));
+
+        // The operator closes it: the pure transition, applied by the engine.
+        let engine = ocbot::adapters::signal::FlowEngine::new(
+            ctx.clone(),
+            Arc::new(ocbot::adapters::signal::SignalAdapter::new(
+                operator,
+                ocbot::adapters::signal::ConnectionSlot::new(),
+                store.clone(),
+                Arc::new(ocbot::app::metrics::Metrics::new()),
+                tmp.path().join("outbox"),
+            )),
+            operator,
+        );
+        engine.close(ocbot_core::cancelled()).await;
+        assert!(
+            store
+                .get_pending("signal", operator)
+                .await
+                .expect("get_pending")
+                .is_none(),
+            "cancel works after the restart"
+        );
         store.shutdown().await;
     }
 }

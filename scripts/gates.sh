@@ -231,7 +231,7 @@ probe "SPEC002-numeric-row" 'row\.get\(0\)' 'let id = row.get(0)?;'
 
 # The render god module stayed decomposed (Phase 3): every concern file exists
 # and none may grow back to the 500-line ceiling.
-for render_file in mod report gate browser redact label; do
+for render_file in mod report gate browser redact label legend flow; do
   path="crates/ocbot-core/src/render/$render_file.rs"
   if [ ! -f "$path" ]; then
     fail "SPEC-002: missing render submodule $path"
@@ -254,3 +254,25 @@ if grep -nE 'tracing::(trace|debug|info|warn|error)!!?\(.*\b(body|payload|data)\
   fail "G20: a frame body field reached a tracing call (P-32)"
 fi
 probe "G20" 'tracing::.*\bpayload\b' 'tracing::debug!(payload = ?frame, "frame");'
+
+# --- SPEC-004 PH-7 appended gates -------------------------------------------
+# G21: the modal-parity proof is load-bearing (FR-109/PH-7). The real drift
+# guard is the meta-test in tests/signal_flows.rs (router modal set ⊆ the
+# ocbot-core flow catalog); this gate stops the shared parity helper from
+# being deleted while suites still assert through it, and stops a *new* modal
+# family from being added to the router without a matching flow entry by
+# keeping the two declarations adjacent to one documented cross-check.
+if ! grep -rq "assert_modal_parity" crates/ocbot/tests/ 2>/dev/null; then
+  fail "G21: the modal-parity helper vanished from the test suite (FR-109)"
+fi
+probe "G21" "assert_modal_parity" 'common::assert_modal_parity(&discord, id, values);'
+
+# The flow catalog and the router's modal set must both exist for the
+# cross-check to mean anything.
+if ! grep -q "MODAL_FAMILIES" crates/ocbot-core/src/render/flow.rs; then
+  fail "G21: the flow catalog (MODAL_FAMILIES) is missing from ocbot-core"
+fi
+if ! grep -q "pub fn modal_ids" crates/ocbot/src/app/router.rs; then
+  fail "G21: the router no longer declares its modal ids"
+fi
+probe "G21-catalog" "MODAL_FAMILIES" 'pub const MODAL_FAMILIES: [&str; 8]'

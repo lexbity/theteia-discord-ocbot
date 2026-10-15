@@ -30,27 +30,20 @@ pub async fn scan(ctx: &Arc<AppContext>, stall_secs: i64) -> Result<usize, AppEr
         {
             continue;
         }
-        let channel = action
-            .chat_ref
-            .as_deref()
-            .and_then(|chat_ref| chat_ref.parse::<u64>().ok())
-            .or(ctx.guard.ops_channel)
-            .or(ctx.guard.inbox_channel);
-        if let Some(channel) = channel {
-            let minutes = stall_secs / 60;
-            let message = OutgoingMessage {
-                content: format!(
-                    "⏳ **{}** — no activity for {minutes}m. Still running; surfacing the silence, not diagnosing it.",
-                    action.label
-                ),
-                attachment: None,
-                components: Vec::new(),
-                mention_allowlist: ctx.guard.discord_operator().into_iter().collect(),
-            };
-            ctx.chat
-                .post(&ocbot_core::Destination::discord(channel), &message)
-                .await?;
-        }
+        // The ping goes to the action's own surface (SPEC-004 §5.4), falling
+        // back to the announce channel when the row predates destinations.
+        let destination = crate::app::handlers::support::about_destination(ctx, Some(&action));
+        let minutes = stall_secs / 60;
+        let message = OutgoingMessage {
+            content: format!(
+                "⏳ **{}** — no activity for {minutes}m. Still running; surfacing the silence, not diagnosing it.",
+                action.label
+            ),
+            attachment: None,
+            components: Vec::new(),
+            mention_allowlist: ctx.guard.discord_operator().into_iter().collect(),
+        };
+        ctx.chat.post(&destination, &message).await?;
         ctx.store.set_stall_ping(action.id, now).await?;
         tracing::info!(action = action.id, "stall ping posted");
         pinged += 1;

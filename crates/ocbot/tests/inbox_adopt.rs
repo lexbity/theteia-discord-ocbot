@@ -14,6 +14,8 @@
 
 mod common;
 
+use async_trait::async_trait;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -220,4 +222,138 @@ async fn a_muted_directory_is_silent() {
             .all(|post| !post.message.content.contains("external")),
         "muted directories produce no inbox posts (FR-33)"
     );
+}
+
+/// PH-6 (D-07/§5.4): a dual-surface completion broadcast inserts one
+/// `msg_map` row per delivered receipt, and the joined receipts string lands
+/// in `notified` — adoption works from whichever surface carried the report.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one test wires the dual-surface fan-out and asserts every receipt mapping; splitting would scatter the proof"
+)]
+#[tokio::test]
+async fn dual_surface_completion_maps_every_receipt() {
+    use ocbot::app::surfaces::{FanoutPort, SurfaceRegistry};
+    use ocbot_core::surface::{ChatRef, Destination, MsgId, PostReceipt, Surface};
+
+    /// A signal-shaped fake that records posts and answers broadcasts.
+    struct SignalChat {
+        inner: FakeChat,
+    }
+    #[async_trait]
+    impl ocbot::app::context::ChatPort for SignalChat {
+        async fn post(
+            &self,
+            destination: &Destination,
+            message: &ocbot_core::OutgoingMessage,
+        ) -> Result<PostReceipt, ocbot::app::context::SendError> {
+            self.inner.post(destination, message).await.unwrap();
+            // The daemon's timestamps are the surface's message ids.
+            Ok(PostReceipt {
+                surface: Surface::Signal,
+                msg_id: MsgId("1700000000000".to_owned()),
+            })
+        }
+        async fn edit(&self, receipt: &PostReceipt, replacement: &ocbot_core::OutgoingMessage) {
+            self.inner.edit(receipt, replacement).await;
+        }
+        async fn react(&self, receipt: &PostReceipt, emoji: char) {
+            self.inner.react(receipt, emoji).await;
+        }
+        async fn broadcast(
+            &self,
+            message: &ocbot_core::OutgoingMessage,
+        ) -> ocbot::app::context::BroadcastOutcome {
+            let receipt = self
+                .post(
+                    &Destination {
+                        surface: Surface::Signal,
+                        chat_ref: ChatRef(OPERATOR.to_string()),
+                    },
+                    message,
+                )
+                .await
+                .unwrap();
+            ocbot::app::context::BroadcastOutcome {
+                delivered: vec![(Surface::Signal, receipt)],
+                failed: Vec::new(),
+            }
+        }
+        fn surfaces(&self) -> Vec<Surface> {
+            vec![Surface::Signal]
+        }
+    }
+
+    let store = StoreHandle::open_in_memory().expect("store");
+    let opencode = FakeOpenCode::new();
+    opencode.set_sessions(vec![ext_session()]);
+    opencode.set_activity(EXT_SESSION, Activity::Idle);
+    opencode.set_snapshot(EXT_SESSION, ext_snapshot());
+    let discord = FakeChat::new().with_announce(CHANNEL);
+    let signal = Arc::new(SignalChat {
+        inner: FakeChat::new(),
+    });
+
+    let metrics = Arc::new(ocbot::app::metrics::Metrics::new());
+    let registry = SurfaceRegistry::build(
+        vec![
+            (
+                Surface::Discord,
+                Destination::discord(CHANNEL),
+                Arc::new(discord.clone()),
+            ),
+            (
+                Surface::Signal,
+                Destination {
+                    surface: Surface::Signal,
+                    chat_ref: ChatRef("+15551234567".to_owned()),
+                },
+                signal.clone(),
+            ),
+        ],
+        &metrics,
+    );
+    let chat: Arc<dyn ocbot::app::context::ChatPort> = Arc::new(FanoutPort::new(
+        registry
+            .handles()
+            .iter()
+            .map(|handle| handle.port.clone())
+            .collect(),
+    ));
+    let ctx = context(
+        store.clone(),
+        Arc::new(opencode.clone()),
+        Arc::new(FakeGit::inert()),
+        chat,
+        OPERATOR,
+        Some(CHANNEL),
+    );
+
+    inbox::tick(&ctx, DetectedBy::Fallback)
+        .await
+        .expect("inbox tick");
+
+    // Both surfaces carried the completion; each receipt is its own map row.
+    assert!(
+        store
+            .lookup_msg_map("discord", &discord.posts()[0].id.to_string())
+            .await
+            .expect("discord msg_map")
+            .is_some()
+    );
+    assert!(
+        store
+            .lookup_msg_map("signal", "1700000000000")
+            .await
+            .expect("signal msg_map")
+            .is_some()
+    );
+    // The dual broadcast claimed the completion exactly once: a second
+    // claim under the same (session, seq) key is refused — the dedupe held
+    // across both deliveries (FR-32).
+    let claimed = store
+        .claim_notified(EXT_SESSION, "msg_ext")
+        .await
+        .expect("claim probe");
+    assert!(!claimed, "the dual broadcast claimed the completion once");
 }

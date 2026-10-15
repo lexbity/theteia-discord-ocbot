@@ -133,23 +133,56 @@ async fn plan(ctx: &Arc<AppContext>, source: &InteractionSource) -> Result<AckPl
             }
         }
         SourceKind::ModalSubmit { custom_id, .. } => {
-            if custom_id == handlers::run::NEW_RUN_MODAL
-                || custom_id == handlers::prompt::PROMPT_MODAL
-                || custom_id == handlers::ls::CD_MODAL
-            {
+            if EXACT_MODALS.contains(&custom_id.as_str()) {
                 Ok(AckPlan::DeferPublic)
-            } else if custom_id.starts_with("v1:editgo:")
-                || custom_id.starts_with("v1:acceptgo:")
-                || custom_id.starts_with("v1:formgo:")
-                || custom_id.starts_with("v1:followupgo:")
-                || custom_id.starts_with(handlers::run::PLAN_OTHER_MODAL)
-            {
+            } else if is_prefixed_modal(custom_id) {
                 Ok(AckPlan::DeferUpdate)
             } else {
                 Err(AppError::UnknownCustomId(custom_id.to_owned()))
             }
         }
     }
+}
+
+/// The modal `custom_id`s the plan phase acknowledges publicly: the three bare
+/// modals, with no action suffix.
+const EXACT_MODALS: &[&str] = &[
+    handlers::run::NEW_RUN_MODAL,
+    handlers::prompt::PROMPT_MODAL,
+    handlers::ls::CD_MODAL,
+];
+
+/// The modal `custom_id` prefixes the plan phase acknowledges as an update:
+/// every modal opened from a component, carrying an action or gate rowid.
+const PREFIXED_MODALS: &[&str] = &[
+    "v1:editgo:",
+    "v1:acceptgo:",
+    "v1:formgo:",
+    "v1:followupgo:",
+    handlers::run::PLAN_OTHER_MODAL,
+];
+
+/// Whether a `custom_id` belongs to one of the prefixed modal families.
+fn is_prefixed_modal(custom_id: &str) -> bool {
+    PREFIXED_MODALS
+        .iter()
+        .any(|prefix| custom_id.starts_with(prefix))
+}
+
+/// Every modal `custom_id` family this router accepts, as one sample id per
+/// family (the bare ids plus `<prefix>1`).
+///
+/// This is the router's own list — the PH-7 drift guard crosses it against the
+/// Signal text-form catalog (`ocbot_core::render::is_modal_id`), so a new modal
+/// that no adapter can open as a text form fails CI instead of silently
+/// degrading to an unanswered form.
+#[must_use]
+pub fn modal_ids() -> Vec<String> {
+    EXACT_MODALS
+        .iter()
+        .map(|id| (*id).to_owned())
+        .chain(PREFIXED_MODALS.iter().map(|prefix| format!("{prefix}1")))
+        .collect()
 }
 
 /// Custom-id prefixes whose plan is a plain deferral: acknowledged with

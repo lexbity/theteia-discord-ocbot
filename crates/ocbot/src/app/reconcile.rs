@@ -7,6 +7,9 @@
 //! 2. The session pass probes the server and, for every `running` action,
 //!    finalizes idle ones exactly once (`report_msg_id IS NULL`), keeps watching
 //!    busy ones, and leaves everything untouched while the server is down.
+//!
+//! Plus a third, cheaper pass ([`reconcile_pending_flows`]): a Signal text form
+//! that was open when the process died is announced once at boot (D-06).
 
 use std::sync::Arc;
 
@@ -106,6 +109,57 @@ pub async fn reconcile(ctx: &Arc<AppContext>) -> ReconcileReport {
         completed,
         repaired,
     }
+}
+
+/// Notice every open pending-input flow after a restart (SPEC-004 D-06).
+///
+/// The draft text survived in SQLite, so the operator is told the flow is
+/// still open — reply to continue, or send the verb to restart — instead of
+/// typing into a bot that ignores them. The rows are deliberately left in
+/// place: resuming a draft is one message, so full resume semantics are not
+/// built (the accepted cost in D-06). Surface-blind: each row carries its own
+/// destination, so this pass knows nothing about chat platforms.
+///
+/// Returns the number of flows noticed.
+pub async fn reconcile_pending_flows(ctx: &Arc<AppContext>) -> usize {
+    let rows = match ctx.store.all_pending().await {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::error!(error = %error, "reconcile: pending-flow read failed");
+            return 0;
+        }
+    };
+    let mut noticed = 0;
+    for row in &rows {
+        let Some(surface) = ocbot_core::Surface::parse(&row.surface) else {
+            continue;
+        };
+        let destination = ocbot_core::Destination {
+            surface,
+            chat_ref: ocbot_core::ChatRef(row.chat_ref.clone()),
+        };
+        // The wording (and the draft echo) is core vocabulary (PH-7); the pass
+        // itself stays surface-blind — it never parses a draft's shape.
+        let message = ocbot_core::OutgoingMessage {
+            content: ocbot_core::restart_notice(&row.flow, &row.draft),
+            attachment: None,
+            components: Vec::new(),
+            mention_allowlist: Vec::new(),
+        };
+        if let Err(error) = ctx.chat.post(&destination, &message).await {
+            tracing::warn!(
+                surface = row.surface,
+                error = %error,
+                "pending-flow restart notice failed"
+            );
+            continue;
+        }
+        noticed += 1;
+    }
+    if noticed > 0 {
+        tracing::info!(noticed, "reconcile announced open pending-input flows");
+    }
+    noticed
 }
 
 /// Roll forward (or conservatively revert) every interrupted Accept/Park/Reset

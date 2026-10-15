@@ -2,6 +2,9 @@
 //! — text decisions, the run flow, reactions, quote adoption, attachments, and
 //! the trust boundary. Everything here drives the real inbound pump → guard →
 //! router → handlers pipeline through a live JSON-RPC socket.
+//!
+//! The surface itself is the shared `common::signal_surface` harness (PH-7
+//! extracted it), so this suite and `signal_flows.rs` build the same thing.
 
 #![allow(
     clippy::unwrap_used,
@@ -13,268 +16,18 @@
 mod common;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use common::signal_fake::{FakeSignal, Script, text_envelope};
-use common::{FakeGit, FakeOpenCode, permissive_fs, workspace_templates};
-use ocbot::adapters::signal::{SignalAdapter, SignalInbound, SignalMachine};
-use ocbot::adapters::store::StoreHandle;
-use ocbot::app::context::{AppContext, ChatPort};
-use ocbot::app::guard::Guard;
-use ocbot::app::metrics::Metrics;
+use common::signal_fake::{Script, text_envelope};
+use common::signal_surface::{
+    OPERATOR, SENT_TS, STRANGER, SignalSurface, notice, repo_git, wait_for, wait_state,
+};
+use common::{FakeGit, FakeOpenCode};
+use ocbot::app::context::ChatPort;
 use ocbot::config::RateLimit;
-use ocbot_core::ports::{Clock, GitPort, OpenCodePort};
 use ocbot_core::{
     ActorId, ButtonKind, Destination, OutgoingMessage, State, Surface, component_button,
 };
-
-const OPERATOR: &str = "+15551234567";
-const STRANGER: &str = "+15550000000";
-/// The fake daemon's constant `send` reply (the pinned contract).
-const SENT_TS: u64 = 1_700_000_000_000;
-
-/// A live Signal surface under test.
-struct SignalSurface {
-    tmp: tempfile::TempDir,
-    daemon: FakeSignal,
-    ctx: Arc<AppContext>,
-    adapter: Arc<SignalAdapter>,
-    opencode: Arc<FakeOpenCode>,
-    store: StoreHandle,
-    metrics: Arc<Metrics>,
-    clock: Arc<common::FakeClock>,
-    next_ts: AtomicU64,
-}
-
-impl SignalSurface {
-    async fn new(script: Script, rate: Option<RateLimit>, git: Arc<dyn GitPort>) -> Self {
-        let dir = tempfile::tempdir().expect("tmp");
-        let socket = dir.path().join("signal.sock");
-        let daemon = FakeSignal::bind(socket.clone(), script);
-        let store = StoreHandle::open_in_memory().expect("store");
-        let metrics = Arc::new(Metrics::new());
-        let clock = Arc::new(common::FakeClock::at(1_700_000_000));
-        let machine = SignalMachine::new(
-            socket,
-            Duration::from_millis(10),
-            Duration::from_millis(20),
-            metrics.clone(),
-        )
-        .with_jitter(Box::new(|| 0.5));
-        let slot = machine.connection();
-        let adapter = Arc::new(SignalAdapter::new(
-            OPERATOR,
-            slot,
-            store.clone(),
-            metrics.clone(),
-            dir.path().join("outbox"),
-        ));
-        let (sink_tx, sink_rx) = tokio::sync::mpsc::channel(64);
-        tokio::spawn(machine.run_forever(sink_tx));
-        wait_for(
-            || {
-                metrics
-                    .render_text()
-                    .contains("ocbot_surface_up{surface=\"signal\"} 1")
-            },
-            "the machine subscribes",
-        )
-        .await;
-
-        let chat: Arc<dyn ChatPort> = adapter.clone();
-        let opencode = Arc::new(FakeOpenCode::new());
-        let opencode_port: Arc<dyn OpenCodePort> = opencode.clone();
-        let clock_port: Arc<dyn Clock> = clock.clone();
-        let fs = permissive_fs(clock_port);
-        let ctx = Arc::new(AppContext {
-            store: store.clone(),
-            opencode: opencode_port,
-            git,
-            fs,
-            clock: clock.clone(),
-            abort_timeout_secs: 30,
-            permission_ruleset: None,
-            chat,
-            metrics: metrics.clone(),
-            redactor: Arc::new(ocbot_core::Redactor::default()),
-            health: Arc::new(ocbot::app::degraded::HealthMonitor::new()),
-            guard: Guard {
-                allowed_actors: vec![ActorId::from_parts(Surface::Signal, OPERATOR)],
-                ops_channel: None,
-                inbox_channel: None,
-            },
-            templates: workspace_templates(),
-            plan_heading_min: ocbot_core::DEFAULT_HEADING_MIN,
-            plan_heading_max: ocbot_core::DEFAULT_HEADING_MAX,
-            ls_page_size: ocbot_core::LS_PAGE_SIZE,
-        });
-        let inbound = Arc::new(SignalInbound::new(
-            ctx.clone(),
-            adapter.clone(),
-            OPERATOR,
-            rate.unwrap_or_default(),
-        ));
-        tokio::spawn(inbound.run(sink_rx));
-        Self {
-            tmp: dir,
-            daemon,
-            ctx,
-            adapter,
-            opencode,
-            store,
-            metrics,
-            clock,
-            next_ts: AtomicU64::new(1_700_000_100_000),
-        }
-    }
-
-    /// Stream a text message from `sender`.
-    fn send(&self, sender: &str, text: &str) {
-        let ts = self.next_ts.fetch_add(1, Ordering::Relaxed);
-        let id = self.daemon.subscribe_id();
-        self.daemon
-            .stream_envelope(id, &text_envelope(sender, ts, text));
-    }
-
-    /// Stream a raw envelope result.
-    fn stream_raw(&self, result: &serde_json::Value) {
-        let id = self.daemon.subscribe_id();
-        self.daemon.stream_envelope(id, result);
-    }
-
-    /// Every text the surface has sent to the operator, in order.
-    fn sent(&self) -> Vec<String> {
-        self.daemon
-            .requests()
-            .into_iter()
-            .filter(|recorded| recorded.method == "send")
-            .filter_map(|recorded| recorded.params[0]["message"].as_str().map(str::to_owned))
-            .collect()
-    }
-
-    /// Wait until a sent message contains `needle`.
-    async fn wait_sent(&self, needle: &str) {
-        for _ in 0..600 {
-            if self.sent().iter().any(|text| text.contains(needle)) {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        panic!("never sent {needle:?}: {:?}", self.sent());
-    }
-
-    /// Seed a `reported` action on the signal surface.
-    async fn seed_reported(&self, dir: &str, label: &str, work_branch: Option<&str>) -> i64 {
-        self.store
-            .upsert_project(dir, work_branch, None)
-            .await
-            .expect("project");
-        let run_id = self.store.insert_run(dir, "free").await.expect("run");
-        let action_id = self
-            .store
-            .insert_action(run_id, Some(OPERATOR), label, "prompt", 1)
-            .await
-            .expect("action");
-        self.store
-            .set_action_destination(action_id, Surface::Signal.as_str(), OPERATOR)
-            .await
-            .expect("destination");
-        assert!(
-            self.store
-                .begin_send(action_id, dir, "ses_seed", None, false)
-                .await
-                .expect("begin_send"),
-            "the lock is taken"
-        );
-        assert!(
-            self.store
-                .cas_state(action_id, State::Running, State::Reported, &[])
-                .await
-                .expect("cas"),
-            "running → reported"
-        );
-        action_id
-    }
-
-    /// Seed a `staged` action on the signal surface.
-    async fn seed_staged(&self, dir: &str, label: &str) -> i64 {
-        self.store
-            .upsert_project(dir, None, None)
-            .await
-            .expect("project");
-        let run_id = self.store.insert_run(dir, "free").await.expect("run");
-        let action_id = self
-            .store
-            .insert_action(run_id, Some(OPERATOR), label, "prompt", 1)
-            .await
-            .expect("action");
-        self.store
-            .set_action_destination(action_id, Surface::Signal.as_str(), OPERATOR)
-            .await
-            .expect("destination");
-        action_id
-    }
-
-    /// Remember `dir` as this chat's cwd.
-    async fn set_cwd(&self, dir: &str) {
-        let actor = ActorId::from_parts(Surface::Signal, OPERATOR).0;
-        self.store
-            .upsert_project(dir, None, None)
-            .await
-            .expect("project");
-        self.store.set_ui_cwd(&actor, dir).await.expect("cwd");
-    }
-
-    async fn state(&self, action_id: i64) -> State {
-        self.store
-            .action(action_id)
-            .await
-            .expect("action read")
-            .expect("present")
-            .state
-    }
-
-    fn destination(&self) -> Destination {
-        self.adapter.destination()
-    }
-}
-
-/// Poll until `condition` holds (bounded).
-async fn wait_for(condition: impl Fn() -> bool, what: &str) {
-    for _ in 0..600 {
-        if condition() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    panic!("never became true: {what}");
-}
-
-/// Poll until the action reaches `want`.
-async fn wait_state(surface: &SignalSurface, action_id: i64, want: State) {
-    for _ in 0..600 {
-        if surface.state(action_id).await == want {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    panic!("action {action_id} never reached {want:?}");
-}
-
-fn repo_git(repo: &std::path::Path) -> Arc<dyn GitPort> {
-    Arc::new(FakeGit::with_repo(Some(repo.to_path_buf())))
-}
-
-/// A plain message spec.
-fn notice(text: &str) -> OutgoingMessage {
-    OutgoingMessage {
-        content: text.to_owned(),
-        attachment: None,
-        components: Vec::new(),
-        mention_allowlist: Vec::new(),
-    }
-}
 
 #[tokio::test]
 async fn unknown_commands_get_the_help_table() {

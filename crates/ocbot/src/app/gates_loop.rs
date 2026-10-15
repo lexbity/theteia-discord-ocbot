@@ -99,7 +99,10 @@ async fn handle_gate(
     // The gate message goes wherever the action's reports go (SPEC-004 §5.4:
     // point posts follow the action's persisted surface/chat_ref). Without an
     // attributed action, fall back to the operator's ops channel (Discord).
-    let destination = action_destination(ctx, action.as_ref());
+    let destination = Some(crate::app::handlers::support::about_destination(
+        ctx,
+        action.as_ref(),
+    ));
     // The legacy `gate.channel_id` column only carries a Discord snowflake;
     // other surfaces re-derive their destination from the action on re-ping.
     let channel = match &destination {
@@ -175,23 +178,6 @@ async fn handle_gate(
     Ok(())
 }
 
-/// The destination a gate message goes to: the attributed action's own surface
-/// (SPEC-004 §5.4), else the operator's ops channel on Discord.
-fn action_destination(
-    ctx: &Arc<AppContext>,
-    action: Option<&crate::adapters::store::ActionRow>,
-) -> Option<ocbot_core::Destination> {
-    if let Some(action) = action
-        && let Ok(destination) = crate::app::handlers::support::destination_for(action)
-    {
-        return Some(destination);
-    }
-    ctx.guard
-        .inbox()
-        .or(ctx.guard.ops_channel)
-        .map(ocbot_core::Destination::discord)
-}
-
 /// A gate that left the server's pending list is resolved elsewhere: mark the
 /// still-pending row answered and clear the action's blocked substatus (FR-41).
 async fn clear_left(ctx: &Arc<AppContext>, server_ids: &HashSet<String>) -> Result<(), AppError> {
@@ -242,7 +228,10 @@ pub async fn reping(ctx: &Arc<AppContext>, reping_secs: i64) -> Result<(), AppEr
             Some(action_id) => ctx.store.action(action_id).await?,
             None => None,
         };
-        if let Some(destination) = action_destination(ctx, action.as_ref()) {
+        {
+            // The re-ping follows the action's own surface (SPEC-004 §5.4).
+            let destination =
+                crate::app::handlers::support::about_destination(ctx, action.as_ref());
             let message = OutgoingMessage {
                 content,
                 attachment: None,
