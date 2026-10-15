@@ -29,7 +29,7 @@ fn slash_run(user: u64, channel: u64, guild: Option<u64>) -> InteractionSource {
             name: "run".to_owned(),
         },
         user_id: format!("discord:{user}"),
-        channel_id: channel,
+        destination: ocbot_core::Destination::discord(channel),
         guild_id: guild,
         message_id: None,
         is_dm: guild.is_none(),
@@ -42,7 +42,7 @@ fn slash_status(user: u64, channel: u64, guild: Option<u64>) -> InteractionSourc
             name: "status".to_owned(),
         },
         user_id: format!("discord:{user}"),
-        channel_id: channel,
+        destination: ocbot_core::Destination::discord(channel),
         guild_id: guild,
         message_id: None,
         is_dm: guild.is_none(),
@@ -61,7 +61,7 @@ fn button(
             custom_id: custom_id.to_owned(),
         },
         user_id: format!("discord:{user}"),
-        channel_id: channel,
+        destination: ocbot_core::Destination::discord(channel),
         guild_id: guild,
         message_id: Some(message),
         is_dm: guild.is_none(),
@@ -81,7 +81,7 @@ fn modal(user: u64, channel: u64, custom_id: &str, values: Vec<(&str, &str)>) ->
                 .collect(),
         },
         user_id: format!("discord:{user}"),
-        channel_id: channel,
+        destination: ocbot_core::Destination::discord(channel),
         guild_id: Some(OPS),
         message_id: None,
         is_dm: false,
@@ -94,7 +94,7 @@ fn slash_named(name: &str, user: u64, channel: u64, guild: Option<u64>) -> Inter
             name: name.to_owned(),
         },
         user_id: format!("discord:{user}"),
-        channel_id: channel,
+        destination: ocbot_core::Destination::discord(channel),
         guild_id: guild,
         message_id: None,
         is_dm: guild.is_none(),
@@ -234,7 +234,7 @@ async fn foreign_channel_is_ignored_with_zero_port_calls_for_every_handler() {
 
     for source in all_handler_sources(OPS, Some(OPS)) {
         let mut foreign = source.clone();
-        foreign.channel_id = OPS + 1; // a channel outside the ops channel
+        foreign.destination = ocbot_core::Destination::discord(OPS + 1); // a channel outside the ops channel
         let outcome = router::guarded_plan(&ctx, &foreign).await;
         assert_eq!(
             outcome_kind(&outcome),

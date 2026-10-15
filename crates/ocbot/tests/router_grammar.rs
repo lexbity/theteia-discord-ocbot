@@ -27,7 +27,7 @@ fn source(kind: SourceKind) -> InteractionSource {
     InteractionSource {
         kind,
         user_id: format!("discord:{OPERATOR}"),
-        channel_id: CHANNEL,
+        destination: ocbot_core::Destination::discord(CHANNEL),
         guild_id: Some(1),
         message_id: Some(1),
         is_dm: false,
@@ -92,7 +92,7 @@ async fn guard_runs_before_any_routing() {
     ));
 
     let mut foreign = slash("run");
-    foreign.channel_id = 999;
+    foreign.destination = ocbot_core::Destination::discord(999);
     assert!(matches!(
         router::guarded_plan(&ctx, &foreign).await,
         PlanOutcome::Ignore

@@ -36,7 +36,7 @@ fn modal(custom_id: &str, values: &[(&str, &str)]) -> InteractionSource {
                 .collect(),
         },
         user_id: format!("discord:{OPERATOR}"),
-        channel_id: CHANNEL,
+        destination: ocbot_core::Destination::discord(CHANNEL),
         guild_id: Some(1),
         message_id: None,
         is_dm: false,

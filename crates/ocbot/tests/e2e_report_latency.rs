@@ -158,7 +158,7 @@ async fn plan_phase_stays_under_the_ack_budget() {
             custom_id: format!("v1:send:{action}"),
         },
         user_id: format!("discord:{OPERATOR}"),
-        channel_id: CHANNEL,
+        destination: ocbot_core::Destination::discord(CHANNEL),
         guild_id: Some(1),
         message_id: Some(1),
         is_dm: false,

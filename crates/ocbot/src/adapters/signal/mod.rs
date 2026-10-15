@@ -11,11 +11,15 @@
 //! captured into `tests/common/signal_fake.rs` — the fake is the pinned
 //! contract. `KNOWN_CAPS.md` records what a live capture would supersede.
 
+pub mod adapter;
 pub mod envelope;
+pub mod inbound;
 pub mod rpc;
 
+pub use adapter::SignalAdapter;
 pub use envelope::Envelope;
-pub use rpc::{RpcError, SignalMachine, SignalRpc, signal_backoff};
+pub use inbound::SignalInbound;
+pub use rpc::{ConnectionSlot, RpcError, SignalMachine, SignalRpc, signal_backoff};
 
 /// The oldest signal-cli daemon this bot speaks (FR-114).
 ///

@@ -22,12 +22,7 @@ pub async fn execute(
     let dir = crate::app::handlers::support::history_dir(ctx, &source.user_id).await?;
     ctx.store.set_ui_cwd(&source.user_id, &dir).await?;
     let message = build_page(ctx, &dir, 0, show_reset, &source.user_id).await?;
-    ctx.chat
-        .post(
-            &ocbot_core::Destination::discord(source.channel_id),
-            &message,
-        )
-        .await?;
+    ctx.chat.post(&source.destination, &message).await?;
     Ok(())
 }
 
@@ -50,12 +45,7 @@ pub async fn page(
                 .await;
         }
         None => {
-            ctx.chat
-                .post(
-                    &ocbot_core::Destination::discord(source.channel_id),
-                    &message,
-                )
-                .await?;
+            ctx.chat.post(&source.destination, &message).await?;
         }
     }
     Ok(())

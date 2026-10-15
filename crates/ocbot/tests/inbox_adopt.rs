@@ -83,7 +83,7 @@ async fn external_completion_posts_once_and_a_reply_adopts() {
     opencode.set_sessions(vec![ext_session()]);
     opencode.set_activity(EXT_SESSION, Activity::Idle);
     opencode.set_snapshot(EXT_SESSION, ext_snapshot());
-    let discord = FakeChat::new();
+    let discord = FakeChat::new().with_announce(CHANNEL);
     let ctx = ctx_for(&store, Arc::new(opencode.clone()), &discord);
 
     // First poll: the external completion lands in the inbox.
@@ -139,7 +139,7 @@ async fn external_completion_posts_once_and_a_reply_adopts() {
         &ctx,
         EXT_SESSION,
         "keep going",
-        CHANNEL,
+        &ocbot_core::Destination::discord(CHANNEL),
         &format!("discord:{OPERATOR}"),
     )
     .await
@@ -207,7 +207,7 @@ async fn a_muted_directory_is_silent() {
     opencode.set_sessions(vec![ext_session()]);
     opencode.set_activity(EXT_SESSION, Activity::Idle);
     opencode.set_snapshot(EXT_SESSION, ext_snapshot());
-    let discord = FakeChat::new();
+    let discord = FakeChat::new().with_announce(CHANNEL);
     let ctx = ctx_for(&store, Arc::new(opencode), &discord);
 
     inbox::tick(&ctx, DetectedBy::Fallback)

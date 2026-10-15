@@ -64,7 +64,7 @@ fn history_source() -> InteractionSource {
             name: "history".to_owned(),
         },
         user_id: format!("discord:{OPERATOR}"),
-        channel_id: CHANNEL,
+        destination: ocbot_core::Destination::discord(CHANNEL),
         guild_id: Some(1),
         message_id: None,
         is_dm: false,
@@ -84,7 +84,7 @@ async fn reset_creates_superseded_branch_before_moving_head() {
         &repo_str(&repo),
         &first,
         &format!("discord:{OPERATOR}"),
-        Some(CHANNEL),
+        Some(ocbot_core::Destination::discord(CHANNEL)),
     )
     .await
     .expect("reset");
@@ -132,7 +132,7 @@ async fn reset_refuses_a_dirty_tree() {
         &repo_str(&repo),
         &first,
         &format!("discord:{OPERATOR}"),
-        Some(CHANNEL),
+        Some(ocbot_core::Destination::discord(CHANNEL)),
     )
     .await
     .expect_err("dirty tree refused");
@@ -157,7 +157,7 @@ async fn reset_refuses_a_non_live_target() {
         &repo_str(&repo),
         "0123456789abcdef0123456789abcdef01234567",
         &format!("discord:{OPERATOR}"),
-        Some(CHANNEL),
+        Some(ocbot_core::Destination::discord(CHANNEL)),
     )
     .await
     .expect_err("non-live target refused");
@@ -224,7 +224,7 @@ async fn actions_above_a_reset_render_orphaned() {
         &repo_str(&repo),
         &first,
         &format!("discord:{OPERATOR}"),
-        Some(CHANNEL),
+        Some(ocbot_core::Destination::discord(CHANNEL)),
     )
     .await
     .expect("reset");

@@ -17,7 +17,7 @@ pub async fn adopt(
     ctx: &Arc<AppContext>,
     session_id: &str,
     prompt: &str,
-    channel: u64,
+    destination: &ocbot_core::Destination,
     user_id: &str,
 ) -> Result<(), AppError> {
     let prompt = prompt.trim();
@@ -58,7 +58,14 @@ pub async fn adopt(
     let label: String = prompt.chars().take(40).collect();
     let action_id = ctx
         .store
-        .insert_action(run_id, Some(&channel.to_string()), &label, prompt, 1)
+        .insert_action(run_id, Some(&destination.chat_ref.0), &label, prompt, 1)
+        .await?;
+    ctx.store
+        .set_action_destination(
+            action_id,
+            destination.surface.as_str(),
+            &destination.chat_ref.0,
+        )
         .await?;
     let action = ctx
         .store
@@ -91,8 +98,6 @@ pub async fn adopt(
         ),
         user_id,
     );
-    ctx.chat
-        .post(&ocbot_core::Destination::discord(channel), &message)
-        .await?;
+    ctx.chat.post(destination, &message).await?;
     Ok(())
 }

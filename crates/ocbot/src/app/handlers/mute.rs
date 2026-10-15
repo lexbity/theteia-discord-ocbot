@@ -17,7 +17,7 @@ pub async fn execute(ctx: &Arc<AppContext>, source: &InteractionSource) -> Resul
     );
     ctx.chat
         .post(
-            &ocbot_core::Destination::discord(source.channel_id),
+            &source.destination,
             &crate::app::handlers::support::simple(content, &source.user_id),
         )
         .await?;

@@ -34,12 +34,7 @@ pub async fn confirm(
         ButtonKind::Danger,
         &source.user_id,
     );
-    ctx.chat
-        .post(
-            &ocbot_core::Destination::discord(source.channel_id),
-            &message,
-        )
-        .await?;
+    ctx.chat.post(&source.destination, &message).await?;
     Ok(Some("confirm to reset".to_owned()))
 }
 
@@ -50,7 +45,14 @@ pub async fn execute_reset(
     sha: &str,
 ) -> Result<Option<String>, AppError> {
     let dir = crate::app::handlers::support::history_dir(ctx, &source.user_id).await?;
-    begin_reset(ctx, &dir, sha, &source.user_id, Some(source.channel_id)).await
+    begin_reset(
+        ctx,
+        &dir,
+        sha,
+        &source.user_id,
+        Some(source.destination.clone()),
+    )
+    .await
 }
 
 /// Validate, record the intent, and drive the sequence.
@@ -59,7 +61,7 @@ pub async fn begin_reset(
     dir_text: &str,
     sha: &str,
     operator: &str,
-    channel: Option<u64>,
+    destination: Option<ocbot_core::Destination>,
 ) -> Result<Option<String>, AppError> {
     let dir = Path::new(dir_text);
     if !crate::app::handlers::support::is_git_dir(ctx, dir).await? {
@@ -99,7 +101,7 @@ pub async fn begin_reset(
         sup_branch,
         step: 0,
     };
-    resume(ctx, &intent, operator, channel).await
+    resume(ctx, &intent, operator, destination).await
 }
 
 /// Resume a recorded reset intent from its `step`. Idempotent.
@@ -107,7 +109,7 @@ pub async fn resume(
     ctx: &Arc<AppContext>,
     intent: &ResetIntentRow,
     operator: &str,
-    channel: Option<u64>,
+    destination: Option<ocbot_core::Destination>,
 ) -> Result<Option<String>, AppError> {
     let dir = Path::new(&intent.dir);
 
@@ -144,10 +146,10 @@ pub async fn resume(
         "reset to `{}`; actions above that point now render orphaned (P8)",
         short(&intent.target_sha)
     );
-    if let Some(channel) = channel {
+    if let Some(destination) = destination {
         ctx.chat
             .post(
-                &ocbot_core::Destination::discord(channel),
+                &destination,
                 &crate::app::handlers::support::simple(summary.clone(), operator),
             )
             .await?;

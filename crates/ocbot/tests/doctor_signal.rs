@@ -400,29 +400,36 @@ async fn signal_only_without_a_socket_setting_exits_one() {
 }
 
 #[tokio::test]
-async fn signal_only_with_a_healthy_daemon_still_exits_three_until_the_transport_ships() {
-    // The doctor's success arm does not boot a phantom surface: PH-3 ships
-    // the contract layer only, so a healthy daemon is dropped with a loud
-    // warning and, with no other surface selected, exit 3.
+async fn signal_only_with_a_healthy_daemon_boots_and_drains() {
+    // PH-4: a healthy daemon now boots the Signal surface — no Discord needed.
+    // The opencode probe degrades (closed port) without blocking the surface.
     let dir = tempfile::tempdir().expect("tmp");
     let socket = dir.path().join("signal.sock");
     let _daemon = FakeSignal::bind(socket.clone(), Script::default());
     let config = write_config(dir.path(), "\"signal\"", Some(&socket), false);
-    let mut spawned = spawn_binary(&config, &[]);
-    let (status, _elapsed) = spawned.wait_for_exit().await;
-    assert_eq!(status.code(), Some(3));
+    let mut spawned = spawn_binary(&config, SECRETS);
     assert!(
-        spawned.log().contains("signal-cli daemon healthy"),
-        "the healthy path is logged before the refusal: {}",
+        spawned.alive_after(Duration::from_millis(3_500)).await,
+        "the signal surface must boot: {}",
         spawned.log()
     );
+    assert!(
+        spawned.log().contains("signal-cli daemon healthy"),
+        "the healthy path is logged: {}",
+        spawned.log()
+    );
+    assert!(
+        spawned.log().contains("signal inbound pump started"),
+        "the inbound pump started: {}",
+        spawned.log()
+    );
+    let (status, _elapsed) = spawned.sigterm_and_wait().await;
+    assert_eq!(status.code(), Some(0), "a clean drain");
 }
 
 #[tokio::test]
-async fn a_healthy_signal_daemon_next_to_discord_boots_the_discord_surface() {
-    // A healthy daemon still drops the signal surface (no transport yet), but
-    // Discord — also selected — keeps booting. This is the pair that will
-    // carry both surfaces once the transport lands.
+async fn a_healthy_signal_daemon_next_to_discord_boots_both_surfaces() {
+    // PH-4: both selected surfaces boot; the registry names them both.
     let dir = tempfile::tempdir().expect("tmp");
     let socket = dir.path().join("signal.sock");
     let _daemon = FakeSignal::bind(socket.clone(), Script::default());
@@ -430,12 +437,12 @@ async fn a_healthy_signal_daemon_next_to_discord_boots_the_discord_surface() {
     let mut spawned = spawn_binary(&config, SECRETS);
     assert!(
         spawned.alive_after(Duration::from_millis(3_500)).await,
-        "the signal drop must not take the process down: {}",
+        "both surfaces must boot: {}",
         spawned.log()
     );
     assert!(
-        spawned.log().contains("refusing the surface until then"),
-        "the drop is loud in the log: {}",
+        spawned.log().contains("signal inbound pump started"),
+        "the signal surface is live: {}",
         spawned.log()
     );
     let (status, _elapsed) = spawned.sigterm_and_wait().await;

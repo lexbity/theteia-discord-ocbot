@@ -131,12 +131,15 @@ pub async fn execute_prompt(
         ctx.store.clear_draft_path(&source.user_id).await?;
     }
 
-    let chat_ref = source.channel_id.to_string();
+    let chat_ref = source.destination.chat_ref.0.clone();
     let run_id = ctx.store.insert_run(&dir_name, "free").await?;
     let label: String = prompt_text.chars().take(40).collect();
     let action_id = ctx
         .store
         .insert_action(run_id, Some(&chat_ref), &label, &prompt_text, 1)
+        .await?;
+    ctx.store
+        .set_action_destination(action_id, source.destination.surface.as_str(), &chat_ref)
         .await?;
     ctx.store.set_ui_cwd(&source.user_id, &dir_name).await?;
 

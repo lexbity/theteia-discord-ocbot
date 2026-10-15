@@ -4,6 +4,8 @@
 //! before any slow work — the 3 s rule) and an [`execute`](crate::app::router::execute)
 //! pass that owns the side effects.
 
+use ocbot_core::Destination;
+
 /// A normalized interaction.
 #[derive(Debug, Clone)]
 pub struct InteractionSource {
@@ -12,13 +14,16 @@ pub struct InteractionSource {
     /// The invoking user, as a namespaced `ActorId` string (`discord:42`,
     /// `signal:+1555…` — SPEC-004 D-03; adapters namespace at build time).
     pub user_id: String,
-    /// The channel the interaction happened in.
-    pub channel_id: u64,
-    /// The guild, when not a DM.
+    /// Where this interaction's reply belongs: the surface and chat it
+    /// happened in (SPEC-004 §5.2 — never a Discord snowflake in the core).
+    pub destination: Destination,
+    /// The guild, when not a DM (Discord-only; `None` elsewhere).
     pub guild_id: Option<u64>,
-    /// The message the component is attached to, when a button.
+    /// The message the component is attached to, when the surface addresses
+    /// messages by snowflake (Discord buttons); `None` on surfaces that do not.
     pub message_id: Option<u64>,
-    /// Whether this is a DM with the operator.
+    /// Whether this is a direct conversation with the operator (always true on
+    /// surfaces with a single 1:1 chat; computed from `guild_id` on Discord).
     pub is_dm: bool,
 }
 

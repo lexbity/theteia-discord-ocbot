@@ -1331,10 +1331,15 @@ store_method! {
     };
 
     /// Open (or replace) the pending-input flow for one chat (SPEC-004 D-06:
-    /// one row per `(surface, chat_ref)`).
-    PutPending as put_pending(surface: &str => String, chat_ref: &str => String, flow: &str => String, step: &str => String, draft: &str => String, ttl_secs: i64 => i64) -> () {
+    /// one row per `(surface, chat_ref)`). `now` comes from the app clock so
+    /// the TTL is testable against the injected clock and consistent with the
+    /// expiry sweep.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one column per argument mirrors the insert; a struct would not reduce the call-site clarity"
+    )]
+    PutPending as put_pending(surface: &str => String, chat_ref: &str => String, flow: &str => String, step: &str => String, draft: &str => String, ttl_secs: i64 => i64, now: i64 => i64) -> () {
         |connection: &mut Connection| -> rusqlite::Result<()> {
-            let now = now_unix();
             connection
                 .execute(
                     "INSERT INTO pending_input (surface, chat_ref, flow, step, draft, updated_at, expires_at)
@@ -1381,6 +1386,88 @@ store_method! {
                 .query_map(params![now], pending_input_row)?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(rows)
+        }
+    };
+
+    /// The open pending-input flow for one chat, if any (SPEC-004 D-06).
+    GetPending as get_pending(surface: &str => String, chat_ref: &str => String) -> Option<PendingInputRow> {
+        |connection: &mut Connection| -> rusqlite::Result<Option<PendingInputRow>> {
+            connection
+                .query_row(
+                    "SELECT surface, chat_ref, flow, step, draft, updated_at, expires_at
+                     FROM pending_input WHERE surface = ?1 AND chat_ref = ?2",
+                    params![surface, chat_ref],
+                    pending_input_row,
+                )
+                .optional()
+        }
+    };
+
+    /// Every open pending-input flow (the ops gauge, FR-113).
+    AllPending as all_pending() -> Vec<PendingInputRow> {
+        |connection: &mut Connection| -> rusqlite::Result<Vec<PendingInputRow>> {
+            let mut statement = connection.prepare(
+                "SELECT surface, chat_ref, flow, step, draft, updated_at, expires_at
+                 FROM pending_input ORDER BY updated_at",
+            )?;
+            let rows = statement
+                .query_map([], pending_input_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        }
+    };
+
+    /// The number of `component_map` rows (the GC-health gauge, §5.10).
+    ComponentMapCount as component_map_count() -> u64 {
+        |connection: &mut Connection| -> rusqlite::Result<u64> {
+            let count: i64 = connection.query_row(
+                "SELECT COUNT(*) AS n FROM component_map",
+                [],
+                |row| row.get("n"),
+            )?;
+            Ok(u64::try_from(count).unwrap_or(0))
+        }
+    };
+
+    /// The most recent action in a chat that is in one of `states` — the bare
+    /// decision verb's target (SPEC-004 §5.5 / FR-105).
+    LatestAction as latest_action(surface: &str => String, chat_ref: &str => String, states: &[State] => Vec<String>) -> Option<ActionRow> {
+        |connection: &mut Connection| -> rusqlite::Result<Option<ActionRow>> {
+            if states.is_empty() {
+                return Ok(None);
+            }
+            let placeholders = vec!["?"; states.len()].join(",");
+            let sql = format!(
+                "SELECT * FROM action
+                 WHERE surface = ? AND chat_ref = ? AND state IN ({placeholders})
+                 ORDER BY id DESC LIMIT 1"
+            );
+            let mut values: Vec<String> = vec![surface.clone(), chat_ref.clone()];
+            values.extend(states.iter().cloned());
+            connection
+                .query_row(&sql, rusqlite::params_from_iter(values.iter()), action_row)
+                .optional()
+        }
+    };
+
+    /// The most recent action in a chat whose label matches, in one of
+    /// `states` (the label-qualified decision form, §5.5).
+    ActionByLabel as action_by_label(surface: &str => String, chat_ref: &str => String, label: &str => String, states: &[State] => Vec<String>) -> Option<ActionRow> {
+        |connection: &mut Connection| -> rusqlite::Result<Option<ActionRow>> {
+            if states.is_empty() {
+                return Ok(None);
+            }
+            let placeholders = vec!["?"; states.len()].join(",");
+            let sql = format!(
+                "SELECT * FROM action
+                 WHERE surface = ? AND chat_ref = ? AND label = ? AND state IN ({placeholders})
+                 ORDER BY id DESC LIMIT 1"
+            );
+            let mut values: Vec<String> = vec![surface.clone(), chat_ref.clone(), label.clone()];
+            values.extend(states.iter().cloned());
+            connection
+                .query_row(&sql, rusqlite::params_from_iter(values.iter()), action_row)
+                .optional()
         }
     };
 

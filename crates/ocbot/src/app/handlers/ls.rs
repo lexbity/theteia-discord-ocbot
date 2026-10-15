@@ -21,12 +21,7 @@ pub const CD_MODAL: &str = "v1:cd";
 pub async fn execute_ls(ctx: &Arc<AppContext>, source: &InteractionSource) -> Result<(), AppError> {
     let cwd = start_dir(ctx, &source.user_id).await?;
     let message = render(ctx, &cwd, 0, &source.user_id).await?;
-    ctx.chat
-        .post(
-            &ocbot_core::Destination::discord(source.channel_id),
-            &message,
-        )
-        .await?;
+    ctx.chat.post(&source.destination, &message).await?;
     Ok(())
 }
 
@@ -61,12 +56,7 @@ pub async fn execute_cd(
     }
     let resolved = ctx.fs.resolve(Path::new(typed)).await?;
     let message = render(ctx, &resolved, 0, &source.user_id).await?;
-    ctx.chat
-        .post(
-            &ocbot_core::Destination::discord(source.channel_id),
-            &message,
-        )
-        .await?;
+    ctx.chat.post(&source.destination, &message).await?;
     Ok(None)
 }
 
@@ -254,12 +244,7 @@ async fn edit_or_post(
                 .await;
         }
         None => {
-            ctx.chat
-                .post(
-                    &ocbot_core::Destination::discord(source.channel_id),
-                    message,
-                )
-                .await?;
+            ctx.chat.post(&source.destination, message).await?;
         }
     }
     Ok(())

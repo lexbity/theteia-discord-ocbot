@@ -87,10 +87,10 @@ And because every conclusion is a CAS transition over a fact read, restarts and 
 
 Two paths feed the same decision layer.
 
-**The interactive path.** Discord delivers an interaction.
-The guard decides allow/deny/ignore in one place.
+**The interactive path.** A configured *surface* delivers an interaction (SPEC-004): Discord delivers a slash command/button/modal, Signal delivers a text command, a reaction, or a quote. The adapter normalizes it to a namespaced `ActorId` and a `Destination`; the guard decides allow/deny/ignore in one place.
 The plan phase returns an ack (modal or defer) before any slow work — the ack budget is p99 < 1 s (NFR-1).
 The execute phase does the port calls and store writes; every state change is a CAS transition.
+The core never sees a platform shape: `AppContext.chat` is one `ChatPort`, and a fan-out implements it for multi-surface deployments. Signal has no buttons, so its adapter renders a reaction legend (recorded in `component_map`) and turns modal acks into short text conversations (`pending_input`); the router and handlers are identical on both surfaces.
 
 **The loop path (doorbell + fallback ticks).**
 The supervisor holds one SSE connection to `/api/event`.

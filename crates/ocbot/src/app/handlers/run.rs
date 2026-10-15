@@ -146,10 +146,13 @@ pub async fn execute_newrun(
         .store
         .insert_run_with_plan(&dir_name, "free", plan_path.as_deref())
         .await?;
-    let chat_ref = source.channel_id.to_string();
+    let chat_ref = source.destination.chat_ref.0.clone();
     let action_id = ctx
         .store
         .insert_action(run_id, Some(&chat_ref), label, &prompt, 1)
+        .await?;
+    ctx.store
+        .set_action_destination(action_id, source.destination.surface.as_str(), &chat_ref)
         .await?;
     ctx.store.set_ui_cwd(&source.user_id, &dir_name).await?;
     ctx.store
@@ -164,13 +167,7 @@ pub async fn execute_newrun(
             action_id,
             crate::app::handlers::support::operator_u64(&source.user_id),
         );
-        let receipt = ctx
-            .chat
-            .post(
-                &ocbot_core::Destination::discord(source.channel_id),
-                &picker,
-            )
-            .await?;
+        let receipt = ctx.chat.post(&source.destination, &picker).await?;
         ctx.store.set_origin(action_id, &receipt.msg_id.0).await?;
         return Ok(Some("pick a plan step (or Other: type it)".to_owned()));
     }
@@ -243,12 +240,7 @@ pub async fn plan_page_edit(
                 .await;
         }
         None => {
-            ctx.chat
-                .post(
-                    &ocbot_core::Destination::discord(source.channel_id),
-                    &picker,
-                )
-                .await?;
+            ctx.chat.post(&source.destination, &picker).await?;
         }
     }
     Ok(())
@@ -384,12 +376,7 @@ pub async fn execute_send(
                 &source.user_id,
             ),
         };
-        ctx.chat
-            .post(
-                &ocbot_core::Destination::discord(source.channel_id),
-                &message,
-            )
-            .await?;
+        ctx.chat.post(&source.destination, &message).await?;
         return Ok(Some(
             "worktree is dirty — confirm before running".to_owned(),
         ));
@@ -601,13 +588,7 @@ async fn show_preview(
             )
             .await;
     } else {
-        let receipt = ctx
-            .chat
-            .post(
-                &ocbot_core::Destination::discord(source.channel_id),
-                &preview,
-            )
-            .await?;
+        let receipt = ctx.chat.post(&source.destination, &preview).await?;
         ctx.store.set_origin(action_id, &receipt.msg_id.0).await?;
     }
     Ok(())

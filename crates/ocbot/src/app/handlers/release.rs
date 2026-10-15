@@ -39,12 +39,7 @@ pub async fn list(ctx: &Arc<AppContext>, source: &InteractionSource) -> Result<(
         components,
         mention_allowlist: crate::app::handlers::support::mention_allowlist_for(&source.user_id),
     };
-    ctx.chat
-        .post(
-            &ocbot_core::Destination::discord(source.channel_id),
-            &message,
-        )
-        .await?;
+    ctx.chat.post(&source.destination, &message).await?;
     Ok(())
 }
 
@@ -63,12 +58,7 @@ pub async fn confirm(
         ButtonKind::Danger,
         &source.user_id,
     );
-    ctx.chat
-        .post(
-            &ocbot_core::Destination::discord(source.channel_id),
-            &message,
-        )
-        .await?;
+    ctx.chat.post(&source.destination, &message).await?;
     Ok(Some("confirm to release".to_owned()))
 }
 

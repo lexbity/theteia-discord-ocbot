@@ -116,7 +116,7 @@ fn source(kind: SourceKind) -> InteractionSource {
     InteractionSource {
         kind,
         user_id: format!("discord:{OPERATOR}"),
-        channel_id: CHANNEL,
+        destination: ocbot_core::Destination::discord(CHANNEL),
         guild_id: Some(1),
         message_id: Some(1),
         is_dm: false,

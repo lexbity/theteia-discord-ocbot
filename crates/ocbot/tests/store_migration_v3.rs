@@ -131,7 +131,7 @@ async fn migrates_v4_routing_facts_forward() {
         Some("v1:accept:9".to_owned())
     );
     store
-        .put_pending("discord", "4242", "run", "await_prompt", "{}", 600)
+        .put_pending("discord", "4242", "run", "await_prompt", "{}", 600, 1_000)
         .await
         .expect("pending put");
     let pending = store
@@ -144,7 +144,7 @@ async fn migrates_v4_routing_facts_forward() {
         ("run", "await_prompt")
     );
     store
-        .put_pending("signal", "+1555", "edit", "await_text", "{}", 600)
+        .put_pending("signal", "+1555", "edit", "await_text", "{}", 600, 1_000)
         .await
         .expect("pending put 2");
     assert_eq!(

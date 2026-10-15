@@ -42,15 +42,19 @@ impl Guard {
         if source.is_dm {
             return Decision::Allow;
         }
+        // Location is compared on the opaque chat reference (SPEC-004 D-02):
+        // the ops/inbox channels are Discord snowflakes, so a non-Discord
+        // surface (always `is_dm`, handled above) never reaches here.
+        let chat_ref = source.destination.chat_ref.0.as_str();
         if self
             .ops_channel
-            .is_some_and(|channel| source.channel_id == channel)
+            .is_some_and(|channel| channel.to_string() == chat_ref)
         {
             return Decision::Allow;
         }
         if self
             .inbox_channel
-            .is_some_and(|channel| source.channel_id == channel)
+            .is_some_and(|channel| channel.to_string() == chat_ref)
         {
             return Decision::Allow;
         }
@@ -99,7 +103,7 @@ mod tests {
                 name: "run".to_owned(),
             },
             user_id: user.to_owned(),
-            channel_id: channel,
+            destination: ocbot_core::Destination::discord(channel),
             guild_id: (!is_dm).then_some(1),
             message_id: None,
             is_dm,

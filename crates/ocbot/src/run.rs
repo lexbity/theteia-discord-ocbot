@@ -15,6 +15,7 @@ use crate::adapters::discord::{DiscordAdapter, shared_http, start_gateway};
 use crate::adapters::fs::FsAdapter;
 use crate::adapters::git::GitAdapter;
 use crate::adapters::opencode::{OpenCodeAdapter, OpenCodeEventSource};
+use crate::adapters::signal::{SignalAdapter, SignalInbound, SignalMachine};
 use crate::adapters::store::StoreHandle;
 use crate::app::context::{AppContext, ChatPort, EventSource};
 use crate::app::degraded::HealthMonitor;
@@ -93,12 +94,10 @@ pub async fn start() -> ExitCode {
     let discord_selected = surfaces.contains(ocbot_core::Surface::Discord);
     let signal_selected = surfaces.contains(ocbot_core::Surface::Signal);
 
-    // SPEC-004 PH-3 doctor gate (FR-114/FR-116): the signal surface must
+    // SPEC-004 PH-3/PH-4 doctor gate (FR-114/FR-116): the signal surface must
     // prove a healthy, current daemon or it is refused — the surface only;
-    // discord (if selected) keeps booting (D-10/NFR-103). The whole check is
-    // budgeted at 2 s, so an absent daemon never stalls the boot. PH-3 ships
-    // no transport yet, so even a healthy daemon is dropped with a loud
-    // warning (the surface lands in PH-4).
+    // discord (if selected) keeps booting (D-10/NFR-103). The check runs before
+    // secrets so an absent daemon never stalls the boot, and is budgeted at 2 s.
     if signal_selected {
         match doctor::signal_daemon(&config.signal).await {
             Ok(report) => {
@@ -107,20 +106,17 @@ pub async fn start() -> ExitCode {
                     accounts = ?report.accounts,
                     "signal-cli daemon healthy (FR-114/FR-116)"
                 );
-                tracing::warn!(
-                    "signal transport lands in SPEC-004 PH-4; refusing the surface until then"
-                );
             }
             Err(errors) => {
                 for error in &errors {
                     tracing::error!(error = %error, "signal surface refused by the boot doctor");
                 }
+                surfaces = surfaces.without(ocbot_core::Surface::Signal);
+                if surfaces.is_empty() {
+                    tracing::error!("no chat surface survived the boot doctor — refusing to start");
+                    return ExitCode::from(3);
+                }
             }
-        }
-        surfaces = surfaces.without(ocbot_core::Surface::Signal);
-        if surfaces.is_empty() {
-            tracing::error!("no chat surface survived the boot doctor — refusing to start");
-            return ExitCode::from(3);
         }
     }
 
@@ -240,10 +236,38 @@ pub async fn start() -> ExitCode {
     };
     let client = Arc::new(client);
     let opencode: Arc<dyn OpenCodePort> = Arc::new(OpenCodeAdapter::new(client.clone()));
-    // Surface registry (SPEC-004 PH-2/PH-3): one instrumented port per
-    // surviving surface, handed to the core as the collapsed port.
+
+    // SPEC-004 PH-4: build the Signal transport for a surface the early doctor
+    // already validated (the socket is guaranteed present by config).
+    let mut signal_adapter: Option<Arc<SignalAdapter>> = None;
+    let mut signal_envelopes = None;
+    if surfaces.contains(ocbot_core::Surface::Signal)
+        && let Some(socket) = config.signal.socket.as_deref()
+    {
+        let machine = SignalMachine::new(
+            Path::new(socket).to_path_buf(),
+            Duration::from_millis(config.events.backoff_min_ms),
+            Duration::from_millis(config.events.backoff_max_ms),
+            metrics.clone(),
+        );
+        let slot = machine.connection();
+        let adapter = Arc::new(SignalAdapter::new(
+            config.signal.resolved_operator_number().unwrap_or_default(),
+            slot,
+            store.clone(),
+            metrics.clone(),
+            Path::new(&config.inbox_dir).join("outbox"),
+        ));
+        let (sink_tx, sink_rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(machine.run_forever(sink_tx));
+        signal_adapter = Some(adapter);
+        signal_envelopes = Some(sink_rx);
+    }
+
+    // Surface registry (SPEC-004 PH-2): one instrumented port per surviving
+    // surface, handed to the core as the collapsed port.
     // The announce destination: where broadcasts (degraded/stall notices,
-    // later reports) land — the inbox channel, falling back to ops (P14).
+    // reports) land — the inbox channel, falling back to ops (P14).
     let announce_channel = config.discord.inbox_channel.or(config.discord.ops_channel);
     let announce = ocbot_core::Destination::discord(announce_channel.unwrap_or(0));
     let discord_transport: Option<Arc<dyn ChatPort>> =
@@ -271,10 +295,13 @@ pub async fn start() -> ExitCode {
                     tracing::error!("discord selected but no transport was built");
                 }
             }
-            // Unreachable: the PH-3 doctor gate drops the signal
-            // surface before transports are built (the transport is PH-4).
             ocbot_core::Surface::Signal => {
-                tracing::error!("no transport available for surface {surface}");
+                if let Some(adapter) = &signal_adapter {
+                    transports.push((surface, adapter.destination(), adapter.clone()));
+                } else {
+                    // Unreachable: the doctor gate above drops the surface.
+                    tracing::error!("signal selected but no transport was built");
+                }
             }
         }
     }
@@ -289,17 +316,27 @@ pub async fn start() -> ExitCode {
     );
     let chat: Arc<dyn ChatPort> = registry.single();
     let guard = Guard {
-        // One operator identity per configured surface (D-03). A signal-only
-        // box has no Discord identity; PH-4 adds the Signal one (D-11).
-        allowed_actors: discord_credentials
-            .as_ref()
-            .map(|(_, operator)| {
-                vec![ocbot_core::ActorId::from_parts(
-                    ocbot_core::Surface::Discord,
-                    &operator.to_string(),
-                )]
-            })
-            .unwrap_or_default(),
+        // One operator identity per configured surface (D-03/D-11).
+        allowed_actors: {
+            let mut actors = discord_credentials
+                .as_ref()
+                .map(|(_, operator)| {
+                    vec![ocbot_core::ActorId::from_parts(
+                        ocbot_core::Surface::Discord,
+                        &operator.to_string(),
+                    )]
+                })
+                .unwrap_or_default();
+            if signal_adapter.is_some()
+                && let Some(number) = config.signal.resolved_operator_number()
+            {
+                actors.push(ocbot_core::ActorId::from_parts(
+                    ocbot_core::Surface::Signal,
+                    &number,
+                ));
+            }
+            actors
+        },
         ops_channel: config.discord.ops_channel,
         inbox_channel: config.discord.inbox_channel,
     };
@@ -321,6 +358,20 @@ pub async fn start() -> ExitCode {
         plan_heading_max: config.plan_heading_max,
         ls_page_size: config.ls_page_size,
     });
+
+    // The Signal inbound pump needs the context (it routes through the same
+    // guard/router as Discord); spawn it now that the context exists.
+    if let (Some(adapter), Some(envelopes)) = (signal_adapter, signal_envelopes) {
+        let operator = config.signal.resolved_operator_number().unwrap_or_default();
+        let inbound = Arc::new(SignalInbound::new(
+            ctx.clone(),
+            adapter,
+            operator,
+            config.signal.rate_limit,
+        ));
+        tokio::spawn(inbound.run(envelopes));
+        tracing::info!("signal inbound pump started");
+    }
 
     if let Ok(counts) = store.action_counts_by_state().await {
         metrics.seed_actions(&counts);

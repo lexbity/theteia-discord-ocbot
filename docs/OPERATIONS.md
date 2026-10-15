@@ -66,7 +66,22 @@ Exit codes: **1** config/secrets/version/permission-baseline faults, **2** permi
 
 The pinned wire contract — the exact JSON-RPC subset, the reply shapes, and what a live capture must still confirm — is recorded in `crates/ocbot/src/adapters/signal/KNOWN_CAPS.md`. `tests/common/signal_fake.rs` is that contract as an executable double: every client method is tested against it, so a signal-cli upgrade that drifts shows up as a contract-test failure, not as a mystery in production.
 
-No Signal traffic is carried by this build beyond the doctor yet: the transport, inbound grammar and decision verbs land in the slices after this one (see the Changelog).
+### Talking to the bot over Signal (SPEC-004 PH-4)
+
+A healthy daemon now carries the full surface. Send plain text on the 1:1 chat; the bot answers as ordinary messages.
+
+- **Trust boundary.** Only `[signal].operator_number` is served. Any other sender is dropped with **no reply** (a reply would confirm a live number), audited as `denied_surface`, and counted in `ocbot_surface_denied_total{surface="signal"}`. Group conversations are dropped the same way.
+- **Rate limit.** A per-sender token bucket (`[signal] rate_limit`) drops bursts with `ocbot_surface_rate_dropped_total` — never a busy-loop reply.
+- **Dedupe.** A redelivered envelope (same sender + timestamp) is counted in `ocbot_signal_envelope_duplicates_total` and ignored, so a side-effecting command never runs twice.
+- **Commands.** `run [dir]` asks for the prompt (reply with it, or `run <dir> | <prompt>` to skip), `prompt [text]`, `status`, `abort`, `release`, `mute`, `reset`, `ls [dir] [page]`, `cd <dir>`, `history [page]`, `send`/`edit` (the latest staged action), `pick <n>`, `accept|park|follow|discard [label]`, `gate <label> <once|always|reject>`, `help`, and `cancel` (closes an open flow). An unknown verb replies with the command table.
+- **Decisions.** Send a bare verb to decide the latest reported action in that chat, or qualify it with the action's label. Messages that carry decision buttons also render a legend (`✅ accept · 🔁 follow up · 🅿️ park · 🗑️ discard`, keycaps for gate options) — react with the matching emoji to decide. A reaction on a disabled or unmapped verb replies with a one-line correction.
+- **Multiline flows.** A modal on Discord (new run, edit prompt, `cd`, accept-with-note) becomes a short text conversation. One flow is open per chat; a new one replaces it. Flows expire after 10 minutes (`ocbot_pending_flows_open` tracks live ones) or with `cancel`.
+- **Attachments.** Files are downloaded by the daemon, ingested through the same inbox path as Discord uploads, and become the draft for the next prompt.
+- **Quoting.** Quote a delivered report and reply to continue that session (the same adopt path as Discord's reply-to-report).
+- **Quiet edits.** `edit` on Signal is a fallback post prefixed `↻ update:` (native edit is version-dependent), folded to at most one per ops tick.
+
+A down Signal surface moves `ocbot_surface_up{surface="signal"}` to 0 and, when Discord is also configured, posts one notice there. Restart the daemon; the machine reconnects with backoff and the recovery notice confirms it.
+
 
 ## Logs
 

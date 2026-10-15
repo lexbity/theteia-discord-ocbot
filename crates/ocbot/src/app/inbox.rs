@@ -128,10 +128,6 @@ async fn deliver_completion(
     let Some(seq) = snapshot.id.as_deref() else {
         return Ok(()); // no stable message id to dedupe on
     };
-    let Some(channel) = ctx.guard.inbox() else {
-        tracing::info!(session = %session.id, "no inbox channel; skipping the completion post");
-        return Ok(());
-    };
 
     let message = inbox_message(ctx, session, dir, &snapshot);
     // Claim-then-post: the claim is the dedupe key, so duplicate completions
@@ -144,23 +140,30 @@ async fn deliver_completion(
     // A delivered completion is a won detection (P-29): attributed here, after
     // the dedupe, so the counter is the honest event/fallback numerator.
     ctx.metrics.inc_detection(detected_by.label());
-    let post = ctx
-        .chat
-        .post(&ocbot_core::Destination::discord(channel), &message)
-        .await;
-    match post {
-        Ok(receipt) => {
+    // Announce to every configured surface (SPEC-004 §5.4): the report is not
+    // tied to the channel that started the work. Adopt works from whichever
+    // surface carried the message (one `msg_map` row per receipt).
+    let outcome = ctx.chat.broadcast(&message).await;
+    if outcome.any_delivered() {
+        let receipts = outcome
+            .delivered
+            .iter()
+            .map(|(_, receipt)| receipt.to_receipt_string())
+            .collect::<Vec<_>>()
+            .join("|");
+        ctx.store
+            .finish_notified(&session.id, seq, &receipts)
+            .await?;
+        for (surface, receipt) in &outcome.delivered {
             ctx.store
-                .finish_notified(&session.id, seq, &receipt.to_receipt_string())
+                .insert_msg_map(surface.as_str(), &receipt.msg_id.0, &session.id, None)
                 .await?;
-            ctx.store
-                .insert_msg_map("discord", &receipt.msg_id.0, &session.id, None)
-                .await?;
-            tracing::info!(session = %session.id, seq, "inbox completion posted");
         }
-        Err(error) => {
-            ctx.store.unclaim_notified(&session.id, seq).await?;
-            tracing::warn!(session = %session.id, error = %error, "inbox post failed; retrying next tick");
+        tracing::info!(session = %session.id, seq, "inbox completion posted");
+    } else {
+        ctx.store.unclaim_notified(&session.id, seq).await?;
+        for (surface, error) in &outcome.failed {
+            tracing::warn!(session = %session.id, %surface, error = %error, "inbox post failed; retrying next tick");
         }
     }
     Ok(())

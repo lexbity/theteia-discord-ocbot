@@ -15,6 +15,7 @@
 mod browser;
 mod gate;
 mod label;
+mod legend;
 mod redact;
 mod report;
 
@@ -22,6 +23,10 @@ pub use browser::{
     HISTORY_PAGE_SIZE, LS_PAGE_SIZE, LsEntry, history_page, ls_message, plan_picker_message,
 };
 pub use gate::gate_message;
+pub use legend::{
+    ACCEPT_EMOJI, DISCARD_EMOJI, FOLLOWUP_EMOJI, Legend, LegendEntry, PARK_EMOJI,
+    emoji_for_custom_id, help_text, keycap, normalize_emoji, render_legend, verb_label,
+};
 pub use redact::{REDACTED, RedactError, Redactor};
 pub use report::{
     DISCORD_MESSAGE_CAP, EXCERPT_TARGET, Footer, LABEL_MAX_CHARS, REPORT_ATTACHMENT_NAME,

@@ -127,10 +127,24 @@ impl SignalRpc {
     /// Send a text message to one recipient; returns the daemon's timestamp
     /// for it (`send` RPC).
     pub async fn send(&self, recipient: &str, text: &str) -> Result<String, RpcError> {
-        let params = serde_json::json!([{
+        self.send_with_attachments(recipient, text, &[]).await
+    }
+
+    /// Send a text message plus local attachment paths (`send` RPC). signal-cli
+    /// reads the files itself (they must be readable by the daemon's uid).
+    pub async fn send_with_attachments(
+        &self,
+        recipient: &str,
+        text: &str,
+        attachments: &[String],
+    ) -> Result<String, RpcError> {
+        let mut params = serde_json::json!([{
             "recipient": recipient,
             "message": text,
         }]);
+        if !attachments.is_empty() {
+            params[0]["attachments"] = serde_json::json!(attachments);
+        }
         let value = self.request("send", params).await?;
         value
             .as_str()
@@ -251,6 +265,38 @@ impl SignalRpc {
 
 /// The subscription's envelope buffer (matches the frame-channel idiom).
 const SUBSCRIPTION_CAPACITY: usize = 256;
+
+/// A cloneable handle to the machine's *current* live connection (SPEC-004
+/// PH-4): the send side reads it; the machine sets it on connect and clears it
+/// when the socket dies. `None` means "the surface is down" and every send
+/// fails loud, which is exactly what the health machine wants to observe.
+#[derive(Clone, Default)]
+pub struct ConnectionSlot(Arc<Mutex<Option<SignalRpc>>>);
+
+impl ConnectionSlot {
+    /// An empty slot.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The live connection, when the surface is up.
+    pub async fn current(&self) -> Option<SignalRpc> {
+        self.0.lock().await.clone()
+    }
+
+    /// Whether a connection is currently held.
+    pub async fn is_connected(&self) -> bool {
+        self.0.lock().await.is_some()
+    }
+
+    async fn set(&self, rpc: SignalRpc) {
+        *self.0.lock().await = Some(rpc);
+    }
+
+    async fn clear(&self) {
+        *self.0.lock().await = None;
+    }
+}
 
 /// The reader task: route reply lines by id, forward subscription lines as
 /// envelopes, count decode failures, and end the connection honestly on EOF,
@@ -390,6 +436,8 @@ pub struct SignalMachine {
     backoff_min: Duration,
     backoff_max: Duration,
     metrics: Arc<Metrics>,
+    /// The live connection, published for the send side (PH-4).
+    slot: ConnectionSlot,
     /// Jitter source for the backoff, `[0, 1)`; injected so tests are
     /// deterministic (the supervisor's idiom).
     jitter: Box<dyn Fn() -> f64 + Send + Sync>,
@@ -409,8 +457,15 @@ impl SignalMachine {
             backoff_min,
             backoff_max,
             metrics,
+            slot: ConnectionSlot::new(),
             jitter: Box::new(nanos_jitter),
         }
+    }
+
+    /// The live-connection handle (cloned before [`run_forever`](Self::run_forever)
+    /// consumes the machine).
+    pub fn connection(&self) -> ConnectionSlot {
+        self.slot.clone()
     }
 
     /// Replace the jitter source (tests inject deterministic values).
@@ -442,9 +497,10 @@ impl SignalMachine {
         }
     }
 
-    /// One connection's full life: connect, subscribe, pump until the
-    /// subscription closes. `Ok` means a subscription ran and ended cleanly;
-    /// `Err` the reason it did not (or ended abruptly).
+    /// One connection's full life: connect, publish the socket for sends,
+    /// subscribe, pump until the subscription closes, then retract the socket.
+    /// `Ok` means a subscription ran and ended cleanly; `Err` the reason it did
+    /// not (or ended abruptly).
     async fn connect_and_subscribe(&self, sinks: &mpsc::Sender<Envelope>) -> Result<(), RpcError> {
         let rpc = match SignalRpc::connect(&self.path).await {
             Ok(rpc) => rpc,
@@ -453,6 +509,14 @@ impl SignalMachine {
                 return Err(error);
             }
         };
+        self.slot.set(rpc.clone()).await;
+        let result = self.pump(&rpc, sinks).await;
+        self.slot.clear().await;
+        result
+    }
+
+    /// Subscribe and pump one connection's envelopes into `sinks`.
+    async fn pump(&self, rpc: &SignalRpc, sinks: &mpsc::Sender<Envelope>) -> Result<(), RpcError> {
         let mut envelopes = match rpc.subscribe().await {
             Ok(rx) => rx,
             Err(error) => {

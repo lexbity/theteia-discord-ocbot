@@ -485,7 +485,7 @@ fn located_source(
         kind,
         // Namespaced at the adapter boundary (SPEC-004 D-03).
         user_id: format!("discord:{user_id}"),
-        channel_id,
+        destination: Destination::discord(channel_id),
         guild_id,
         message_id,
         is_dm,
@@ -595,7 +595,7 @@ impl EventHandler for BotEvents {
             &self.ctx,
             &session,
             &text,
-            channel,
+            &Destination::discord(channel),
             &format!("discord:{}", message.author.id.get()),
         )
         .await

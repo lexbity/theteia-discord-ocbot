@@ -42,7 +42,52 @@ impl OpsLoop {
 pub async fn tick(ctx: &Arc<AppContext>, stall_secs: i64) -> Result<(), AppError> {
     degraded::probe_and_record(ctx).await?;
     refresh_gauges(ctx).await?;
+    sweep_pending(ctx).await?;
     stall::scan(ctx, stall_secs).await?;
+    Ok(())
+}
+
+/// Expire pending-input flows (SPEC-004 D-06/FR-109): a flow older than its
+/// TTL is closed with one notice on its own surface, and the gauge recounted.
+pub async fn sweep_pending(ctx: &Arc<AppContext>) -> Result<(), AppError> {
+    let now = ctx.clock.now();
+    for row in ctx.store.pending_expired(now).await? {
+        let Some(surface) = ocbot_core::Surface::parse(&row.surface) else {
+            continue;
+        };
+        let destination = ocbot_core::Destination {
+            surface,
+            chat_ref: ocbot_core::ChatRef(row.chat_ref.clone()),
+        };
+        let message = ocbot_core::OutgoingMessage {
+            content: format!(
+                "the `{}` flow expired (10 minutes); send a command to start again",
+                row.flow
+            ),
+            attachment: None,
+            components: Vec::new(),
+            mention_allowlist: Vec::new(),
+        };
+        if let Err(error) = ctx.chat.post(&destination, &message).await {
+            tracing::warn!(error = %error, "pending-flow expiry notice failed");
+        }
+        let _ = ctx.store.take_pending(&row.surface, &row.chat_ref).await?;
+    }
+    recount_pending(ctx).await?;
+    Ok(())
+}
+
+/// Recount the `ocbot_pending_flows_open` gauge by flow name (D-06).
+async fn recount_pending(ctx: &Arc<AppContext>) -> Result<(), AppError> {
+    let rows = ctx.store.all_pending().await?;
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for row in rows {
+        *counts.entry(row.flow).or_insert(0) += 1;
+    }
+    for flow in ["run", "modal", "prompt", "cd"] {
+        ctx.metrics
+            .set_pending_flows_open(flow, counts.get(flow).copied().unwrap_or(0));
+    }
     Ok(())
 }
 

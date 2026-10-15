@@ -96,15 +96,18 @@ async fn handle_gate(
 
     let label = action.as_ref().map(|action| action.label.clone());
     let action_id = action.as_ref().map(|action| action.id);
-    let channel = match action
-        .as_ref()
-        .and_then(|action| action.chat_ref.as_deref())
-    {
-        Some(chat_ref) => chat_ref.parse::<i64>().ok(),
-        None => ctx
-            .guard
-            .ops_channel
-            .and_then(|channel| i64::try_from(channel).ok()),
+    // The gate message goes wherever the action's reports go (SPEC-004 §5.4:
+    // point posts follow the action's persisted surface/chat_ref). Without an
+    // attributed action, fall back to the operator's ops channel (Discord).
+    let destination = action_destination(ctx, action.as_ref());
+    // The legacy `gate.channel_id` column only carries a Discord snowflake;
+    // other surfaces re-derive their destination from the action on re-ping.
+    let channel = match &destination {
+        Some(ocbot_core::Destination {
+            surface: ocbot_core::Surface::Discord,
+            chat_ref,
+        }) => chat_ref.0.parse::<i64>().ok(),
+        _ => None,
     };
 
     let renderable = match &gate.kind {
@@ -156,17 +159,11 @@ async fn handle_gate(
             rowid,
             ctx.guard.discord_operator().unwrap_or(0),
         );
-        match row
-            .channel_id
-            .and_then(|channel| u64::try_from(channel).ok())
-        {
-            Some(channel) => {
-                let receipt = ctx
-                    .chat
-                    .post(&ocbot_core::Destination::discord(channel), &message)
-                    .await?;
+        match &destination {
+            Some(destination) => {
+                let receipt = ctx.chat.post(destination, &message).await?;
                 ctx.store
-                    .set_gate_msg(rowid, &receipt.msg_id.0, row.channel_id)
+                    .set_gate_msg(rowid, &receipt.msg_id.0, channel)
                     .await?;
                 tracing::info!(gate = %gate.id, rowid, "gate message posted");
             }
@@ -176,6 +173,23 @@ async fn handle_gate(
         }
     }
     Ok(())
+}
+
+/// The destination a gate message goes to: the attributed action's own surface
+/// (SPEC-004 §5.4), else the operator's ops channel on Discord.
+fn action_destination(
+    ctx: &Arc<AppContext>,
+    action: Option<&crate::adapters::store::ActionRow>,
+) -> Option<ocbot_core::Destination> {
+    if let Some(action) = action
+        && let Ok(destination) = crate::app::handlers::support::destination_for(action)
+    {
+        return Some(destination);
+    }
+    ctx.guard
+        .inbox()
+        .or(ctx.guard.ops_channel)
+        .map(ocbot_core::Destination::discord)
 }
 
 /// A gate that left the server's pending list is resolved elsewhere: mark the
@@ -224,19 +238,18 @@ pub async fn reping(ctx: &Arc<AppContext>, reping_secs: i64) -> Result<(), AppEr
         } else {
             format!("⏳ still waiting: {label}")
         };
-        if let Some(channel) = row
-            .channel_id
-            .and_then(|channel| u64::try_from(channel).ok())
-        {
+        let action = match row.action_id {
+            Some(action_id) => ctx.store.action(action_id).await?,
+            None => None,
+        };
+        if let Some(destination) = action_destination(ctx, action.as_ref()) {
             let message = OutgoingMessage {
                 content,
                 attachment: None,
                 components: Vec::new(),
                 mention_allowlist: ctx.guard.discord_operator().into_iter().collect(),
             };
-            ctx.chat
-                .post(&ocbot_core::Destination::discord(channel), &message)
-                .await?;
+            ctx.chat.post(&destination, &message).await?;
             tracing::info!(gate = row.id, pings, "gate re-ping posted");
         }
     }
