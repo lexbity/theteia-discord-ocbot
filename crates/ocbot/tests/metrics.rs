@@ -124,6 +124,9 @@ async fn endpoint_exposes_every_family_after_a_scripted_scenario() {
     registry.inc_signal_envelope_duplicates();
     registry.set_pending_flows_open("run", 1);
     registry.set_component_map_rows(3);
+    // §5.10's queue-depth probe: a broadcast in flight on each surface.
+    registry.enter_broadcast(ocbot_core::Surface::Discord);
+    registry.enter_broadcast(ocbot_core::Surface::Signal);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -166,6 +169,8 @@ async fn endpoint_exposes_every_family_after_a_scripted_scenario() {
         "ocbot_signal_envelope_duplicates_total 1",
         "ocbot_pending_flows_open{flow=\"run\"} 1",
         "ocbot_component_map_rows 3",
+        "ocbot_surface_broadcast_inflight{surface=\"discord\"} 1",
+        "ocbot_surface_broadcast_inflight{surface=\"signal\"} 1",
     ] {
         assert!(response.contains(needle), "missing metric family {needle}");
     }
@@ -179,4 +184,27 @@ async fn endpoint_exposes_every_family_after_a_scripted_scenario() {
         "within 5 s: {response}"
     );
     assert!(!response.contains("ocbot_idle_to_report_seconds_sum 0\n"));
+}
+
+/// The queue-depth gauge is a RAII count: entering leaves it up, leaving brings
+/// it back to zero, and it never wraps below.
+#[test]
+fn the_broadcast_inflight_gauge_returns_to_zero() {
+    let registry = ocbot::app::metrics::Metrics::new();
+    registry.enter_broadcast(ocbot_core::Surface::Discord);
+    registry.enter_broadcast(ocbot_core::Surface::Discord);
+    registry.leave_broadcast(ocbot_core::Surface::Discord);
+    let text = registry.render_text();
+    assert!(
+        text.contains("ocbot_surface_broadcast_inflight{surface=\"discord\"} 1"),
+        "{text}"
+    );
+    registry.leave_broadcast(ocbot_core::Surface::Discord);
+    // Over-leaving saturates at zero rather than wrapping to u64::MAX.
+    registry.leave_broadcast(ocbot_core::Surface::Discord);
+    let text = registry.render_text();
+    assert!(
+        text.contains("ocbot_surface_broadcast_inflight{surface=\"discord\"} 0"),
+        "{text}"
+    );
 }

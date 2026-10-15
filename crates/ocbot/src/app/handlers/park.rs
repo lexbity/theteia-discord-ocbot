@@ -87,7 +87,7 @@ pub async fn resume(
     }
     let dir = directory_for(ctx, action).await?;
     let dir_text = dir_text(&dir);
-    let dest = crate::app::handlers::support::destination_for(action)?;
+    let dest = crate::app::destination::destination_for(action)?;
     let branch = action
         .park_branch_name
         .clone()
@@ -233,7 +233,7 @@ pub async fn resume(
         &action.label,
         &action.prompt_sent,
         child,
-        crate::app::handlers::support::operator_u64(operator),
+        ocbot_core::mentionable_id(operator),
         &action.template,
     );
     ctx.chat.post(&dest, &preview).await?;

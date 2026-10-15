@@ -58,6 +58,10 @@ struct Inner {
     /// `(kind, tool) -> count` for discovered gate requests. A graph of
     /// dynamic label pairs, so a map (rendered in sorted order).
     gate_requests: Mutex<BTreeMap<(String, String), u64>>,
+    /// `surface -> count` of broadcasts currently inside a surface's port
+    /// (§5.10: the queue-depth probe — a stuck transport shows as a count that
+    /// never returns to zero).
+    broadcast_inflight: Mutex<BTreeMap<String, u64>>,
     /// Per-surface up gauge (1/0).
     surface_up: Mutex<BTreeMap<String, u64>>,
     /// Per-surface, per-op send attempt counters.
@@ -116,6 +120,7 @@ impl Metrics {
                 surface_rate_dropped: Mutex::new(BTreeMap::new()),
                 signal_envelope_duplicates: AtomicU64::new(0),
                 pending_flows_open: Mutex::new(BTreeMap::new()),
+                broadcast_inflight: Mutex::new(BTreeMap::new()),
                 component_map_rows: AtomicU64::new(0),
                 msg_map_rows: AtomicU64::new(0),
             }),
@@ -354,6 +359,28 @@ impl Metrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Enter a broadcast on `surface` (the queue-depth gauge, §5.10).
+    pub fn enter_broadcast(&self, surface: Surface) {
+        let mut map = self
+            .inner
+            .broadcast_inflight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *map.entry(surface.as_str().to_owned()).or_insert(0) += 1;
+    }
+
+    /// Leave a broadcast on `surface` (saturating: a counter is never allowed
+    /// to wrap below zero, whatever the future brings).
+    pub fn leave_broadcast(&self, surface: Surface) {
+        let mut map = self
+            .inner
+            .broadcast_inflight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = map.entry(surface.as_str().to_owned()).or_insert(0);
+        *entry = entry.saturating_sub(1);
+    }
+
     /// Open pending flows by flow name (D-06).
     pub fn set_pending_flows_open(&self, flow: &str, count: usize) {
         let mut map = self
@@ -407,31 +434,7 @@ impl Metrics {
         render_stream(inner, &mut out);
         render_gate_requests(inner, &mut out);
         render_repairs(inner, &mut out);
-        gauge(
-            &mut out,
-            "ocbot_opencode_up",
-            inner.opencode_up.load(Ordering::Relaxed),
-        );
-        gauge(
-            &mut out,
-            "ocbot_gate_pending",
-            inner.gate_pending.load(Ordering::Relaxed),
-        );
-        gauge(
-            &mut out,
-            "ocbot_locks_held",
-            inner.locks_held.load(Ordering::Relaxed),
-        );
-        gauge(
-            &mut out,
-            "ocbot_lock_age_seconds",
-            inner.lock_age_seconds.load(Ordering::Relaxed),
-        );
-        gauge(
-            &mut out,
-            "ocbot_log_lag_seconds",
-            inner.log_lag_seconds.load(Ordering::Relaxed),
-        );
+        render_ops_gauges(inner, &mut out);
         // --- SPEC-004 §5.10 surface families ------------------------------
         render_surface_gauge(&mut out, "ocbot_surface_up", &inner.surface_up);
         render_surface_counter(
@@ -458,6 +461,11 @@ impl Metrics {
             &mut out,
             "ocbot_signal_envelope_duplicates_total",
             inner.signal_envelope_duplicates.load(Ordering::Relaxed),
+        );
+        render_surface_gauge(
+            &mut out,
+            "ocbot_surface_broadcast_inflight",
+            &inner.broadcast_inflight,
         );
         out.push_str("# TYPE ocbot_pending_flows_open gauge\n");
         {
@@ -746,6 +754,35 @@ pub async fn serve_listener(
             let _ = stream.shutdown().await;
         });
     }
+}
+
+/// The ops layer's plain gauges: server reachability, gates, locks, log lag.
+fn render_ops_gauges(inner: &Inner, out: &mut String) {
+    gauge(
+        out,
+        "ocbot_opencode_up",
+        inner.opencode_up.load(Ordering::Relaxed),
+    );
+    gauge(
+        out,
+        "ocbot_gate_pending",
+        inner.gate_pending.load(Ordering::Relaxed),
+    );
+    gauge(
+        out,
+        "ocbot_locks_held",
+        inner.locks_held.load(Ordering::Relaxed),
+    );
+    gauge(
+        out,
+        "ocbot_lock_age_seconds",
+        inner.lock_age_seconds.load(Ordering::Relaxed),
+    );
+    gauge(
+        out,
+        "ocbot_log_lag_seconds",
+        inner.log_lag_seconds.load(Ordering::Relaxed),
+    );
 }
 
 /// The `ocbot_surface_up{surface}` gauge family.

@@ -182,7 +182,7 @@ pub async fn execute_accept(
             );
             ctx.chat
                 .post(
-                    &crate::app::handlers::support::destination_for(&action)?,
+                    &crate::app::destination::destination_for(&action)?,
                     &message,
                 )
                 .await?;
@@ -223,7 +223,7 @@ pub async fn execute_accept(
     );
     ctx.chat
         .post(
-            &crate::app::handlers::support::destination_for(&action)?,
+            &crate::app::destination::destination_for(&action)?,
             &message,
         )
         .await?;

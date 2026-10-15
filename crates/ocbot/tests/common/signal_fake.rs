@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::sync::mpsc;
+use tokio::sync::watch;
 
 /// How one daemon instance behaves.
 #[derive(Debug, Clone)]
@@ -73,6 +74,14 @@ struct Inner {
     /// Live connections, for streaming raw lines (envelopes, garbage).
     streamers: std::sync::Mutex<Vec<mpsc::UnboundedSender<String>>>,
     requests: std::sync::Mutex<Vec<Recorded>>,
+    /// Latched "the daemon is dead" flag: a connection task watches it, so the
+    /// kill is seen even by a task that was mid-reply when it fired (a
+    /// `notify_waiters` race would lose exactly that wake-up).
+    killed: watch::Sender<bool>,
+    /// Latched "stop listening": the accept loop watches it, so a full shutdown
+    /// really does unbind the socket (a client that reconnects is then
+    /// refused, which is what a daemon that is gone looks like).
+    listening: watch::Sender<bool>,
 }
 
 /// A running fake daemon. Dropping it stops the accept loop; live connections
@@ -105,6 +114,8 @@ impl FakeSignal {
             connections: AtomicUsize::new(0),
             streamers: std::sync::Mutex::new(Vec::new()),
             requests: std::sync::Mutex::new(Vec::new()),
+            killed: watch::channel(false).0,
+            listening: watch::channel(true).0,
         });
         tokio::spawn(accept_loop(listener, inner.clone()));
         Self { socket, inner }
@@ -134,6 +145,25 @@ impl FakeSignal {
             .expect("a subscribe request")
     }
 
+    /// Kill every live connection (a daemon dying under a live subscription:
+    /// the client sees EOF, which is exactly `Closed` for the machine). The
+    /// listener survives, so a client that reconnects is served again — that is
+    /// how a signal-cli restart looks to the bot. Drop the fake to take the
+    /// listener away as well.
+    pub fn kill(&self) {
+        self.inner.streamers.lock().expect("lock").clear();
+        let _ = self.inner.killed.send(true);
+    }
+
+    /// Shut the daemon down for good: live connections close (EOF for the
+    /// client) **and** the listener unbinds, so a reconnecting client is
+    /// refused. This is the "daemon is gone" case; [`FakeSignal::kill`] is the
+    /// "daemon restarted" case.
+    pub fn shutdown(&self) {
+        self.kill();
+        let _ = self.inner.listening.send(false);
+    }
+
     /// Write one raw line to every live connection (envelopes, garbage).
     pub fn stream_line(&self, line: &str) {
         let mut streamers = self.inner.streamers.lock().expect("lock");
@@ -151,16 +181,31 @@ impl FakeSignal {
     }
 }
 
-/// The accept loop: one task per connection.
+/// The accept loop: one task per connection, until the daemon is shut down
+/// (which unbinds the socket — the listener is dropped when this returns).
 async fn accept_loop(listener: UnixListener, inner: Arc<Inner>) {
+    let mut listening = inner.listening.subscribe();
     loop {
-        let Ok((stream, _)) = listener.accept().await else {
-            return;
-        };
-        inner.connections.fetch_add(1, Ordering::Relaxed);
-        let (stream_tx, stream_rx) = mpsc::unbounded_channel();
-        inner.streamers.lock().expect("lock").push(stream_tx);
-        tokio::spawn(serve_connection(stream, inner.clone(), stream_rx));
+        tokio::select! {
+            accepted = listener.accept() => {
+                let Ok((stream, _)) = accepted else {
+                    return;
+                };
+                inner.connections.fetch_add(1, Ordering::Relaxed);
+                let (stream_tx, stream_rx) = mpsc::unbounded_channel();
+                inner
+                    .streamers
+                    .lock()
+                    .expect("lock")
+                    .push(stream_tx);
+                tokio::spawn(serve_connection(stream, inner.clone(), stream_rx));
+            }
+            stopped = listening.changed() => {
+                if stopped.is_err() || !*listening.borrow() {
+                    return;
+                }
+            }
+        }
     }
 }
 
@@ -172,6 +217,7 @@ async fn serve_connection(
 ) {
     let (read_half, mut write_half) = stream.into_split();
     let mut lines = BufReader::new(read_half).lines();
+    let mut killed = inner.killed.subscribe();
     loop {
         tokio::select! {
             line = lines.next_line() => {
@@ -191,6 +237,12 @@ async fn serve_connection(
                 let mut payload = raw;
                 payload.push('\n');
                 if write_half.write_all(payload.as_bytes()).await.is_err() {
+                    return;
+                }
+            }
+            // The daemon died: drop the write half, which the client reads as EOF.
+            changed = killed.changed() => {
+                if changed.is_err() || *killed.borrow() {
                     return;
                 }
             }

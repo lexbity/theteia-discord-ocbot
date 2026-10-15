@@ -1,8 +1,11 @@
-# cargo-fuzz crate for opencode-v2-client (nightly-only, excluded from the
-# workspace — `cargo test --workspace` must not build it).
+# cargo-fuzz crate (nightly-only, excluded from the workspace — `cargo test
+# --workspace` must not build it).
 #
 # Targets:
-#   fuzz/serde_fuzz — hostile JSON at the deserialization trust boundary (P16).
+#   fuzz/serde_fuzz    — hostile JSON at the opencode-v2-client deserialization
+#                        trust boundary (P16).
+#   fuzz/surface_fuzz  — the SPEC-004 surface boundary: the text grammar, the
+#                        signal-cli envelope decoder, and the config loader.
 [package]
 name = "opencode-v2-client-fuzz"
 version = "0.0.0"
@@ -16,12 +19,22 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 opencode-v2-client = { path = "../crates/opencode-client" }
+ocbot-core = { path = "../crates/ocbot-core" }
+ocbot = { path = "../crates/ocbot" }
+serde_json = "1"
+toml = "0.8"
 
 # Prevent this crate from inheriting the workspace lint floor: fuzz targets use
 # `proc_macro`, need prints, and are nightly-only tooling.
 [[bin]]
 name = "serde_fuzz"
 path = "fuzz_targets/serde_fuzz.rs"
+test = false
+doctest = false
+
+[[bin]]
+name = "surface_fuzz"
+path = "fuzz_targets/surface_fuzz.rs"
 test = false
 doctest = false
 

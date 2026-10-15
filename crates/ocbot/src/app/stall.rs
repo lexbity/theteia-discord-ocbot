@@ -32,7 +32,7 @@ pub async fn scan(ctx: &Arc<AppContext>, stall_secs: i64) -> Result<usize, AppEr
         }
         // The ping goes to the action's own surface (SPEC-004 §5.4), falling
         // back to the announce channel when the row predates destinations.
-        let destination = crate::app::handlers::support::about_destination(ctx, Some(&action));
+        let destination = crate::app::destination::about_destination(ctx, Some(&action));
         let minutes = stall_secs / 60;
         let message = OutgoingMessage {
             content: format!(

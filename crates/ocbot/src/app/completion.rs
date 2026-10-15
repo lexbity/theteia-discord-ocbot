@@ -111,7 +111,7 @@ async fn build_and_deliver(
         followups: action.followups,
     };
     let message = report(&action.label, outcome, &footer, &context, &ctx.redactor);
-    let dest = crate::app::handlers::support::destination_for(action)?;
+    let dest = crate::app::destination::destination_for(action)?;
 
     let receipt = post_report(ctx, &dest, &message).await?;
 
@@ -149,7 +149,7 @@ async fn build_and_deliver(
         if let Some(origin) = action.origin_msg_id.clone() {
             ctx.chat
                 .react(
-                    &crate::app::handlers::support::discord_receipt_str(&origin),
+                    &crate::app::destination::receipt_for(action, &origin)?,
                     '✅',
                 )
                 .await;

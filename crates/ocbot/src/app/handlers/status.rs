@@ -82,7 +82,7 @@ pub async fn execute(ctx: &Arc<AppContext>, source: &InteractionSource) -> Resul
         content,
         attachment: None,
         components: Vec::new(),
-        mention_allowlist: crate::app::handlers::support::mention_allowlist_for(&source.user_id),
+        mention_allowlist: ocbot_core::mention_allowlist(&source.user_id),
     };
     ctx.chat.post(&source.destination, &message).await?;
     Ok(())

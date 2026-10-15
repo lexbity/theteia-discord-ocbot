@@ -223,7 +223,7 @@ async fn render(
         &ls_entries,
         page,
         ctx.ls_page_size,
-        crate::app::handlers::support::operator_u64(actor),
+        ocbot_core::mentionable_id(actor),
     ))
 }
 
@@ -234,18 +234,10 @@ async fn edit_or_post(
     source: &InteractionSource,
     message: &ocbot_core::OutgoingMessage,
 ) -> Result<(), AppError> {
-    match source.message_id {
-        Some(message_id) => {
-            ctx.chat
-                .edit(
-                    &crate::app::handlers::support::discord_receipt(message_id),
-                    message,
-                )
-                .await;
-        }
-        None => {
-            ctx.chat.post(&source.destination, message).await?;
-        }
+    if let Some(receipt) = source.receipt() {
+        ctx.chat.edit(&receipt, message).await;
+    } else {
+        ctx.chat.post(&source.destination, message).await?;
     }
     Ok(())
 }

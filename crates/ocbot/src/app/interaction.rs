@@ -4,7 +4,7 @@
 //! before any slow work — the 3 s rule) and an [`execute`](crate::app::router::execute)
 //! pass that owns the side effects.
 
-use ocbot_core::Destination;
+use ocbot_core::{Destination, MsgId, PostReceipt};
 
 /// A normalized interaction.
 #[derive(Debug, Clone)]
@@ -59,6 +59,18 @@ pub struct TextInput {
 }
 
 impl InteractionSource {
+    /// The receipt of the message this interaction came from, when the surface
+    /// addresses messages by id (a Discord button's origin message). `None`
+    /// elsewhere — and the surface comes from this source's own destination, so
+    /// a quiet edit always addresses the chat the interaction happened in.
+    #[must_use]
+    pub fn receipt(&self) -> Option<PostReceipt> {
+        self.message_id.map(|message_id| PostReceipt {
+            surface: self.destination.surface,
+            msg_id: MsgId(message_id.to_string()),
+        })
+    }
+
     /// Look up a modal input value by id.
     pub fn input(&self, id: &str) -> Option<&str> {
         match &self.kind {

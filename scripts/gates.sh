@@ -191,7 +191,7 @@ fi
 probe "G18" "0\.0\.0\.0" 'metrics_bind = "0.0.0.0:9464"'
 
 # G19: the deployment units run unprivileged and are memory-capped (NFR-6/R-3).
-for unit in deploy/ocbot.service deploy/opencode.service; do
+for unit in deploy/ocbot.service deploy/opencode.service deploy/signal-cli.service; do
   if [ ! -f "$unit" ]; then
     fail "G19: missing deployment unit $unit"
   fi
@@ -202,6 +202,14 @@ for unit in deploy/ocbot.service deploy/opencode.service; do
     fail "G19: $unit has no MemoryMax ceiling (NFR-6)"
   fi
 done
+# FR-116's socket hygiene is a deployment property as much as a code one: the
+# daemon's socket must land at 0600 under a 0700 runtime directory.
+if ! grep -q "^UMask=0177" deploy/signal-cli.service; then
+  fail "G19: signal-cli.service must set UMask=0177 (the 0600 socket FR-116 demands)"
+fi
+if ! grep -q "^RuntimeDirectory=signal-cli" deploy/signal-cli.service; then
+  fail "G19: signal-cli.service must own its socket directory (RuntimeDirectory)"
+fi
 probe "G19" "^User=" 'User=ocbot'
 
 # --- SPEC-002 appended gates ------------------------------------------------
@@ -276,3 +284,29 @@ if ! grep -q "pub fn modal_ids" crates/ocbot/src/app/router.rs; then
   fail "G21: the router no longer declares its modal ids"
 fi
 probe "G21-catalog" "MODAL_FAMILIES" 'pub const MODAL_FAMILIES: [&str; 8]'
+
+# --- SPEC-004 PH-8 final gates (the whole plan) ------------------------------
+# G22: the handlers are surface-blind (FR-107's structural proof). The word
+# "discord" may appear in a handler only inside a comment or a doc line — a
+# platform *identifier* in handler code means a handler that knows which
+# surface it is serving. The uppercase constant `DISCORD_MESSAGE_CAP` is the
+# one allowed code reference: it is the tightest limit any surface imposes, so
+# a spec clamped to it is deliverable everywhere.
+if grep -rn "discord" crates/ocbot/src/app/handlers/ --include="*.rs" \
+     | grep -v ':[0-9]*: *//' | grep -v ':[0-9]*: *///'; then
+  fail "G22: a handler names a platform in code (FR-107)"
+fi
+probe "G22" "discord" 'mention_allowlist: discord_operator().into_iter().collect(),'
+
+# G23: every document in the SPEC-004 §7 set says what the Signal surface is.
+# A doc that never mentions Signal after this slice is a doc that lies.
+for doc in docs/ARCHITECTURE.md docs/DEPLOYMENT.md docs/OPERATIONS.md \
+           docs/GETTING_STARTED.md docs/RESTORE.md README.md; do
+  if [ ! -s "$doc" ]; then
+    fail "G23: $doc is missing"
+  fi
+  if ! grep -qi "signal" "$doc"; then
+    fail "G23: $doc never mentions the Signal surface"
+  fi
+done
+probe "G23" "signal" 'channel = ["discord", "signal"]'

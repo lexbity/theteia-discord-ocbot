@@ -100,9 +100,11 @@ The `fuzz/` directory is a separate cargo-fuzz workspace on the nightly toolchai
 ```sh
 cd fuzz
 cargo fuzz run serde_fuzz --sanitizer address -- -max_total_time=120
+cargo fuzz run surface_fuzz --sanitizer address -- -max_total_time=120
 ```
 
-Targets hammer the client's deserialization: unknown fields, missing fields, hostile JSON — every input must produce a `Result`, never a panic.
+`serde_fuzz` hammers the client's deserialization: unknown fields, missing fields, hostile JSON — every input must produce a `Result`, never a panic.
+`surface_fuzz` (SPEC-004 PH-8) aims the same discipline at the three parsers that sit on the chat-surface boundary: the pure text grammar (`ocbot-core::grammar`), the signal-cli envelope decoder, and the config deserializer.
 
 ## Mutation testing
 
@@ -121,6 +123,8 @@ Accept, Park & redo, and Reset are crash-tested, not just unit-tested.
 `chaos_full` drives the flows through 11 labelled crash points against snapshots; `chaos_sigkill` sends real `SIGKILL`s at the labelled points and proves boot reconcile recovers; `store_actor_chaos` kills between typed store commits and proves WAL recovery.
 The guarantee under test: SIGKILL anywhere ⇒ consistent state within 10 seconds of reboot, zero lost accepted work (NFR-5).
 If you add a crash window (an intermediate state, a multi-step git sequence), add a labelled crash point to the suite.
+
+The chat surfaces are chaos-tested too (SPEC-004 PH-8, `chaos_signal`): the signal-cli daemon dies under a live subscription (the machine reconnects, and a buffered envelope is never delivered twice), dies mid-send (a point post propagates its error while a broadcast still delivers on the surviving surface), and dies repeatedly (the reconnect backoff respects its ceiling). `load_fanout` then bounds the happy path: the design envelope's ten-minute volume goes through the real fan-out with per-send latency, send counters, and the queue-depth gauge all asserted.
 
 ## What is deliberately not tested offline
 

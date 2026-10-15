@@ -248,6 +248,7 @@ impl ChatPort for InstrumentedPort {
 
     async fn broadcast(&self, message: &OutgoingMessage) -> BroadcastOutcome {
         self.metrics.inc_surface_send(self.surface, "broadcast");
+        let _inflight = InflightBroadcast::new(&self.metrics, self.surface);
         let outcome = self.inner.broadcast(message).await;
         // D-07's ≥1-success contract: any delivery proves the surface alive;
         // only total failure counts against it.
@@ -257,6 +258,32 @@ impl ChatPort for InstrumentedPort {
 
     fn surfaces(&self) -> Vec<Surface> {
         self.inner.surfaces()
+    }
+}
+
+/// A RAII guard for a broadcast in flight on one surface (§5.10's queue-depth
+/// probe): the gauge counts how many broadcasts are inside a surface's port
+/// right now, so a stuck transport shows as a count that never returns to zero
+/// instead of as a silent queue. Drop is the only exit, so no future can leak.
+struct InflightBroadcast {
+    metrics: Arc<Metrics>,
+    surface: Surface,
+}
+
+impl InflightBroadcast {
+    /// Mark one broadcast as entered on `surface`.
+    fn new(metrics: &Arc<Metrics>, surface: Surface) -> Self {
+        metrics.enter_broadcast(surface);
+        Self {
+            metrics: metrics.clone(),
+            surface,
+        }
+    }
+}
+
+impl Drop for InflightBroadcast {
+    fn drop(&mut self) {
+        self.metrics.leave_broadcast(self.surface);
     }
 }
 

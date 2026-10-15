@@ -99,7 +99,7 @@ async fn handle_gate(
     // The gate message goes wherever the action's reports go (SPEC-004 §5.4:
     // point posts follow the action's persisted surface/chat_ref). Without an
     // attributed action, fall back to the operator's ops channel (Discord).
-    let destination = Some(crate::app::handlers::support::about_destination(
+    let destination = Some(crate::app::destination::about_destination(
         ctx,
         action.as_ref(),
     ));
@@ -160,7 +160,7 @@ async fn handle_gate(
             label.as_deref(),
             gate,
             rowid,
-            ctx.guard.discord_operator().unwrap_or(0),
+            ocbot_core::mentionable_id(&ctx.guard.operator().0),
         );
         match &destination {
             Some(destination) => {
@@ -230,8 +230,7 @@ pub async fn reping(ctx: &Arc<AppContext>, reping_secs: i64) -> Result<(), AppEr
         };
         {
             // The re-ping follows the action's own surface (SPEC-004 §5.4).
-            let destination =
-                crate::app::handlers::support::about_destination(ctx, action.as_ref());
+            let destination = crate::app::destination::about_destination(ctx, action.as_ref());
             let message = OutgoingMessage {
                 content,
                 attachment: None,

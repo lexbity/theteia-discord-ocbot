@@ -165,7 +165,7 @@ pub async fn execute_newrun(
             &plan_options,
             0,
             action_id,
-            crate::app::handlers::support::operator_u64(&source.user_id),
+            ocbot_core::mentionable_id(&source.user_id),
         );
         let receipt = ctx.chat.post(&source.destination, &picker).await?;
         ctx.store.set_origin(action_id, &receipt.msg_id.0).await?;
@@ -228,20 +228,12 @@ pub async fn plan_page_edit(
         &options,
         page,
         action_id,
-        crate::app::handlers::support::operator_u64(&source.user_id),
+        ocbot_core::mentionable_id(&source.user_id),
     );
-    match source.message_id {
-        Some(message_id) => {
-            ctx.chat
-                .edit(
-                    &crate::app::handlers::support::discord_receipt(message_id),
-                    &picker,
-                )
-                .await;
-        }
-        None => {
-            ctx.chat.post(&source.destination, &picker).await?;
-        }
+    if let Some(receipt) = source.receipt() {
+        ctx.chat.edit(&receipt, &picker).await;
+    } else {
+        ctx.chat.post(&source.destination, &picker).await?;
     }
     Ok(())
 }
@@ -372,9 +364,7 @@ pub async fn execute_send(
                 format!("v1:runany:{action_id}"),
                 ButtonKind::Danger,
             )],
-            mention_allowlist: crate::app::handlers::support::mention_allowlist_for(
-                &source.user_id,
-            ),
+            mention_allowlist: ocbot_core::mention_allowlist(&source.user_id),
         };
         ctx.chat.post(&source.destination, &message).await?;
         return Ok(Some(
@@ -512,7 +502,7 @@ pub async fn launch(
     if let Some(origin) = action.origin_msg_id.clone() {
         ctx.chat
             .react(
-                &crate::app::handlers::support::discord_receipt_str(&origin),
+                &crate::app::destination::receipt_for(&action, &origin)?,
                 '⏳',
             )
             .await;
@@ -577,16 +567,11 @@ async fn show_preview(
         label,
         prompt,
         action_id,
-        crate::app::handlers::support::operator_u64(&source.user_id),
+        ocbot_core::mentionable_id(&source.user_id),
         template,
     );
-    if let Some(message_id) = source.message_id {
-        ctx.chat
-            .edit(
-                &crate::app::handlers::support::discord_receipt(message_id),
-                &preview,
-            )
-            .await;
+    if let Some(receipt) = source.receipt() {
+        ctx.chat.edit(&receipt, &preview).await;
     } else {
         let receipt = ctx.chat.post(&source.destination, &preview).await?;
         ctx.store.set_origin(action_id, &receipt.msg_id.0).await?;

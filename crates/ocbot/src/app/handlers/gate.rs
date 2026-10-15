@@ -172,7 +172,8 @@ async fn commit_form_answer(
         .ok_or_else(|| AppError::NotFound(format!("gate {}", row.id)))?;
     post_with_retry(ctx, &row).await?;
     set_action_clear(ctx, &row).await?;
-    edit_gate_message(ctx, &row, "✅ answered in Discord").await;
+    // Surface-neutral on purpose: the same gate is answered from either chat.
+    edit_gate_message(ctx, &row, "✅ answered").await;
     ctx.store
         .audit(user_id, "form-reply", row.action_id, "answered")
         .await?;
@@ -324,11 +325,17 @@ async fn edit_gate_message(ctx: &Arc<AppContext>, row: &GateRow, summary: &str) 
         content: format!("{summary} — gate #{}", row.id),
         attachment: None,
         components: Vec::new(),
-        mention_allowlist: ctx.guard.discord_operator().into_iter().collect(),
+        mention_allowlist: ctx.guard.mention_allowlist(),
+    };
+    // The gate message lives wherever it was posted: the attributed action's
+    // surface when there is one, the ops channel otherwise.
+    let action = match row.action_id {
+        Some(action_id) => ctx.store.action(action_id).await.ok().flatten(),
+        None => None,
     };
     ctx.chat
         .edit(
-            &crate::app::handlers::support::discord_receipt_str(msg_id),
+            &crate::app::destination::about_receipt(ctx, action.as_ref(), msg_id),
             &message,
         )
         .await;

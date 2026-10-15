@@ -2,7 +2,7 @@
 
 **Audience:** the operator installing ocbot on a host.
 **Purpose:** take a built binary to a running, self-healing, backed-up production deployment.
-**Prerequisites:** [Getting started](GETTING_STARTED.md) (the concepts: config, secrets, the Discord bot); a Linux host with systemd and root.
+**Prerequisites:** [Getting started](GETTING_STARTED.md) (the concepts: config, secrets, the chat surfaces); a Linux host with systemd and root.
 
 ## Environments
 
@@ -14,6 +14,7 @@
 | Secrets | shell environment | `/etc/ocbot/ocbot.env`, mode `0600` |
 | Restarts | manual | `Restart=on-failure` + SIGTERM drain |
 | Backups | none expected | nightly timer, 14-day retention |
+| Chat surfaces | whatever `channel` selects | the same, plus `signal-cli.service` when `signal` is selected |
 
 ## Deployment diagram
 
@@ -21,18 +22,23 @@
 flowchart LR
     subgraph systemd["systemd"]
         u1["opencode.service<br/>user: opencode, 1500M cap"]
+        u4["signal-cli.service<br/>user: ocbot, 512M cap<br/>socket /run/signal-cli/socket"]
         u2["ocbot.service<br/>user: ocbot, 200M cap"]
         u3["ocbot-backup.timer + .service<br/>nightly 03:30"]
     end
     u1 -- "serve 127.0.0.1:8080" --> oc["opencode v2"]
     u2 -- "REST + SSE (loopback)" --> oc
+    u2 -- "JSON-RPC (unix socket)" --> u4
+    u4 -- "E2E" --> phone["operator phone"]
+    u2 --> repos["operator git repositories"]
     u2 --> db[("/srv/ocbot/ocbot.db<br/>WAL")]
     u3 -- "VACUUM INTO nightly" --> db
+    u3 -- "identity keys nightly" --> u4
     u3 --> bk[("/srv/ocbot/backups<br/>14-day retention")]
-    u2 --> repos["operator git repositories"]
 ```
 
 `ocbot.service` wants `opencode.service`, but the order is a soft preference: if the server is not up yet, the bot starts in degraded mode and recovers on its own.
+`signal-cli.service` is optional: install it only when `channel` selects `signal`. `ocbot.service` orders itself after it when it exists, but does not require it — a dead daemon refuses the Signal surface and nothing else (D-10).
 
 ## Host layout
 
@@ -47,6 +53,8 @@ flowchart LR
 | `/srv/ocbot/backups/` | Nightly snapshots |
 | `/etc/ocbot/ocbot.env` | Secrets, mode `0600` |
 | `/etc/systemd/system/ocbot.service` et al. | Units from `deploy/` |
+| `/run/signal-cli/socket` | The signal-cli JSON-RPC socket, mode `0600` (`RuntimeDirectory`, `UMask=0177`) |
+| `/var/lib/signal-cli/` | signal-cli's data dir: identity keys and account state (backed up nightly) |
 | `/srv/opencode/`, `/etc/opencode/opencode.env` | The opencode server's working directory and secrets |
 
 ## Install
@@ -59,6 +67,7 @@ Run as root; adjust if your distro differs.
    useradd -r -s /usr/sbin/nologin ocbot
    useradd -r -s /usr/sbin/nologin opencode
    ```
+   `signal-cli.service` runs as **`ocbot`**, the same account as the bot: the socket's owner must be the uid that connects to it (FR-116), and the identity keys must be readable by the backup unit.
 2. Build and install the binary:
 
    ```sh
@@ -73,7 +82,7 @@ Run as root; adjust if your distro differs.
    cp -r templates/. /srv/ocbot/templates/
    chown -R ocbot:ocbot /srv/ocbot
    ```
-   Edit `/srv/ocbot/config/config.toml` — at minimum `opencode_url` and `allowed_user_id`.
+   Edit `/srv/ocbot/config/config.toml` — at minimum `opencode_url` and `allowed_user_id`, and `channel` (one surface or both; see [surface selection](GETTING_STARTED.md#step-4--configure)).
 4. Write the secrets file:
 
    ```sh
@@ -81,6 +90,7 @@ Run as root; adjust if your distro differs.
    $EDITOR /etc/ocbot/ocbot.env
    ```
    It needs `DISCORD_TOKEN`, `OPENCODE_PASSWORD`, and `ALLOWED_USER_ID` (see the [env var table](GETTING_STARTED.md#step-5--set-the-secrets)).
+   Running the Signal surface adds `SIGNAL_OPERATOR` (your number, the only allowlisted sender) and `SIGNAL_CLI_ACCOUNT` (the daemon's own number).
    Do the equivalent for `/etc/opencode/opencode.env` with the server's password.
 5. Install and start the units:
 
@@ -91,8 +101,75 @@ Run as root; adjust if your distro differs.
    systemctl enable --now ocbot.service
    systemctl enable --now ocbot-backup.timer
    ```
+   With `channel` selecting `signal`, also copy `deploy/signal-cli.service` and run [the signal-cli steps](#the-signal-surface) below.
 
-The units carry hardening by default (`NoNewPrivileges`, `ProtectSystem=strict`, read-only home, private tmp) and memory ceilings: `MemoryMax=200M` for the bot, `1500M` + `CPUQuota=400%` for the server.
+The units carry hardening by default (`NoNewPrivileges`, `ProtectSystem=strict`, read-only home, private tmp) and memory ceilings: `MemoryMax=200M` for the bot, `1500M` + `CPUQuota=400%` for the server, `512M` for the signal-cli daemon.
+
+## The Signal surface
+
+Only these steps are needed for `signal`; skip them for a Discord-only deployment.
+
+### 1. Install signal-cli
+
+signal-cli is unofficial, and Signal tolerates it without supporting it — treat upgrades as a deliberate act (see [OPERATIONS](OPERATIONS.md)).
+Install the [packaged release](https://github.com/AsamK/signal-cli/wiki/Quickstart) so `/usr/bin/signal-cli` exists, and note its version: the bot refuses anything older than `MIN_SIGNAL_CLI_VERSION` at boot.
+
+### 2. Register or link a number
+
+The daemon needs an account of its own — **the bot's number**, not yours:
+
+```sh
+sudo -u ocbot signal-cli -a +15551234567 register     # a VoIP number is usually rejected
+sudo -u ocbot signal-cli -a +15551234567 verify <code>
+```
+
+A number you already use elsewhere is **linked** rather than registered:
+
+```sh
+sudo -u ocbot signal-cli -a +15551234567 link -n "ocbot host"
+```
+
+Then scan the `tsdevice:/…` URI it prints from your phone (Linked devices → Link new device).
+Losing `/var/lib/signal-cli` loses this link: the nightly backup archives it, and [RESTORE](RESTORE.md#restoring-the-signal-identity) covers the re-link path.
+
+### 3. Install the unit
+
+```sh
+install -d -o ocbot -g ocbot -m 0700 /var/lib/signal-cli
+cp deploy/signal-cli.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now signal-cli.service
+```
+
+The unit runs as `ocbot` with `UMask=0177`, so the daemon's socket lands at exactly `0600` inside `/run/signal-cli` (`RuntimeDirectory`, mode `0700`).
+That is not decoration: the boot doctor refuses the Signal surface for a socket that is a regular file, world-readable, or owned by another uid (FR-116) — a readable socket would let any local user send as the bot.
+
+### 4. Verify the safety number (once, at setup)
+
+Signal's trust model is end-to-end: anyone who knows the bot's number can *send* to it, and only the safety number proves which device answered.
+The code cannot enforce this — it is a runbook step, and the honest one:
+
+```sh
+sudo -u ocbot signal-cli -a +15551234567 listIdentities     # note the fingerprint
+```
+
+Compare it against the fingerprint shown on your phone for the bot's device (Settings → Privacy → Safety number).
+Record it somewhere you trust; re-check it after any re-link.
+
+### 5. Point the bot at it
+
+In `[signal]`:
+
+```toml
+[signal]
+socket = "/run/signal-cli/socket"
+operator_number = "+15559876543"     # your number — the only sender served
+```
+
+and in `channel`: `"signal"` or `["discord", "signal"]`.
+`systemctl restart ocbot`, then look for `signal-cli daemon healthy (FR-114/FR-116)` in the log.
+
+A wrong-version or unhygienic daemon refuses **the Signal surface only**: with Discord selected the process keeps booting, and with nothing left it exits `3`.
 
 ## Secrets management
 
@@ -122,17 +199,32 @@ Before downgrading, check [CHANGELOG](../CHANGELOG.md) for schema migrations —
 
 Upgrading the opencode server is a deliberate act: bump the pin in [client COMPAT](../crates/opencode-client/COMPAT.md), re-record fixtures, and let the nightly contract job confirm.
 
+Upgrade signal-cli:
+
+```sh
+systemctl stop signal-cli.service
+<install the new version>          # distro package or release tarball
+systemctl start signal-cli.service
+journalctl -u ocbot -o cat -n 5    # "signal-cli daemon healthy" or the reason it refused
+```
+
+The JSON-RPC schema is advisory, not contractual, and the bot pins a protocol subset (recorded in `crates/ocbot/src/adapters/signal/KNOWN_CAPS.md`).
+A version below `MIN_SIGNAL_CLI_VERSION` refuses the Signal surface with a log line naming both versions — Discord keeps serving, and you can downgrade signal-cli or drop `signal` from `channel`.
+`cargo test -p ocbot --test signal_contract` is the executable form of that contract: run it after any daemon upgrade that changes the wire shapes.
+
 ## Backups
 
-The `ocbot-backup.timer` fires nightly at 03:30 (±5 minutes) and runs `scripts/backup.sh`: a `VACUUM INTO` snapshot of the live WAL database, pruned to 14 days by mtime.
+The `ocbot-backup.timer` fires nightly at 03:30 (±5 minutes) and runs `scripts/backup.sh`: a `VACUUM INTO` snapshot of the live WAL database **and** a compressed copy of the signal-cli data dir (identity keys), each pruned to 14 days by mtime.
+The signal archive is skipped when the data dir is absent — a Discord-only deployment is not a failure.
 A failed backup exits non-zero, which systemd records — check `systemctl --failed` after failures.
 Restore procedures and the recorded drill live in [RESTORE](RESTORE.md) (the runbook owner).
 
 ## Post-deploy smoke tests
 
 1. `systemctl status ocbot.service` — active, no restart loop.
-2. `journalctl -u ocbot -o cat -n 20` — JSON log lines ending in `connected to discord`.
+2. `journalctl -u ocbot -o cat -n 20` — JSON log lines ending in `connected to discord`, and `signal-cli daemon healthy (FR-114/FR-116)` when the Signal surface runs.
 3. `/status` in Discord — server reachable, version shown, no held locks.
 4. `curl -s http://127.0.0.1:9464/metrics | grep ocbot_opencode_up` — `1`.
 5. `/run` a prompt in a scratch repository and take one decision on the report.
-6. Occasionally: `scripts/restore-drill.sh` — the full backup→restore path against a canary database.
+6. On the Signal surface: send `status` from your phone; you should get the same answer as `/status`, and both `ocbot_surface_up` gauges should read `1`.
+7. Occasionally: `scripts/restore-drill.sh` — the full backup→restore path (diary and identity keys) against canary files.

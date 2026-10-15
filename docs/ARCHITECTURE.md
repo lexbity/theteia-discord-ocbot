@@ -7,7 +7,7 @@
 ## System overview
 
 ocbot runs as one process on the same host as the opencode server.
-It talks to exactly four things: Discord, the opencode server, git, and SQLite.
+It talks to exactly five things: two chat surfaces (Discord and Signal), the opencode server, git, and SQLite.
 
 ```mermaid
 flowchart LR
@@ -17,11 +17,14 @@ flowchart LR
         oc["opencode server (v2)<br/>loopback + password"]
         repos["git repositories<br/>(work branches)"]
         db[("SQLite diary<br/>(WAL mode)")]
+        sc["signal-cli daemon<br/>unix socket, 0600"]
     end
     discord["Discord API<br/>gateway WS + REST"]
     op -- "TLS" --> discord
     discord -- "interactions, messages" --> bot
     bot -- "reports, gates, decisions" --> discord
+    op -- "E2E" --> sc
+    sc -- "JSON-RPC envelopes" --> bot
     bot -- "REST + SSE, loopback" --> oc
     oc -- "agent work" --> repos
     bot -- "argv subprocess" --> repos
@@ -29,7 +32,7 @@ flowchart LR
     bot -- "metrics :9464 (loopback)" --> prom["Prometheus / scraper"]
 ```
 
-Discord is an untrusted transport; the opencode server never leaves loopback.
+Both chat surfaces are untrusted transports; the opencode server never leaves loopback.
 Everything the bot decides is derived from fact reads: opencode status, `git log`, and the SQLite diary.
 
 ## Architectural style
@@ -306,5 +309,5 @@ Condensed from the design specs; each records the decision and the tradeoff it a
 
 ocbot is a single-operator tool by design; multi-tenant operation is a non-goal and would be a rewrite of the trust model, not a flag.
 The scaling envelope is therefore modest and deliberate: one process, one SQLite file (WAL), one SSE connection, one Discord gateway.
-The practical ceilings are the memory cap (`MemoryMax=200M` in the unit file; measured ~20 MB steady, see [nfr](nfr.md)), the Discord REST queue (serenity serializes; the bot emits roughly one message per event), and git subprocess cost per render.
+The practical ceilings are the memory cap (`MemoryMax=200M` in the unit file; measured ~20 MB steady, see [nfr](nfr.md)), the Discord REST queue (serenity serializes; the bot emits roughly one message per event), the signal-cli send path (one ordered writer per surface, ~20 messages per minute), and git subprocess cost per render.
 Beyond one operator or one host, nothing here is load-bearing — but nothing here is tuned for it either.

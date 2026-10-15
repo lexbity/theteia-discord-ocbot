@@ -1,0 +1,45 @@
+[Unit]
+Description=signal-cli daemon (JSON-RPC over a unix socket)
+Documentation=https://github.com/AsamK/signal-cli
+After=network-online.target
+# The bot (ocbot.service) orders itself after this unit but does not require
+# it: a Discord-only deployment must boot without signal-cli installed, and a
+# signal daemon that fails the boot doctor takes the surface down only
+# (SPEC-004 D-10/NFR-103). Where=socket= makes the socket's existence the
+# readiness signal, so a restart is not mistaken for a cold boot.
+
+[Service]
+Type=simple
+# The same service account as the bot: the socket must be owned by the uid the
+# bot runs as (FR-116) and be mode 0600, or the bot refuses the surface.
+User=ocbot
+Group=ocbot
+# The daemon's account number (the bot's own number, distinct from the
+# operator's SIGNAL_OPERATOR). Lives in /etc/ocbot/ocbot.env, mode 0600.
+EnvironmentFile=/etc/ocbot/ocbot.env
+# UMask=0177 turns the daemon's 0777 socket into exactly 0600, which is what
+# the FR-116 doctor check demands. A world-readable socket would let any local
+# user send as the bot.
+UMask=0177
+# /run/signal-cli, mode 0700, owned by the service user: the socket lives here
+# and nothing else can traverse it.
+RuntimeDirectory=signal-cli
+RuntimeDirectoryMode=0700
+ExecStart=/usr/bin/signal-cli -a ${SIGNAL_CLI_ACCOUNT} daemon --socket /run/signal-cli/socket --receive-mode manual
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+# Hardening (R-3/R-4), matching ocbot.service's idiom: no ambient authority,
+# read-only system, and a narrow write surface — the identity keys and the
+# daemon's own state directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/signal-cli
+# NFR-6: a JVM has a ceiling too.
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

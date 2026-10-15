@@ -23,6 +23,8 @@ mod policy;
 mod redact;
 mod report;
 
+use crate::surface::ActorId;
+
 pub use browser::{
     HISTORY_PAGE_SIZE, LS_PAGE_SIZE, LsEntry, history_page, ls_message, plan_picker_message,
 };
@@ -48,6 +50,23 @@ pub use report::{
 pub use label::truncate_chars;
 
 pub(crate) use label::collapse_whitespace;
+
+/// The FR-3 mention allowlist for one actor: the Discord snowflake when the
+/// actor is a Discord identity, and empty on every other surface (which has no
+/// mention mechanism and ignores the field). The Discord adapter enforces the
+/// restriction structurally on top of this — this is the vocabulary, not the
+/// guarantee.
+#[must_use]
+pub fn mention_allowlist(actor: &str) -> Vec<u64> {
+    ActorId(actor.to_owned()).discord_id().into_iter().collect()
+}
+
+/// The mentionable snowflake behind an actor, or `0` when the actor has none:
+/// what the render builders key their FR-3 allowlist on.
+#[must_use]
+pub fn mentionable_id(actor: &str) -> u64 {
+    ActorId(actor.to_owned()).discord_id().unwrap_or(0)
+}
 
 /// A message the bot wants to post. Pure data.
 #[derive(Debug, Clone, PartialEq)]

@@ -12,7 +12,7 @@ Read [GETTING_STARTED](GETTING_STARTED.md) to run the bot; read [ARCHITECTURE](A
 | Document | Description | Audience |
 |---|---|---|
 | [README](../README.md) | Pitch, features, quick start | Everyone |
-| [GETTING_STARTED](GETTING_STARTED.md) | Install, configure, run, verify; Discord command reference; troubleshooting | New operators and contributors |
+| [GETTING_STARTED](GETTING_STARTED.md) | Install, configure, run, verify; Discord and Signal command references; troubleshooting | New operators and contributors |
 | [ARCHITECTURE](ARCHITECTURE.md) | System diagram, crates, data model, decision records, trust model | Contributors |
 | [CONTRIBUTING](CONTRIBUTING.md) | Dev setup, lint floor, commit and PR conventions, CI gates | Contributors |
 | [TESTING](TESTING.md) | Test suites, coverage gates, chaos and fuzz testing | Contributors |
@@ -32,7 +32,12 @@ These terms are normative across every document in this set.
 
 | Term | Meaning |
 |---|---|
-| **operator** | The single allowed Discord user (`allowed_user_id`). The only trust principal. |
+| **operator** | The single allowed identity per surface (a Discord user id, a Signal number). The only trust principal. |
+| **surface** | A chat platform adapter: **Discord** or **Signal**. One `ChatPort` serves the core; a fan-out implements it for both. |
+| **destination** | Where a message goes: a surface plus its chat reference (a Discord channel snowflake, a Signal number). |
+| **ActorId** | A namespaced identity string: `discord:42`, `signal:+1555…`. Replaces bare user ids everywhere in the core. |
+| **legend** | The text line a button-less surface appends to a message that carries components (`✅ accept · 🔁 follow up · 🅿️ park`), and the emoji→verb table behind it. |
+| **flow** | The short text conversation that stands in for a Discord modal on Signal. One open per chat; it expires after ten minutes. |
 | **opencode server** | The local `opencode serve` v2 process the bot controls. Loopback + password. |
 | **directory** | A working directory (usually a git repo) the bot runs prompts in. |
 | **session** | One opencode conversation in a directory. A **root session** reports; a **child session** never does. |

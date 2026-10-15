@@ -6,7 +6,7 @@
 
 ## The three health surfaces
 
-1. **Discord itself** — `/status` shows server reachability and version, active actions, held locks, and pending gates. Announcements (server down, stream down) arrive as posts, once each.
+1. **The chat surfaces** — `/status` in Discourse server reachability and version, active actions, held locks, and pending gates. Announcements (server down, stream down) arrive as posts, once each.
 2. **The metrics endpoint** — `curl http://127.0.0.1:9464/metrics` (loopback only, gate G18).
 3. **The logs** — one JSON line per event via `journalctl -u ocbot -o cat`.
 
@@ -44,6 +44,7 @@ Every family exposed on `127.0.0.1:9464` (names are load-bearing — see `crates
 | `ocbot_signal_envelope_duplicates_total` | counter | Signal redeliveries absorbed by the dedupe cache |
 | `ocbot_pending_flows_open{flow}` | gauge | Live multi-step input flows (a stuck nonzero means an abandoned draft) |
 | `ocbot_component_map_rows` | gauge | Reaction→verb map size (GC health) |
+| `ocbot_surface_broadcast_inflight{surface}` | gauge | Broadcasts inside a surface's port right now — the queue-depth probe; a stuck transport shows as a count that never returns to 0 |
 
 ## Surface health
 
@@ -56,8 +57,8 @@ Selecting `signal` in `channel` gates the daemon at boot, **before** the Discord
 | Check | Refusal | Where you see it |
 |---|---|---|
 | `[signal].socket` missing or not a unix socket | surface refused | boot log: `signal socket … is not a unix socket (FR-116)` |
-| Socket mode is not exactly `0600` | surface refused | boot log: `… has mode 644, must be 0600 (FR-116)` — fix with `systemd RuntimeDirectory=signal-cli` (see [DEPLOYMENT](DEPLOYMENT.md)) |
-| Socket owned by another uid | surface refused | boot log: `… is owned by uid …` |
+| Socket mode is not exactly `0600` | surface refused | boot log: `… has mode 644, must be 0600 (FR-116)` — the shipped unit sets `UMask=0177` and `RuntimeDirectory=signal-cli` for exactly this reason (see [DEPLOYMENT](DEPLOYMENT.md#the-signal-surface)) |
+| Socket owned by another uid | surface refused | boot log: `… is owned by uid …` — the daemon must run as the bot's own service account |
 | `version` older than `MIN_SIGNAL_CLI_VERSION` | surface refused | boot log names both versions; upgrade signal-cli or drop `signal` from `channel` |
 | No registered accounts | surface refused | register/link a number on the daemon host first |
 | Daemon silent past 2 s | surface refused | `… did not answer within 2000 ms (NFR-103)` |
@@ -81,6 +82,16 @@ A healthy daemon now carries the full surface. Send plain text on the 1:1 chat; 
 - **Quiet edits.** `edit` on Signal is a fallback post prefixed `↻ update:` (native edit is version-dependent), folded to at most one per ops tick.
 
 A down Signal surface moves `ocbot_surface_up{surface="signal"}` to 0 and, when Discord is also configured, posts one notice there. Restart the daemon; the machine reconnects with backoff and the recovery notice confirms it.
+
+**Degraded-surface playbook.**
+
+1. `systemctl status signal-cli` — a crash loop, an old version, or a bad socket.
+2. `journalctl -u ocbot -b | grep signal` — the boot doctor's reason (`FR-114`/`FR-116`) or a reconnect loop.
+3. `curl -s http://127.0.0.1:9464/metrics | grep surface_up` — which surfaces are up.
+4. Restart the daemon (`systemctl restart signal-cli`); the gauge flips back and one recovery notice is posted.
+5. If the socket hygiene is the fault: `ls -l /run/signal-cli/socket` must show the service user and mode `0600`. The shipped unit guarantees both; a hand-rolled one usually does not.
+
+**Rate limits, both directions.** Outbound, the surface sends at most one message per second and preserves ordering (a report never lands after its own confirmation). Inbound, a per-sender token bucket (`[signal] rate_limit`, default 10 with a 1/s refill) drops bursts into `ocbot_surface_rate_dropped_total` — never a reply, so a flapping sender cannot make the bot a busy-loop. A Signal redelivery (the same envelope resent by the server) is absorbed by the dedupe cache and counted, never re-executed.
 
 
 ## Logs
@@ -132,7 +143,8 @@ Against a stock Prometheus, these match the design's own thresholds:
 | Suspicious "manual" rows in `/history` | Commits made outside the bot, or a restored older database | Expected — git is the source of truth; see [RESTORE](RESTORE.md) |
 | Database trouble | `PRAGMA integrity_check` on a copy | Follow [RESTORE](RESTORE.md); stop the bot first |
 | Bot exits 3 at boot | `journalctl -u ocbot -b`: `no chat surface survived the boot doctor` | The signal-cli daemon failed the boot doctor — see the table above; with Discord also selected, Discord alone never causes exit 3 |
-| Expecting a Signal reply on this build | `ocbot_surface_up{surface="signal"}` | Not yet: this slice ships the contract layer and the doctor only. The transport, inbound grammar and decision verbs are later slices |
+| No reply on Signal | `ocbot_surface_up{surface="signal"}`; `ocbot_surface_denied_total{surface="signal"}` | `denied` growing means a stranger (or a group chat) is poking the number — the bot replies to nobody but the configured operator. `up=0` means the daemon: `systemctl status signal-cli`, then restart it and watch for the recovery notice |
+| Signal sends fail, Discord is fine | `ocbot_surface_send_failures_total{surface="signal",op}`; the provider error in the log | Signal rate-limits or rejects the number (a VoIP number, a banned account). Stop the loop: the bot has no auto-reply to strangers by design (D-11) |
 | RSS creeping up | `scripts/measure-rss.sh` | The unit enforces `MemoryMax=200M`; steady state is ~20 MB — sustained growth is a bug, report it |
 
 ## Database operations

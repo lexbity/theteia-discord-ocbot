@@ -1,16 +1,21 @@
 [Unit]
-Description=ocbot — deterministic Discord controller for a local opencode v2 server
-After=network-online.target opencode.service
+Description=ocbot — deterministic controller for a local opencode v2 server (Discord + Signal surfaces)
+After=network-online.target opencode.service signal-cli.service
 Wants=opencode.service
 # Boot order is a soft preference: ocbot starts in `degraded` mode if opencode
-# is not up yet (FR-38) and recovers on its own.
+# is not up yet (FR-38) and recovers on its own. signal-cli.service is ordered
+# after only when it exists: a Discord-only deployment has no such unit, and a
+# missing signal daemon degrades the signal surface rather than the process
+# (SPEC-004 D-10).
 
 [Service]
 Type=simple
 User=ocbot
 Group=ocbot
 WorkingDirectory=/srv/ocbot
-# DISCORD_TOKEN, OPENCODE_PASSWORD, ALLOWED_USER_ID live here, mode 0600.
+# DISCORD_TOKEN, OPENCODE_PASSWORD, ALLOWED_USER_ID (the Discord operator),
+# SIGNAL_OPERATOR (the allowlisted Signal sender) and SIGNAL_CLI_ACCOUNT (the
+# daemon's own number) live here, mode 0600.
 EnvironmentFile=/etc/ocbot/ocbot.env
 ExecStart=/usr/local/bin/ocbot
 Restart=on-failure
@@ -24,6 +29,9 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/srv/ocbot
+# The signal-cli daemon's runtime directory: the bot must be able to stat the
+# socket (FR-116 mode + ownership) and connect to it.
+ReadOnlyPaths=/run/signal-cli
 # NFR-6: the steady-state RSS ceiling, enforced by the cgroup.
 MemoryMax=200M
 

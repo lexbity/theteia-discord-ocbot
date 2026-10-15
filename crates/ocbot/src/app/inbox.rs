@@ -197,7 +197,7 @@ fn inbox_message(
         ),
         attachment: None,
         components: Vec::new(),
-        mention_allowlist: ctx.guard.discord_operator().into_iter().collect(),
+        mention_allowlist: ctx.guard.mention_allowlist(),
     }
 }
 

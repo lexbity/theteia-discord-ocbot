@@ -77,12 +77,21 @@ impl Guard {
             .unwrap_or_else(|| ActorId::from_parts(Surface::Discord, "0"))
     }
 
-    /// The Discord snowflake of the operator, when a Discord identity is
-    /// configured (the FR-3 mention allowlist and the adapter's payload lock).
-    pub fn discord_operator(&self) -> Option<u64> {
+    /// The FR-3 mention allowlist for this guard's configured identities:
+    /// every configured Discord snowflake, and nothing on any other surface
+    /// (which has no mention mechanism). The Discord adapter enforces the
+    /// restriction structurally on top of this.
+    pub fn mention_allowlist(&self) -> Vec<u64> {
         self.allowed_actors
             .iter()
-            .find_map(ocbot_core::ActorId::discord_id)
+            .filter_map(ocbot_core::ActorId::discord_id)
+            .collect()
+    }
+
+    /// The Discord snowflake of the operator, when a Discord identity is
+    /// configured (the adapter's payload lock).
+    pub fn discord_operator(&self) -> Option<u64> {
+        self.mention_allowlist().into_iter().next()
     }
 
     /// The channel external completions post to.

@@ -57,7 +57,7 @@ pub async fn announce(ctx: &Arc<AppContext>, up: bool, down_message: String, up_
         content,
         attachment: None,
         components: Vec::new(),
-        mention_allowlist: ctx.guard.discord_operator().into_iter().collect(),
+        mention_allowlist: ctx.guard.mention_allowlist(),
     };
     let outcome = ctx.chat.broadcast(&message).await;
     if !outcome.any_delivered() {

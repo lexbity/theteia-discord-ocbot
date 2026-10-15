@@ -5,6 +5,7 @@ pub mod completion;
 pub mod context;
 pub mod crashpoint;
 pub mod degraded;
+pub mod destination;
 pub mod doctor;
 pub mod error;
 pub mod gates_loop;

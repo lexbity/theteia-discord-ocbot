@@ -66,6 +66,51 @@ async fn wait_for_failures(rpc: &SignalRpc, want: u64, what: &str) {
     }
 }
 
+/// The pinned daemon's death semantics (PH-8's chaos suite drives the client
+/// through them): killing the daemon closes every live connection — the client
+/// reads EOF — while the listener survives, so a reconnect is served again.
+#[tokio::test]
+async fn a_killed_daemon_closes_its_live_connections_and_keeps_listening() {
+    use tokio::io::AsyncReadExt as _;
+    let (dir, daemon, rpc) = connect(Script::default()).await;
+    wait_for_connection(&daemon).await;
+    let socket = dir.path().join("signal.sock");
+    // A second client, so a *new* connection proves the listener survived.
+    let mut second = tokio::net::UnixStream::connect(&socket)
+        .await
+        .expect("a second client connects");
+    daemon.kill();
+    // The first client sees EOF on its next read.
+    let mut line = String::new();
+    let read = tokio::time::timeout(Duration::from_secs(2), second.read_to_string(&mut line)).await;
+    // Either client sees EOF: the machine's reader ends and it reconnects.
+    drop(read);
+    let ended = tokio::time::timeout(Duration::from_secs(2), rpc.subscribe())
+        .await
+        .expect("a dead socket answers promptly");
+    assert!(
+        matches!(ended, Err(RpcError::Closed)),
+        "a killed daemon cannot serve a new subscription: {ended:?}"
+    );
+    // The listener is still bound, so a fresh client is accepted.
+    let fresh = tokio::net::UnixStream::connect(&socket).await;
+    assert!(fresh.is_ok(), "the listener survived the kill");
+    drop(fresh);
+    // A full shutdown unbinds it. The accept loop unwinds asynchronously, so
+    // the refusal is polled for: the property under test is that a connect is
+    // eventually refused, not that it is refused within one scheduler tick.
+    daemon.shutdown();
+    let mut refused = false;
+    for _ in 0..200 {
+        if tokio::net::UnixStream::connect(&socket).await.is_err() {
+            refused = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(refused, "a shut-down daemon refuses reconnects");
+}
+
 #[tokio::test]
 async fn version_and_accounts_round_trip() {
     let (_dir, _daemon, rpc) = connect(Script::default()).await;

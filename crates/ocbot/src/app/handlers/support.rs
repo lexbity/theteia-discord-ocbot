@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ocbot_core::{
-    ButtonKind, DISCORD_MESSAGE_CAP, Destination, OutgoingMessage, Surface, component_button,
-    fence_neutralize, split_excerpt, truncate_chars,
+    ButtonKind, DISCORD_MESSAGE_CAP, OutgoingMessage, component_button, fence_neutralize,
+    mention_allowlist, split_excerpt, truncate_chars,
 };
 
 use crate::adapters::store::ActionRow;
@@ -57,81 +57,13 @@ pub(crate) async fn history_dir(ctx: &Arc<AppContext>, user_id: &str) -> Result<
         .ok_or_else(|| AppError::Other("no directory recorded yet; run something first".to_owned()))
 }
 
-/// The destination an action's messages go to: the action row's persisted
-/// `(surface, chat_ref)` (SPEC-004 §5.4 reply routing).
-pub(crate) fn destination_for(action: &ActionRow) -> Result<Destination, AppError> {
-    let chat_ref = action
-        .chat_ref
-        .clone()
-        .ok_or_else(|| AppError::Other("action has no chat_ref (invariant)".to_owned()))?;
-    let surface = Surface::parse(&action.surface).ok_or_else(|| {
-        AppError::Other(format!("action has unknown surface {:?}", action.surface))
-    })?;
-    Ok(Destination {
-        surface,
-        chat_ref: ocbot_core::ChatRef(chat_ref),
-    })
-}
-
-/// Where a message about `action` goes: the action's own persisted
-/// destination (SPEC-004 §5.4 reply routing), else the ops/inbox announce
-/// channel. Shared by the gate loop and the stall watchdog — the two loops
-/// that talk about an action without having received an interaction.
-pub(crate) fn about_destination(ctx: &Arc<AppContext>, action: Option<&ActionRow>) -> Destination {
-    if let Some(action) = action
-        && let Ok(destination) = destination_for(action)
-    {
-        return destination;
-    }
-    Destination::discord(
-        ctx.guard
-            .ops_channel
-            .or(ctx.guard.inbox_channel)
-            .unwrap_or(0),
-    )
-}
-
-/// The FR-3 mention allowlist for one actor: Discord ids are parsed and
-/// allowlisted; other surfaces have no mention mechanism (the field is a
-/// Discord-rendered allowlist, SPEC-004 §5.2).
-pub(crate) fn mention_allowlist_for(actor: &str) -> Vec<u64> {
-    ocbot_core::ActorId(actor.to_owned())
-        .discord_id()
-        .into_iter()
-        .collect()
-}
-
-/// The Discord snowflake behind an `ActorId` (render functions key on it); 0
-/// when the actor is not a Discord identity (nothing is mentionable then).
-pub(crate) fn operator_u64(actor: &str) -> u64 {
-    ocbot_core::ActorId(actor.to_owned())
-        .discord_id()
-        .unwrap_or(0)
-}
-
-/// A Discord receipt for a snowflake message id.
-pub(crate) fn discord_receipt(message_id: u64) -> ocbot_core::PostReceipt {
-    ocbot_core::PostReceipt {
-        surface: Surface::Discord,
-        msg_id: ocbot_core::MsgId(message_id.to_string()),
-    }
-}
-
-/// A Discord receipt for an already-stringified message id.
-pub(crate) fn discord_receipt_str(message_id: &str) -> ocbot_core::PostReceipt {
-    ocbot_core::PostReceipt {
-        surface: Surface::Discord,
-        msg_id: ocbot_core::MsgId(message_id.to_owned()),
-    }
-}
-
 /// A plain (component-less) message mentioning only the operator (FR-3).
 pub(crate) fn simple(content: impl Into<String>, actor: &str) -> OutgoingMessage {
     OutgoingMessage {
         content: content.into(),
         attachment: None,
         components: Vec::new(),
-        mention_allowlist: mention_allowlist_for(actor),
+        mention_allowlist: mention_allowlist(actor),
     }
 }
 
@@ -157,6 +89,9 @@ pub(crate) fn failure_post(
     let title = truncate_chars(title.as_ref(), 300);
     let note_bytes = if note.is_empty() { 0 } else { note.len() + 1 };
     let fixed = title.len() + note_bytes + "```\n".len() * 2 + 2;
+    // Clamped to the tightest limit any configured surface imposes, so a spec
+    // this builder produces is deliverable everywhere (Signal's ceiling is far
+    // higher; Discord's is the binding one).
     let capacity = DISCORD_MESSAGE_CAP.saturating_sub(fixed);
     let neutralized = fence_neutralize(output);
     let (block, truncated) = split_excerpt(&neutralized, capacity);
@@ -192,7 +127,7 @@ pub(crate) fn with_button(
         content: content.into(),
         attachment: None,
         components: vec![component_button(label, custom_id, kind)],
-        mention_allowlist: mention_allowlist_for(actor),
+        mention_allowlist: mention_allowlist(actor),
     }
 }
 

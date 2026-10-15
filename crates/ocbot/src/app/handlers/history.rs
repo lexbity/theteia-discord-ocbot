@@ -35,18 +35,10 @@ pub async fn page(
 ) -> Result<(), AppError> {
     let dir = crate::app::handlers::support::history_dir(ctx, &source.user_id).await?;
     let message = build_page(ctx, &dir, page, true, &source.user_id).await?;
-    match source.message_id {
-        Some(message_id) => {
-            ctx.chat
-                .edit(
-                    &crate::app::handlers::support::discord_receipt(message_id),
-                    &message,
-                )
-                .await;
-        }
-        None => {
-            ctx.chat.post(&source.destination, &message).await?;
-        }
+    if let Some(receipt) = source.receipt() {
+        ctx.chat.edit(&receipt, &message).await;
+    } else {
+        ctx.chat.post(&source.destination, &message).await?;
     }
     Ok(())
 }
@@ -107,6 +99,6 @@ async fn build_page(
         &rows,
         page,
         show_reset,
-        crate::app::handlers::support::operator_u64(actor),
+        ocbot_core::mentionable_id(actor),
     ))
 }
