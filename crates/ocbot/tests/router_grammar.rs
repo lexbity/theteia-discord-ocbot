@@ -104,7 +104,7 @@ async fn slash_commands_map_to_their_ack_plans() {
     let store = StoreHandle::open_in_memory().expect("store");
     let ctx = base_ctx(&store);
 
-    for name in ["run", "prompt", "cd"] {
+    for name in ["run", "prompt"] {
         assert!(
             matches!(
                 router::guarded_plan(&ctx, &slash(name)).await,
@@ -114,7 +114,7 @@ async fn slash_commands_map_to_their_ack_plans() {
         );
     }
     for name in [
-        "status", "history", "reset", "release", "abort", "mute", "ls",
+        "status", "history", "reset", "release", "abort", "mute",
     ] {
         assert!(
             matches!(
@@ -192,8 +192,6 @@ async fn phase_seven_component_families_plan_a_defer_or_modal() {
     let ctx = base_ctx(&store);
 
     for id in [
-        "v1:ls:up".to_owned(),
-        "v1:lssel:0".to_owned(),
         "v1:plan:1:0".to_owned(),
         "v1:planp:1:0".to_owned(),
         "v1:planuse:1".to_owned(),
@@ -234,7 +232,7 @@ async fn modal_submits_route_to_their_execute_acks() {
     let store = StoreHandle::open_in_memory().expect("store");
     let ctx = base_ctx(&store);
 
-    for id in ["v1:newrun", "v1:prompt", "v1:cd"] {
+    for id in ["v1:newrun", "v1:prompt"] {
         assert!(
             matches!(
                 router::guarded_plan(&ctx, &modal(id)).await,
@@ -276,28 +274,4 @@ async fn execute_toggles_the_staged_template() {
     let row = store.action(staged).await.expect("read").expect("row");
     assert_eq!(row.template, "resume");
     assert_eq!(row.state, ocbot_core::State::Staged);
-}
-
-#[tokio::test]
-async fn execute_ls_up_re_renders_the_parent_directory() {
-    let tmp = tempfile::tempdir().expect("tmp");
-    let child = tmp.path().join("child");
-    std::fs::create_dir_all(&child).expect("child");
-    let store = StoreHandle::open_in_memory().expect("store");
-    store
-        .set_ui_cwd(&format!("discord:{OPERATOR}"), &child.to_string_lossy())
-        .await
-        .expect("cwd");
-    let ctx = base_ctx(&store);
-
-    router::execute(&ctx, &component("v1:ls:up"))
-        .await
-        .expect("ls up");
-    assert_eq!(
-        store
-            .ui_cwd(&format!("discord:{OPERATOR}"))
-            .await
-            .expect("cwd"),
-        Some(tmp.path().to_string_lossy().into_owned())
-    );
 }

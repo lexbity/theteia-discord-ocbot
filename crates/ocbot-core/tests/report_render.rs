@@ -31,7 +31,7 @@ fn plain_report(
     footer: &Footer,
     context: &ReportContext,
 ) -> OutgoingMessage {
-    report(label, outcome, footer, context, &Redactor::default())
+    report(label, outcome, footer, context, &Redactor::default(), None, None)
 }
 
 #[test]
@@ -78,6 +78,8 @@ fn redaction_scrubs_the_inline_path_but_keeps_the_record() {
         &Footer::default(),
         &done_context(3, true),
         &redactor,
+        None,
+        None,
     );
     assert!(
         !message.content.contains("abcdefgh12345678"),
@@ -142,14 +144,14 @@ fn short_report_has_no_attachment() {
 
 #[test]
 fn preview_carries_send_edit_and_template_buttons() {
-    let preview = staged_preview("poke", "do the thing", 123, 9, "fresh");
+    let preview = staged_preview("poke", "do the thing", 123, 9, "fresh", None);
     assert_eq!(preview.components.len(), 3);
     assert_eq!(preview.components[0].custom_id, "v1:send:123");
     assert_eq!(preview.components[1].custom_id, "v1:edit:123");
     assert_eq!(preview.components[2].custom_id, "v1:tpl:123");
     assert_eq!(preview.components[2].label, "Use resume template");
     assert_eq!(preview.mention_allowlist, vec![9]);
-    let resume = staged_preview("poke", "do the thing", 123, 9, "resume");
+    let resume = staged_preview("poke", "do the thing", 123, 9, "resume", None);
     assert_eq!(resume.components[2].label, "Use fresh template");
 }
 
@@ -337,6 +339,8 @@ fn redaction_cannot_grow_the_message_past_the_cap() {
         &Footer::default(),
         &done_context(4, true),
         &redactor,
+        None,
+        None,
     );
     assert!(
         message.content.len() <= DISCORD_MESSAGE_CAP,
@@ -350,7 +354,7 @@ fn redaction_cannot_grow_the_message_past_the_cap() {
 #[test]
 fn staged_preview_stays_within_the_cap_and_flags_truncation() {
     // The preview embeds `{git_log}` lines of unbounded subject length.
-    let preview = staged_preview("task", &"line of prompt text\n".repeat(500), 3, 9, "fresh");
+    let preview = staged_preview("task", &"line of prompt text\n".repeat(500), 3, 9, "fresh", None);
     assert!(
         preview.content.len() <= DISCORD_MESSAGE_CAP,
         "content was {} bytes",
@@ -362,7 +366,7 @@ fn staged_preview_stays_within_the_cap_and_flags_truncation() {
         preview.content
     );
     // An oversized label is clamped too.
-    let preview = staged_preview(&"l".repeat(5_000), "short", 3, 9, "resume");
+    let preview = staged_preview(&"l".repeat(5_000), "short", 3, 9, "resume", None);
     assert!(
         preview.content.len() <= DISCORD_MESSAGE_CAP,
         "content was {} bytes",

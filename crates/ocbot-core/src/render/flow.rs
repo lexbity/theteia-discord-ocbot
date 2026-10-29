@@ -19,11 +19,9 @@ pub const FLOW_RUN: &str = "run";
 pub const FLOW_MODAL: &str = "modal";
 /// The flow name for the `/prompt` text form.
 pub const FLOW_PROMPT: &str = "prompt";
-/// The flow name for the `/cd` text form.
-pub const FLOW_CD: &str = "cd";
 
 /// Every flow name the gauge and the sweeps know about (D-06/FR-113).
-pub const FLOW_NAMES: [&str; 4] = [FLOW_RUN, FLOW_MODAL, FLOW_PROMPT, FLOW_CD];
+pub const FLOW_NAMES: [&str; 3] = [FLOW_RUN, FLOW_MODAL, FLOW_PROMPT];
 
 /// The pending-flow time-to-live in seconds (D-06/FR-109: ten minutes).
 pub const FLOW_TTL_SECS: i64 = 600;
@@ -69,14 +67,6 @@ pub const PROMPT_STEPS: [FlowStep; 1] = [FlowStep {
     next: None,
 }];
 
-/// The `cd` step table: one directory.
-pub const CD_STEPS: [FlowStep; 1] = [FlowStep {
-    step: "await_path",
-    prompt: "Send the directory to browse.",
-    field: "path",
-    next: None,
-}];
-
 /// The step table for a named flow (empty for the generic `modal` flow, whose
 /// steps come from the modal spec itself).
 #[must_use]
@@ -84,7 +74,6 @@ pub fn flow_steps(flow: &str) -> &'static [FlowStep] {
     match flow {
         FLOW_RUN => &RUN_STEPS,
         FLOW_PROMPT => &PROMPT_STEPS,
-        FLOW_CD => &CD_STEPS,
         _ => &[],
     }
 }
@@ -195,9 +184,6 @@ pub fn restart_notice(flow: &str, draft: &str) -> String {
         FLOW_PROMPT => format!(
             "a `prompt` draft was open{echo} — send `prompt` to restart or reply to continue"
         ),
-        FLOW_CD => {
-            format!("a `cd` draft was open{echo} — send `cd <dir>` to restart or reply to continue")
-        }
         FLOW_MODAL => format!(
             "a text form was open{echo} — reply to continue or send `{CANCEL_WORD}` to close it"
         ),
@@ -290,10 +276,9 @@ fn truncate(text: &str, max: usize) -> String {
 /// This is the *coverage claim*, not the router: `router::modal_ids()` is the
 /// router's own list, and `tests/signal_flows.rs` asserts every router id is
 /// covered here. Adding a modal to the router without adding it here fails CI.
-pub const MODAL_FAMILIES: [&str; 8] = [
+pub const MODAL_FAMILIES: [&str; 7] = [
     "v1:newrun",
     "v1:prompt",
-    "v1:cd",
     "v1:editgo:",
     "v1:acceptgo:",
     "v1:formgo:",
@@ -332,7 +317,7 @@ pub fn modal_family_samples() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CANCEL_WORD, FLOW_CD, FLOW_MODAL, FLOW_PROMPT, FLOW_RUN, MODAL_FAMILIES, cancelled,
+        CANCEL_WORD, FLOW_MODAL, FLOW_PROMPT, FLOW_RUN, MODAL_FAMILIES, cancelled,
         default_hint, draft_echo, expired, field_prompt, first_step, flow_steps, form_header,
         is_cancel, is_modal_id, modal_family_samples, next_step, restart_notice, step_field,
         step_prompt, unknown_flow, with_cancel_hint,
@@ -342,7 +327,6 @@ mod tests {
     fn every_flow_name_has_a_step_table_or_is_generic() {
         assert_eq!(flow_steps(FLOW_RUN).len(), 2);
         assert_eq!(flow_steps(FLOW_PROMPT).len(), 1);
-        assert_eq!(flow_steps(FLOW_CD).len(), 1);
         assert!(flow_steps(FLOW_MODAL).is_empty());
     }
 
@@ -363,8 +347,6 @@ mod tests {
     fn single_step_flows_submit_immediately() {
         assert_eq!(first_step(FLOW_PROMPT), Some("await_text"));
         assert_eq!(next_step(FLOW_PROMPT, "await_text"), None);
-        assert_eq!(first_step(FLOW_CD), Some("await_path"));
-        assert_eq!(next_step(FLOW_CD, "await_path"), None);
     }
 
     #[test]
@@ -477,7 +459,7 @@ mod tests {
     fn prefixed_families_do_not_match_bare_ids() {
         assert!(!is_modal_id("v1:newrunx"), "an unknown id must not pass");
         assert!(is_modal_id("v1:editgo:7"));
-        assert_eq!(MODAL_FAMILIES.len(), 8);
+        assert_eq!(MODAL_FAMILIES.len(), 7);
     }
 
     #[test]

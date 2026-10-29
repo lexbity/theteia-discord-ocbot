@@ -121,6 +121,14 @@ impl SignalSurface {
             plan_heading_min: ocbot_core::DEFAULT_HEADING_MIN,
             plan_heading_max: ocbot_core::DEFAULT_HEADING_MAX,
             ls_page_size: ocbot_core::LS_PAGE_SIZE,
+            projects: Arc::new(ocbot::adapters::projects::FsProjectAdapter::new(
+                std::path::PathBuf::from("/tmp/projects"),
+                ocbot_core::ports::default_plans_dirs(),
+                ocbot_core::ports::default_readme_files(),
+                Arc::new(ocbot::adapters::projects::TomlProjectConfigAdapter),
+            )),
+            project_config: Arc::new(ocbot::adapters::projects::TomlProjectConfigAdapter),
+            projects_root: std::path::PathBuf::from("/tmp/projects"),
         });
         let inbound = Arc::new(SignalInbound::new(
             ctx.clone(),

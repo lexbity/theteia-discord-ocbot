@@ -10,14 +10,14 @@ use std::time::Instant;
 
 use ocbot_core::grammar::{self, DecisionVerb, Intent};
 use ocbot_core::render::{
-    FLOW_CD, FLOW_PROMPT, FLOW_RUN, cancelled as flow_cancelled, help_text,
+    FLOW_PROMPT, FLOW_RUN, cancelled as flow_cancelled, help_text,
     unknown_flow as unknown_flow_text, with_cancel_hint,
 };
 use ocbot_core::{Destination, MsgId, OutgoingMessage, PostReceipt, Surface};
 
 use crate::adapters::store::StoreHandle;
 use crate::app::context::AppContext;
-use crate::app::handlers::{adopt, files, ls, prompt, run};
+use crate::app::handlers::{adopt, files, prompt, run};
 use crate::app::interaction::{AckPlan, InteractionSource, SourceKind, TextInput};
 use crate::app::metrics::Metrics;
 use crate::app::router::{self, PlanOutcome};
@@ -370,21 +370,6 @@ impl SignalInbound {
             Intent::ResetGo { sha } => {
                 self.component(format!("v1:resetgo:{sha}")).await;
             }
-            Intent::Ls { path, page } => match (path, page) {
-                (Some(path), _) => {
-                    self.submit_modal(ls::CD_MODAL, vec![("path".to_owned(), path)])
-                        .await;
-                }
-                (None, Some(page)) => self.component(format!("v1:ls:p:{page}")).await,
-                (None, None) => self.slash("ls").await,
-            },
-            Intent::Cd { path } => match path {
-                Some(path) => {
-                    self.submit_modal(ls::CD_MODAL, vec![("path".to_owned(), path)])
-                        .await;
-                }
-                None => self.open_flow(FLOW_CD).await,
-            },
             Intent::History { page } => match page {
                 Some(page) => self.component(format!("v1:page:history:{page}")).await,
                 None => self.slash("history").await,

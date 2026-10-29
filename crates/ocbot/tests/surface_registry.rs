@@ -20,7 +20,7 @@ use ocbot::config::Config;
 use ocbot_core::OutgoingMessage;
 use ocbot_core::surface::{ChatRef, Destination, MsgId, PostReceipt, Surface};
 
-const BASE: &str = "opencode_url = \"http://127.0.0.1:8080\"\n";
+const BASE: &str = "opencode_url = \"http://127.0.0.1:8080\"\nprojects_root = \"/tmp\"\n";
 
 fn config(extra: &str) -> Config {
     Config::parse(&format!("{BASE}{extra}")).expect("config parses")

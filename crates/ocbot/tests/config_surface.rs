@@ -12,7 +12,7 @@
 
 use ocbot::config::{ChannelSelection, Config};
 
-const BASE: &str = "opencode_url = \"http://127.0.0.1:8080\"\n";
+const BASE: &str = "opencode_url = \"http://127.0.0.1:8080\"\nprojects_root = \"/tmp\"\n";
 
 fn parse(extra: &str) -> Config {
     Config::parse(&format!("{BASE}{extra}")).expect("parses")

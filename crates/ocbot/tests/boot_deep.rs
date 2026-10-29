@@ -37,6 +37,7 @@ fn write_config(dir: &Path, opencode_url: &str) -> PathBuf {
         &config,
         format!(
             "opencode_url = {opencode_url:?}\n\
+             projects_root = {:?}\n\
              db_path = {:?}\n\
              templates_dir = {:?}\n\
              metrics_bind = \"127.0.0.1:0\"\n\
@@ -45,6 +46,7 @@ fn write_config(dir: &Path, opencode_url: &str) -> PathBuf {
              inbox_dir = {:?}\n\
              [discord]\n\
              allowed_user_id = 42\n",
+            dir.to_string_lossy(),
             dir.join("ocbot.db").to_string_lossy(),
             workspace().join("templates").to_string_lossy(),
             workspace()

@@ -20,6 +20,7 @@ mod gate;
 mod label;
 mod legend;
 mod policy;
+pub mod projects;
 mod redact;
 mod report;
 
@@ -28,8 +29,12 @@ use crate::surface::ActorId;
 pub use browser::{
     HISTORY_PAGE_SIZE, LS_PAGE_SIZE, LsEntry, history_page, ls_message, plan_picker_message,
 };
+pub use projects::{
+    full_readme_message, plan_preview_message, project_details_message, project_list_message,
+    staged_preview_project,
+};
 pub use flow::{
-    CANCEL_WORD, FLOW_CD, FLOW_MODAL, FLOW_NAMES, FLOW_PROMPT, FLOW_RUN, FLOW_TTL_SECS,
+    CANCEL_WORD, FLOW_MODAL, FLOW_NAMES, FLOW_PROMPT, FLOW_RUN, FLOW_TTL_SECS,
     MODAL_FAMILIES, RUN_STEPS, cancelled, default_hint, draft_echo, expired, field_prompt,
     first_step, flow_steps, form_header, is_cancel, is_modal_id, modal_family_samples, next_step,
     restart_notice, step_field, step_prompt, unknown_flow, with_cancel_hint,

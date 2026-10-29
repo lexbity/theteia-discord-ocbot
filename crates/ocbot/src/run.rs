@@ -15,6 +15,7 @@ use crate::adapters::discord::{DiscordAdapter, shared_http, start_gateway};
 use crate::adapters::fs::FsAdapter;
 use crate::adapters::git::GitAdapter;
 use crate::adapters::opencode::{OpenCodeAdapter, OpenCodeEventSource};
+use crate::adapters::projects::{FsProjectAdapter, TomlProjectConfigAdapter};
 use crate::adapters::signal::{SignalAdapter, SignalInbound, SignalMachine};
 use crate::adapters::store::StoreHandle;
 use crate::app::context::{AppContext, ChatPort, EventSource};
@@ -33,7 +34,7 @@ use crate::app::wake::Dispatcher;
 use crate::app::watcher::Watcher;
 use crate::config::{Config, Secrets, config_path};
 use ocbot_core::Redactor;
-use ocbot_core::ports::{Clock, FsPort, GitPort, OpenCodePort, PermissionRule};
+use ocbot_core::ports::{Clock, FsPort, GitPort, OpenCodePort, PermissionRule, ProjectConfigPort, ProjectPort};
 
 /// The tokio entry invoked by `main`. Returns the process exit code.
 #[expect(
@@ -237,6 +238,15 @@ pub async fn start() -> ExitCode {
     let client = Arc::new(client);
     let opencode: Arc<dyn OpenCodePort> = Arc::new(OpenCodeAdapter::new(client.clone()));
 
+    // SPEC-005: Project-centric remote control - wire up project adapters
+    let project_config_adapter: Arc<dyn ProjectConfigPort> = Arc::new(TomlProjectConfigAdapter);
+    let projects: Arc<dyn ProjectPort> = Arc::new(FsProjectAdapter::new(
+        Path::new(&config.projects_root).to_path_buf(),
+        config.default_plans_dirs.clone(),
+        config.default_readme_files.clone(),
+        project_config_adapter.clone(),
+    ));
+
     // SPEC-004 PH-4: build the Signal transport for a surface the early doctor
     // already validated (the socket is guaranteed present by config).
     let mut signal_adapter: Option<Arc<SignalAdapter>> = None;
@@ -376,6 +386,9 @@ pub async fn start() -> ExitCode {
         plan_heading_min: config.plan_heading_min,
         plan_heading_max: config.plan_heading_max,
         ls_page_size: config.ls_page_size,
+        projects,
+        project_config: project_config_adapter,
+        projects_root: Path::new(&config.projects_root).to_path_buf(),
     });
 
     // The Signal inbound pump needs the context (it routes through the same

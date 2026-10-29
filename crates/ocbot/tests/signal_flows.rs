@@ -1,6 +1,6 @@
 //! SPEC-004 PH-7: modal-flow parity on Signal and crash-reconcile.
 //!
-//! Every Discord modal (`v1:newrun`, `v1:prompt`, `v1:cd`, `v1:editgo:*`,
+//! Every Discord modal (`v1:newrun`, `v1:prompt`, `v1:editgo:*`,
 //! `v1:acceptgo:*`, `v1:followupgo:*`, `v1:formgo:*`, `v1:planothergo:*`) has a
 //! Signal text form. The proof is [`assert_modal_parity`]: the flow's
 //! synthesized `ModalSubmit` must be byte-identical to the one the Discord
@@ -22,10 +22,10 @@ mod common;
 use std::sync::Arc;
 
 use common::signal_fake::Script;
-use common::signal_surface::{OPERATOR, SignalSurface, wait_for, wait_state};
+use common::signal_surface::{OPERATOR, SignalSurface, wait_state};
 use ocbot::adapters::signal::flows::{Advance, FlowEngine, RunDraft, advance, run_draft};
 use ocbot::adapters::store::{PendingInputRow, StoreHandle};
-use ocbot::app::handlers::{accept, followup, ls, prompt, run};
+use ocbot::app::handlers::{accept, followup, prompt, run};
 use ocbot::app::interaction::{InputStyle, ModalInputSpec, ModalSpec};
 use ocbot::app::reconcile::reconcile_pending_flows;
 use ocbot::app::router;
@@ -132,14 +132,6 @@ async fn the_prompt_flow_synthesizes_the_discord_prompt_submit() {
         "do it now",
         "/tmp/cwd",
     );
-    let (custom_id, values) = submit(&transition);
-    common::assert_modal_parity(&discord, custom_id, values);
-}
-
-#[tokio::test]
-async fn the_cd_flow_synthesizes_the_discord_cd_submit() {
-    let discord = common::modal(ls::CD_MODAL, &[("path", "/tmp/x")]);
-    let transition = advance(&pending_row("cd", "await_path", "{}"), "/tmp/x", "");
     let (custom_id, values) = submit(&transition);
     common::assert_modal_parity(&discord, custom_id, values);
 }
@@ -290,31 +282,6 @@ async fn cancel_closes_an_open_flow() {
 }
 
 #[tokio::test]
-async fn opening_a_flow_replaces_the_open_one() {
-    // Driven through the engine: a second *command* cannot be typed while a flow
-    // is open (the flow consumes it, by design), so the replace-on-open rule
-    // (D-06: one row per chat) is proven at the engine level.
-    let surface = SignalSurface::new(Script::default(), None, inert_git()).await;
-    let engine = FlowEngine::new(
-        surface.ctx.clone(),
-        surface.adapter.clone(),
-        OPERATOR.to_owned(),
-    );
-    assert!(
-        engine
-            .open_at("run", "await_prompt", &run_draft("/tmp/x"))
-            .await
-    );
-    surface.wait_sent("Send the prompt for this run.").await;
-    assert!(engine.open_at("cd", "await_path", "{}").await);
-    surface.wait_sent("Send the directory to browse.").await;
-    let rows = surface.store.all_pending().await.expect("all_pending");
-    assert_eq!(rows.len(), 1, "one row per chat");
-    assert_eq!(rows[0].flow, "cd", "the cd flow replaced the run flow");
-    assert_eq!(rows[0].step, "await_path");
-}
-
-#[tokio::test]
 async fn an_expired_flow_is_noticed_once_and_cleared() {
     let surface = SignalSurface::new(Script::default(), None, inert_git()).await;
     surface.send(OPERATOR, "run /tmp/x");
@@ -458,22 +425,6 @@ async fn the_prompt_flow_runs_end_to_end() {
         .next()
         .expect("a running action");
     wait_state(&surface, running.id, State::Running).await;
-}
-
-#[tokio::test]
-async fn the_cd_flow_browses_the_typed_directory() {
-    let surface = SignalSurface::new(Script::default(), None, inert_git()).await;
-    let dir = surface.tmp.path().to_string_lossy().into_owned();
-    surface.send(OPERATOR, "cd");
-    surface
-        .wait_sent("Send the directory to browse. (or `cancel`)")
-        .await;
-    surface.send(OPERATOR, &dir);
-    wait_for(
-        || surface.sent().iter().any(|text| text.contains(&dir)),
-        "the browser opened at the typed directory",
-    )
-    .await;
 }
 
 // --- the wording is core vocabulary ----------------------------------------

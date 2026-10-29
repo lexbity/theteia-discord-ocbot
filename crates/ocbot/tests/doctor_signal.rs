@@ -204,6 +204,7 @@ fn write_config(dir: &Path, channel: &str, socket: Option<&Path>, discord: bool)
     let config = dir.join("config.toml");
     let mut text = format!(
         "opencode_url = \"http://127.0.0.1:9\"\n\
+         projects_root = {:?}\n\
          channel = {channel}\n\
          db_path = {:?}\n\
          templates_dir = {:?}\n\
@@ -211,6 +212,7 @@ fn write_config(dir: &Path, channel: &str, socket: Option<&Path>, discord: bool)
          permissions_file = {:?}\n\
          browse_roots = [{:?}]\n\
          inbox_dir = {:?}\n",
+        dir.to_string_lossy(),
         dir.join("ocbot.db").to_string_lossy(),
         workspace().join("templates").to_string_lossy(),
         workspace()

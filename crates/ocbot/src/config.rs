@@ -93,6 +93,15 @@ pub struct Config {
     /// Allow typed paths outside `browse_roots` (default false — P11).
     #[serde(default)]
     pub allow_freeform_paths: bool,
+    /// Root directory containing all projects (SPEC-005).
+    /// REQUIRED: must be explicitly set.
+    pub projects_root: String,
+    /// Default directories to search for plans in projects (SPEC-005).
+    #[serde(default = "default_default_plans_dirs")]
+    pub default_plans_dirs: Vec<String>,
+    /// Default filenames to look for as README in projects (SPEC-005).
+    #[serde(default = "default_default_readme_files")]
+    pub default_readme_files: Vec<String>,
     /// Minimum heading depth for the plan picker (P12; default 2).
     #[serde(default = "default_plan_depth_min")]
     pub plan_heading_min: u32,
@@ -374,6 +383,14 @@ fn default_inbox_dir() -> String {
     "inbox".to_owned()
 }
 
+fn default_default_plans_dirs() -> Vec<String> {
+    vec!["devdocs/plans".to_owned()]
+}
+
+fn default_default_readme_files() -> Vec<String> {
+    vec!["README.md".to_owned(), "README.txt".to_owned(), "README".to_owned()]
+}
+
 fn default_plan_depth_min() -> u32 {
     ocbot_core::plan::DEFAULT_HEADING_MIN
 }
@@ -520,6 +537,23 @@ impl Config {
         }
         if self.browse_roots.is_empty() || self.browse_roots.iter().any(String::is_empty) {
             errors.push("browse_roots must name at least one non-empty root (FR-34)".to_owned());
+        }
+        if self.projects_root.is_empty() {
+            errors.push("projects_root is required (SPEC-005)".to_owned());
+        } else {
+            let root = Path::new(&self.projects_root);
+            if !root.exists() {
+                errors.push(format!("projects_root {} does not exist", self.projects_root));
+            }
+            if !root.is_dir() {
+                errors.push(format!("projects_root {} is not a directory", self.projects_root));
+            }
+        }
+        if self.default_plans_dirs.is_empty() {
+            errors.push("default_plans_dirs must contain at least one directory (SPEC-005)".to_owned());
+        }
+        if self.default_readme_files.is_empty() {
+            errors.push("default_readme_files must contain at least one filename (SPEC-005)".to_owned());
         }
         if !(1..=6).contains(&self.plan_heading_min) || !(1..=6).contains(&self.plan_heading_max) {
             errors.push(format!(
@@ -813,6 +847,7 @@ mod tests {
 
     const GOOD: &str = r#"
 opencode_url = "http://127.0.0.1:8080"
+projects_root = "/tmp"
 [discord]
 allowed_user_id = 42
 "#;
@@ -835,7 +870,10 @@ typo_key = 1
 
     #[test]
     fn rejects_non_loopback_without_override() {
-        let bad = Config::parse("opencode_url = \"http://example.com\"\n").expect("parses");
+        let bad = Config::parse(
+            "opencode_url = \"http://example.com\"\nprojects_root = \"/tmp\"\n",
+        )
+        .expect("parses");
         let errors = bad.validate().expect_err("non-loopback rejected");
         assert!(errors.iter().any(|error| error.contains("FR-4")));
     }
@@ -861,6 +899,9 @@ typo_key = 1
             browse_roots: vec![String::new()],
             inbox_dir: "inbox".to_owned(),
             allow_freeform_paths: false,
+            projects_root: String::new(),
+            default_plans_dirs: vec![],
+            default_readme_files: vec![],
             plan_heading_min: 2,
             plan_heading_max: 3,
             ls_page_size: 18,
@@ -961,13 +1002,13 @@ typo_key = 1
     #[test]
     fn events_block_overrides_and_rejects_unknown_keys() {
         let config = Config::parse(
-            "opencode_url = \"http://127.0.0.1:8080\"\n[events]\nenabled = false\nidle_deadline_secs = 20\n",
+            "opencode_url = \"http://127.0.0.1:8080\"\nprojects_root = \"/tmp\"\n[events]\nenabled = false\nidle_deadline_secs = 20\n",
         )
         .expect("parses");
         assert!(!config.events.enabled, "pure-poll mode is configurable");
         assert_eq!(config.events.idle_deadline_secs, 20);
         let bad = Config::parse(
-            "opencode_url = \"http://127.0.0.1:8080\"\n[events]\nenabled_lies = true\n",
+            "opencode_url = \"http://127.0.0.1:8080\"\nprojects_root = \"/tmp\"\n[events]\nenabled_lies = true\n",
         );
         assert!(bad.is_err(), "unknown [events] keys are loud errors (P-30)");
     }
@@ -975,7 +1016,7 @@ typo_key = 1
     #[test]
     fn events_block_validates_its_own_invariants() {
         let mut config = Config::parse(
-            "opencode_url = \"http://127.0.0.1:8080\"\n[events]\nbackoff_min_ms = 5000\nbackoff_max_ms = 1000\nidle_deadline_secs = 1\n",
+            "opencode_url = \"http://127.0.0.1:8080\"\nprojects_root = \"/tmp\"\n[events]\nbackoff_min_ms = 5000\nbackoff_max_ms = 1000\nidle_deadline_secs = 1\n",
         )
         .expect("parses");
         config.events.announce_after_secs = 0;
@@ -994,7 +1035,7 @@ typo_key = 1
         std::fs::write(
             &config_path,
             format!(
-                "opencode_url = \"http://127.0.0.1:8080\"\ntemplates_dir = {:?}\n[discord]\nallowed_user_id = 42\n",
+                "opencode_url = \"http://127.0.0.1:8080\"\ntemplates_dir = {:?}\nprojects_root = \"/tmp\"\n[discord]\nallowed_user_id = 42\n",
                 dir.path().to_string_lossy()
             ),
         )
@@ -1016,7 +1057,7 @@ typo_key = 1
         std::fs::write(
             &config_path,
             format!(
-                "opencode_url = \"http://127.0.0.1:8080\"\ntemplates_dir = {:?}\n[discord]\nallowed_user_id = 42\n",
+                "opencode_url = \"http://127.0.0.1:8080\"\ntemplates_dir = {:?}\nprojects_root = \"/tmp\"\n[discord]\nallowed_user_id = 42\n",
                 dir.path().to_string_lossy()
             ),
         )

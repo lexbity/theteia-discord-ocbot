@@ -863,6 +863,64 @@ store_method! {
         }
     };
 
+    /// Set the selected project and its directory for a user (SPEC-005).
+    SetSelectedProject as set_selected_project(user_id: &str => String, project_name: &str => String, project_dir: &str => String) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            connection
+                .execute(
+                    "INSERT OR REPLACE INTO project_state (user_id, selected_project, selected_project_dir, selected_plan, selected_plan_path) 
+                     VALUES (?1, ?2, ?3, NULL, NULL)",
+                    params![user_id, project_name, project_dir],
+                )
+                .map(|_| ())
+        }
+    };
+
+    /// Set the selected plan for a user (SPEC-005).
+    SetSelectedPlan as set_selected_plan(user_id: &str => String, plan_name: &str => String, plan_path: &str => String) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            connection
+                .execute(
+                    "UPDATE project_state SET selected_plan = ?1, selected_plan_path = ?2 WHERE user_id = ?3",
+                    params![plan_name, plan_path, user_id],
+                )
+                .map(|_| ())
+        }
+    };
+
+    /// Get the selected project and plan for a user (SPEC-005).
+    GetSelectedProjectAndPlan as get_selected_project_and_plan(user_id: &str => String) -> Option<(String, String, Option<String>, Option<String>)> {
+        |connection: &mut Connection| -> rusqlite::Result<Option<(String, String, Option<String>, Option<String>)>> {
+            connection
+                .query_row(
+                    "SELECT selected_project, selected_project_dir, selected_plan, selected_plan_path 
+                     FROM project_state WHERE user_id = ?1",
+                    params![user_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>("selected_project")?,
+                            row.get::<_, String>("selected_project_dir")?,
+                            row.get::<_, Option<String>>("selected_plan")?,
+                            row.get::<_, Option<String>>("selected_plan_path")?,
+                        ))
+                    },
+                )
+                .optional()
+        }
+    };
+
+    /// Clear the selected project for a user (SPEC-005).
+    ClearSelectedProject as clear_selected_project(user_id: &str => String) -> () {
+        |connection: &mut Connection| -> rusqlite::Result<()> {
+            connection
+                .execute(
+                    "DELETE FROM project_state WHERE user_id = ?1",
+                    params![user_id],
+                )
+                .map(|_| ())
+        }
+    };
+
     /// Mark a session as seen (Phase 5 inbox bookkeeping, seeded from Phase 2).
     UpsertSeen as upsert_seen(session_id: &str => String, directory: Option<&str> => Option<String>) -> () {
         |connection: &mut Connection| -> rusqlite::Result<()> {
@@ -1697,7 +1755,7 @@ fn configure_and_migrate(connection: &mut Connection) -> Result<(), StoreError> 
     Ok(())
 }
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
     connection
@@ -1731,6 +1789,9 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
     }
     if current < 5 {
         transaction.execute_batch(MIGRATION_V5)?;
+    }
+    if current < 6 {
+        transaction.execute_batch(MIGRATION_V6)?;
     }
     transaction.execute(
         "INSERT INTO schema_version (v) VALUES (?1)",
@@ -1929,6 +1990,18 @@ CREATE TABLE pending_input (
   updated_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL,
   PRIMARY KEY (surface, chat_ref)
+);
+";
+
+const MIGRATION_V6: &str = "
+CREATE TABLE IF NOT EXISTS project_state (
+  user_id TEXT NOT NULL,
+  selected_project TEXT NOT NULL,
+  selected_project_dir TEXT NOT NULL,
+  selected_plan TEXT,
+  selected_plan_path TEXT,
+  PRIMARY KEY (user_id),
+  FOREIGN KEY (user_id) REFERENCES ui_state(user_id) ON DELETE CASCADE
 );
 ";
 

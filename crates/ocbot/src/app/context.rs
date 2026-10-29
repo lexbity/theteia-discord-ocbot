@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use tokio::sync::{mpsc, watch};
 
 use ocbot_core::error::OcError as CoreOcError;
-use ocbot_core::ports::{Clock, FsPort, GitPort, OpenCodePort, PermissionRule};
+use ocbot_core::ports::{Clock, FsPort, GitPort, OpenCodePort, PermissionRule, ProjectConfigPort, ProjectPort};
 use ocbot_core::{Destination, OutgoingMessage, PostReceipt, Redactor, Surface};
 use opencode_v2_client::EventFrame;
 
@@ -191,4 +191,10 @@ pub struct AppContext {
     pub plan_heading_max: u32,
     /// Browser entries per page (P10).
     pub ls_page_size: usize,
+    /// The project port for project-centric operations (SPEC-005).
+    pub projects: Arc<dyn ProjectPort>,
+    /// The project config port for loading per-project configuration (SPEC-005).
+    pub project_config: Arc<dyn ProjectConfigPort>,
+    /// The projects root directory (SPEC-005).
+    pub projects_root: std::path::PathBuf,
 }

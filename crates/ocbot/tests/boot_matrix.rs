@@ -46,6 +46,7 @@ fn write_config(dir: &Path, opencode_url: &str, permissions_file: &str) -> PathB
         &config,
         format!(
             "opencode_url = {opencode_url:?}\n\
+             projects_root = {dir:?}\n\
              db_path = {:?}\n\
              templates_dir = {templates:?}\n\
              metrics_bind = \"127.0.0.1:19964\"\n\
@@ -111,7 +112,7 @@ fn a_bad_config_exits_one() {
     let config = dir.path().join("config.toml");
     std::fs::write(
         &config,
-        "opencode_url = \"http://127.0.0.1:9\"\n[discord]\nallowed_user_id = 42\nsurprise_key = true\n",
+        "opencode_url = \"http://127.0.0.1:9\"\nprojects_root = \"/tmp\"\n[discord]\nallowed_user_id = 42\nsurprise_key = true\n",
     )
     .expect("config");
     let status = run_binary(&config, &[], UNSET);

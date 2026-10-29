@@ -23,7 +23,7 @@ use ocbot_core::render::{
 
 use crate::adapters::store::{PendingInputRow, StoreHandle};
 use crate::app::context::{AppContext, ChatPort};
-use crate::app::handlers::{ls, prompt, run};
+use crate::app::handlers::{prompt, run};
 use crate::app::interaction::ModalSpec;
 use crate::app::metrics::Metrics;
 
@@ -197,7 +197,6 @@ pub fn advance(row: &PendingInputRow, text: &str, cwd: &str) -> Advance {
     match row.flow.as_str() {
         FLOW_RUN => advance_run(&row.step, &row.draft, text),
         "prompt" => advance_named("prompt", &row.step, text, cwd),
-        "cd" => advance_named("cd", &row.step, text, cwd),
         FLOW_MODAL => advance_modal(&row.step, &row.draft, text),
         _ => Advance::Unknown,
     }
@@ -235,7 +234,7 @@ fn advance_run(step: &str, draft_json: &str, text: &str) -> Advance {
     }
 }
 
-/// The single-field named flows (`prompt`, `cd`): ask once, then submit.
+/// The single-field named flows (`prompt`): ask once, then submit.
 fn advance_named(flow: &str, step: &str, text: &str, cwd: &str) -> Advance {
     let Some(field) = step_field(flow, step) else {
         return Advance::Unknown;
@@ -250,10 +249,7 @@ fn advance_named(flow: &str, step: &str, text: &str, cwd: &str) -> Advance {
             ],
         }
     } else {
-        Advance::Submit {
-            custom_id: ls::CD_MODAL.to_owned(),
-            values: vec![(field.to_owned(), value)],
-        }
+        Advance::Unknown
     }
 }
 
@@ -580,15 +576,6 @@ mod tests {
     }
 
     #[test]
-    fn the_cd_flow_submits_the_path() {
-        let advance = advance(&row("cd", "await_path", "{}"), "/tmp/x", "");
-        assert_eq!(
-            advance.submit(),
-            Some(("v1:cd", values(&[("path", "/tmp/x")]).as_slice()))
-        );
-    }
-
-    #[test]
     fn a_modal_form_asks_only_required_fields_and_submits_in_modal_order() {
         // subject is required, body is not: a text form asks one question, and
         // the submit still carries both fields in the modal's own order — which
@@ -734,7 +721,6 @@ mod tests {
             advance(&row("mystery", "await_path", "{}"), "x", ""),
             Advance::Unknown
         );
-        assert_eq!(advance(&row("cd", "nope", "{}"), "x", ""), Advance::Unknown);
         assert_eq!(advance_run("nope", "{}", "x"), Advance::Unknown);
     }
 

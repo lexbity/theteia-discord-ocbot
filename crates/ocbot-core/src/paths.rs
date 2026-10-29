@@ -161,9 +161,50 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     )
 }
 
+/// Derive an opaque project name from a directory path.
+///
+/// Rule: Use the last 2 **normal** path components (per SPEC-005 Q4).
+/// Non-normal components (`RootDir`, `Prefix`, `CurDir`, `ParentDir`) are skipped.
+///
+/// # Examples
+///
+/// - `/home/lex/project-alpha` → `lex/project-alpha`
+/// - `/project` → `project` (fallback to last 1 if only 1 normal component)
+/// - `/home/lex` → `home/lex`
+/// - `/` → `unknown`
+/// - `./project` → `project`
+/// - `C:\Users\lex\project` → `lex\project` (Windows)
+pub fn project_display_name(dir: &Path) -> String {
+    // Collect only Normal components as OsStr references
+    let normal_components: Vec<_> = dir
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(name) => Some(name),
+            _ => None,
+        })
+        .collect();
+
+    match normal_components.len() {
+        0 => "unknown".to_owned(),
+        1 => normal_components[0].to_string_lossy().into_owned(),
+        _ => {
+            // SAFETY: We have at least 2 components due to the match guard
+            let last = normal_components[normal_components.len() - 1].to_string_lossy();
+            let second_last = normal_components[normal_components.len() - 2].to_string_lossy();
+            // Use the OS-specific separator
+            format!(
+                "{}{}{}",
+                second_last,
+                std::path::MAIN_SEPARATOR,
+                last
+            )
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{SLUG_MAX, dir_hash, slug};
+    use super::{SLUG_MAX, dir_hash, project_display_name, slug};
 
     #[test]
     fn slug_is_branch_safe() {
@@ -201,5 +242,97 @@ mod tests {
         assert_eq!(a.len(), 16);
         assert_eq!(a, dir_hash("/home/lex/work"));
         assert_ne!(a, dir_hash("/home/lex/other"));
+    }
+
+    #[test]
+    fn project_display_name_uses_last_two_components() {
+        use std::path::Path;
+        // Unix-style paths
+        assert_eq!(
+            project_display_name(Path::new("/home/lex/project-alpha")),
+            "lex/project-alpha"
+        );
+        assert_eq!(
+            project_display_name(Path::new("/usr/local/bin")),
+            "local/bin"
+        );
+        assert_eq!(
+            project_display_name(Path::new("/home/user/my-project")),
+            "user/my-project"
+        );
+    }
+
+    #[test]
+    fn project_display_name_falls_back_to_last_component() {
+        use std::path::Path;
+        // Single normal component
+        assert_eq!(
+            project_display_name(Path::new("/project")),
+            "project"
+        );
+        assert_eq!(
+            project_display_name(Path::new("project")),
+            "project"
+        );
+    }
+
+    #[test]
+    fn project_display_name_handles_root() {
+        use std::path::Path;
+        // Root directory has no normal components
+        assert_eq!(project_display_name(Path::new("/")), "unknown");
+    }
+
+    #[test]
+    fn project_display_name_handles_single_segment_paths() {
+        use std::path::Path;
+        // Relative paths with CurDir
+        assert_eq!(
+            project_display_name(Path::new("project-alpha")),
+            "project-alpha"
+        );
+        assert_eq!(
+            project_display_name(Path::new("./project")),
+            "project"
+        );
+    }
+
+    #[test]
+    fn project_display_name_handles_windows_paths() {
+        use std::path::Path;
+        // On Unix, backslashes in paths are treated as part of the filename,
+        // so "C:\\Users\\lex\\project" is a single component "C:\Users\lex\project"
+        // This test verifies behavior on the current platform
+        if cfg!(windows) {
+            assert_eq!(
+                project_display_name(Path::new("C:\\Users\\lex\\project")),
+                "lex\\project"
+            );
+        } else {
+            // On Unix, the entire string is one normal component
+            assert_eq!(
+                project_display_name(Path::new("C:\\Users\\lex\\project")),
+                "C:\\Users\\lex\\project"
+            );
+        }
+    }
+
+    #[test]
+    fn project_display_name_handles_nested_paths() {
+        use std::path::Path;
+        assert_eq!(
+            project_display_name(Path::new("/a/b/c/d")),
+            "c/d"
+        );
+    }
+
+    #[test]
+    fn project_display_name_handles_trailing_slash() {
+        use std::path::Path;
+        // Trailing slash should not affect normal components
+        assert_eq!(
+            project_display_name(Path::new("/home/lex/project/")),
+            "lex/project"
+        );
     }
 }

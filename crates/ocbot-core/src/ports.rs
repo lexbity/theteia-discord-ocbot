@@ -252,3 +252,113 @@ pub trait GitPort: Send + Sync {
     /// `git reset --hard <sha>`, discarding tracked/index changes (P7).
     async fn reset_hard(&self, directory: &Path, sha: &str) -> Result<(), GitError>;
 }
+
+/// Information about a project (opaque to user, SPEC-005).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectInfo {
+    /// Opaque display name derived from directory path (e.g., "lex/project-alpha").
+    pub name: String,
+    /// Full directory path (internal only, never exposed to user).
+    pub dir: std::path::PathBuf,
+}
+
+/// Detailed project metadata (SPEC-005).
+#[derive(Debug, Clone)]
+pub struct ProjectDetails {
+    /// Opaque project name.
+    pub name: String,
+    /// First 5 lines of README (if exists).
+    pub readme_preview: Option<String>,
+    /// Available plans in this project.
+    pub plans: Vec<PlanInfo>,
+}
+
+/// Information about a plan (SPEC-005).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanInfo {
+    /// Plan filename only (e.g., "spec-auth.md").
+    pub name: String,
+    /// Full path to plan file (internal only).
+    pub path: std::path::PathBuf,
+}
+
+/// Default plan directories for project configuration.
+pub fn default_plans_dirs() -> Vec<String> {
+    vec!["devdocs/plans".to_owned()]
+}
+
+/// Default README filename for project configuration.
+pub fn default_readme_file() -> String {
+    "README.md".to_owned()
+}
+
+/// Default README filenames to search for (in order).
+pub fn default_readme_files() -> Vec<String> {
+    vec!["README.md".to_owned(), "README.txt".to_owned(), "README".to_owned()]
+}
+
+/// Per-project configuration loaded from `ocbot.toml` (SPEC-005 Q5).
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ProjectConfig {
+    /// Multiple plan directories to search (in order).
+    #[serde(default = "default_plans_dirs")]
+    pub plans_dirs: Vec<String>,
+    /// README filename to look for.
+    #[serde(default = "default_readme_file")]
+    pub readme_file: String,
+}
+
+impl Default for ProjectConfig {
+    fn default() -> Self {
+        Self {
+            plans_dirs: default_plans_dirs(),
+            readme_file: default_readme_file(),
+        }
+    }
+}
+
+/// Port for project scanning and metadata retrieval (SPEC-005).
+pub trait ProjectPort: Send + Sync {
+    /// List all projects under the configured projects root.
+    fn list_projects(&self) -> Result<Vec<ProjectInfo>, crate::error::ProjectError>;
+
+    /// Get project metadata (README preview, available plans).
+    fn get_project_info(
+        &self,
+        project_name: &str,
+    ) -> Result<ProjectDetails, crate::error::ProjectError>;
+
+    /// Get full README content for a project.
+    fn get_readme(
+        &self,
+        project_name: &str,
+    ) -> Result<Option<String>, crate::error::ProjectError>;
+
+    /// Get the content of a specific plan file.
+    fn get_plan_content(
+        &self,
+        project_name: &str,
+        plan_name: &str,
+    ) -> Result<String, crate::error::ProjectError>;
+
+    /// Get the full directory path for a project (internal use only).
+    fn get_project_dir(&self, project_name: &str) -> Result<std::path::PathBuf, crate::error::ProjectError>;
+
+    /// Get the full path for a plan file (internal use only).
+    fn get_plan_path(
+        &self,
+        project_name: &str,
+        plan_name: &str,
+    ) -> Result<std::path::PathBuf, crate::error::ProjectError>;
+}
+
+/// Port for loading per-project `ocbot.toml` configuration (SPEC-005 Q5).
+pub trait ProjectConfigPort: Send + Sync {
+    /// Load `ocbot.toml` from a project directory.
+    /// Returns `None` if the file doesn't exist.
+    fn load_config(
+        &self,
+        dir: &std::path::Path,
+    ) -> Result<Option<ProjectConfig>, crate::error::ProjectConfigError>;
+}

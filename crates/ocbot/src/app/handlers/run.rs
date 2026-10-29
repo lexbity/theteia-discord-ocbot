@@ -15,7 +15,7 @@ use ocbot_core::plan::{PickOption, parse_plan};
 use ocbot_core::ports::Activity;
 use ocbot_core::render::plan_picker_message;
 use ocbot_core::templates;
-use ocbot_core::{ButtonKind, OutgoingMessage, State, component_button, staged_preview};
+use ocbot_core::{ButtonKind, OutgoingMessage, State, component_button};
 
 use crate::adapters::store::ActionRow;
 use crate::app::context::AppContext;
@@ -172,7 +172,98 @@ pub async fn execute_newrun(
         return Ok(Some("pick a plan step (or Other: type it)".to_owned()));
     }
 
-    show_preview(ctx, source, action_id, label, &prompt, "fresh").await?;
+    show_preview(ctx, source, action_id, label, &prompt, "fresh", &canonical).await?;
+    Ok(Some(
+        "staged — choose **Send as-is** or **Edit & send**".to_owned(),
+    ))
+}
+
+/// Execute a new run with pre-filled directory and plan path (SPEC-005).
+/// This is used by the project-centric interface where the user selects a
+/// project and plan from the project browser, not from modal inputs.
+pub async fn execute_newrun_with_presets(
+    ctx: &Arc<AppContext>,
+    source: &InteractionSource,
+    directory: &str,
+    plan_path: Option<&str>,
+    label_override: Option<String>,
+) -> Result<Option<String>, AppError> {
+    // Use the pre-filled label if provided, otherwise get from modal input
+    let label = label_override.unwrap_or_else(|| {
+        source.input("label").map(str::trim).unwrap_or_default().to_owned()
+    });
+    
+    if label.is_empty() {
+        return Err(AppError::Other("a label is required".to_owned()));
+    }
+
+    if directory.is_empty() {
+        return Err(AppError::Other("a directory is required".to_owned()));
+    }
+
+    // Use the pre-filled directory (already validated by project selection)
+    let canonical = ctx.fs.resolve(Path::new(directory)).await?;
+    let dir_name = canonical.to_string_lossy().into_owned();
+
+    // Use the pre-filled plan path if provided
+    let plan_path_resolved = if let Some(path) = plan_path {
+        // The plan path from project selection is already validated
+        Some(ctx.fs.resolve(Path::new(path)).await?.to_string_lossy().into_owned())
+    } else {
+        None
+    };
+
+    // Read and parse the plan *before* any DB write: a containment/read failure
+    // must leave zero side effects (FR-35).
+    let plan_options = match &plan_path_resolved {
+        Some(path) => load_plan(ctx, path).await?,
+        None => Vec::new(),
+    };
+
+    let (branch, base) = if ctx.git.is_repo(&canonical).await? {
+        (
+            ctx.git.branch(&canonical).await.ok(),
+            ctx.git.head(&canonical).await.ok(),
+        )
+    } else {
+        (None, None)
+    };
+    ctx.store
+        .upsert_project(&dir_name, branch.as_deref(), base.as_deref())
+        .await?;
+
+    let prompt = prompt_for(ctx, &canonical, &label, plan_path_resolved.as_deref(), "fresh").await?;
+    let run_id = ctx
+        .store
+        .insert_run_with_plan(&dir_name, "free", plan_path_resolved.as_deref())
+        .await?;
+    let chat_ref = source.destination.chat_ref.0.clone();
+    let action_id = ctx
+        .store
+        .insert_action(run_id, Some(&chat_ref), &label, &prompt, 1)
+        .await?;
+    ctx.store
+        .set_action_destination(action_id, source.destination.surface.as_str(), &chat_ref)
+        .await?;
+    ctx.store.set_ui_cwd(&source.user_id, &dir_name).await?;
+    ctx.store
+        .audit(&source.user_id, "run", Some(action_id), "staged")
+        .await?;
+
+    if plan_path_resolved.is_some() && !plan_options.is_empty() {
+        let picker = plan_picker_message(
+            &label,
+            &plan_options,
+            0,
+            action_id,
+            ocbot_core::mentionable_id(&source.user_id),
+        );
+        let receipt = ctx.chat.post(&source.destination, &picker).await?;
+        ctx.store.set_origin(action_id, &receipt.msg_id.0).await?;
+        return Ok(Some("pick a plan step (or Other: type it)".to_owned()));
+    }
+
+    show_preview(ctx, source, action_id, &label, &prompt, "fresh", &canonical).await?;
     Ok(Some(
         "staged — choose **Send as-is** or **Edit & send**".to_owned(),
     ))
@@ -188,11 +279,12 @@ pub async fn plan_pick(
 ) -> Result<Option<String>, AppError> {
     let action = load_staged(ctx, action_id).await?;
     let (dir, plan_path) = plan_context(ctx, &action).await?;
+    let dir_path = Path::new(&dir);
     let options = load_plan(ctx, &plan_path).await?;
     let option: &PickOption = options
         .get(index)
         .ok_or_else(|| AppError::Other(format!("plan item {index} is gone")))?;
-    let prompt = prompt_for(ctx, &dir, &option.label, Some(&plan_path), &action.template).await?;
+    let prompt = prompt_for(ctx, dir_path, &option.label, Some(&plan_path), &action.template).await?;
     if !ctx
         .store
         .restage_label_prompt(action_id, &option.label, &prompt)
@@ -207,6 +299,7 @@ pub async fn plan_pick(
         &option.label,
         &prompt,
         &action.template,
+        dir_path,
     )
     .await?;
     Ok(Some("step selected — review and send".to_owned()))
@@ -265,7 +358,8 @@ pub async fn execute_plan_other(
     }
     let action = load_staged(ctx, action_id).await?;
     let (dir, plan_path) = plan_context(ctx, &action).await?;
-    let prompt = prompt_for(ctx, &dir, step, Some(&plan_path), &action.template).await?;
+    let dir_path = Path::new(&dir);
+    let prompt = prompt_for(ctx, dir_path, step, Some(&plan_path), &action.template).await?;
     if !ctx
         .store
         .restage_label_prompt(action_id, step, &prompt)
@@ -273,7 +367,7 @@ pub async fn execute_plan_other(
     {
         return Err(AppError::AlreadyHandled);
     }
-    show_preview(ctx, source, action_id, step, &prompt, &action.template).await?;
+    show_preview(ctx, source, action_id, step, &prompt, &action.template, dir_path).await?;
     Ok(Some("step set — review and send".to_owned()))
 }
 
@@ -284,6 +378,8 @@ pub async fn plan_use(
     source: &InteractionSource,
 ) -> Result<Option<String>, AppError> {
     let action = load_staged(ctx, action_id).await?;
+    let dir = run_directory(ctx, action.run_id).await?;
+    let dir_path = Path::new(&dir);
     show_preview(
         ctx,
         source,
@@ -291,6 +387,7 @@ pub async fn plan_use(
         &action.label,
         &action.prompt_sent,
         &action.template,
+        dir_path,
     )
     .await?;
     Ok(Some("staged — choose Send as-is or Edit & send".to_owned()))
@@ -310,9 +407,10 @@ pub async fn toggle_template(
         "resume"
     };
     let dir = run_directory(ctx, action.run_id).await?;
+    let dir_path = Path::new(&dir);
     let run = ctx.store.run(action.run_id).await?;
     let plan_path = run.and_then(|run| run.plan_path);
-    let prompt = prompt_for(ctx, &dir, &action.label, plan_path.as_deref(), next).await?;
+    let prompt = prompt_for(ctx, dir_path, &action.label, plan_path.as_deref(), next).await?;
     if !ctx
         .store
         .set_template_prompt(action_id, next, &prompt)
@@ -320,7 +418,7 @@ pub async fn toggle_template(
     {
         return Err(AppError::AlreadyHandled);
     }
-    show_preview(ctx, source, action_id, &action.label, &prompt, next).await?;
+    show_preview(ctx, source, action_id, &action.label, &prompt, next, dir_path).await?;
     Ok(Some(format!("template: {next}")))
 }
 
@@ -555,6 +653,7 @@ async fn load_plan(ctx: &Arc<AppContext>, plan_path: &str) -> Result<Vec<PickOpt
 }
 
 /// Post (or edit in place) the staged preview and remember its origin.
+/// For project-centric runs, this uses the project name in the preview.
 async fn show_preview(
     ctx: &Arc<AppContext>,
     source: &InteractionSource,
@@ -562,14 +661,34 @@ async fn show_preview(
     label: &str,
     prompt: &str,
     template: &str,
+    directory: &Path,
 ) -> Result<(), AppError> {
-    let preview = staged_preview(
-        label,
-        prompt,
-        action_id,
-        ocbot_core::mentionable_id(&source.user_id),
-        template,
-    );
+    // Check if this directory is under projects_root (SPEC-005)
+    let is_project_run = directory.starts_with(&ctx.projects_root);
+    
+    let preview = if is_project_run {
+        // Project-centric preview: don't show prompt, show project name
+        let project_name = ocbot_core::paths::project_display_name(directory);
+        ocbot_core::render::projects::staged_preview_project(
+            label,
+            prompt,
+            action_id,
+            ocbot_core::mentionable_id(&source.user_id),
+            template,
+            &project_name,
+        )
+    } else {
+        // Legacy preview: show prompt in code block
+        ocbot_core::render::staged_preview(
+            label,
+            prompt,
+            action_id,
+            ocbot_core::mentionable_id(&source.user_id),
+            template,
+            None,
+        )
+    };
+    
     if let Some(receipt) = source.receipt() {
         ctx.chat.edit(&receipt, &preview).await;
     } else {

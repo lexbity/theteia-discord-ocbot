@@ -235,6 +235,7 @@ pub async fn resume(
         child,
         ocbot_core::mentionable_id(operator),
         &action.template,
+        None,
     );
     ctx.chat.post(&dest, &preview).await?;
     checkpoint("CP-P4");

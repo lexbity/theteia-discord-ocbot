@@ -43,7 +43,7 @@ pub use plan::{
 };
 pub use ports::HookFailure;
 pub use render::{
-    AttachmentSpec, ButtonKind, ComponentSpec, DISCORD_MESSAGE_CAP, FLOW_CD, FLOW_MODAL,
+    AttachmentSpec, ButtonKind, ComponentSpec, DISCORD_MESSAGE_CAP, FLOW_MODAL,
     FLOW_NAMES, FLOW_PROMPT, FLOW_RUN, FLOW_TTL_SECS, Footer, HISTORY_PAGE_SIZE, LABEL_MAX_CHARS,
     LS_PAGE_SIZE, Legend, LegendEntry, LsEntry, OutgoingMessage, REDACTED, RUN_STEPS, RedactError,
     Redactor, ReportContext, ReportExcerpt, SUPPRESSED_ATTACHMENT_HINT, SurfacePolicy,

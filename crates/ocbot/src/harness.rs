@@ -85,6 +85,14 @@ pub async fn run_from_env() -> Result<(), String> {
         plan_heading_min: ocbot_core::DEFAULT_HEADING_MIN,
         plan_heading_max: ocbot_core::DEFAULT_HEADING_MAX,
         ls_page_size: ocbot_core::LS_PAGE_SIZE,
+        projects: Arc::new(crate::adapters::projects::FsProjectAdapter::new(
+            std::path::PathBuf::from("/tmp/projects"),
+            ocbot_core::ports::default_plans_dirs(),
+            ocbot_core::ports::default_readme_files(),
+            Arc::new(crate::adapters::projects::TomlProjectConfigAdapter),
+        )),
+        project_config: Arc::new(crate::adapters::projects::TomlProjectConfigAdapter),
+        projects_root: std::path::PathBuf::from("/tmp/projects"),
     });
 
     match mode.as_str() {

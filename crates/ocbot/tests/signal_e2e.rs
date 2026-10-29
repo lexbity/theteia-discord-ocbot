@@ -412,27 +412,6 @@ async fn edit_rewrites_then_sends() {
 }
 
 #[tokio::test]
-async fn cd_and_ls_browse_directories() {
-    let surface = SignalSurface::new(Script::default(), None, Arc::new(FakeGit::inert())).await;
-    let dir = surface.tmp.path().to_string_lossy().into_owned();
-    surface.set_cwd(&dir).await;
-    surface.send(OPERATOR, "ls");
-    surface.wait_sent(&dir).await;
-    surface.send(OPERATOR, &format!("cd {dir}"));
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    assert!(
-        surface
-            .sent()
-            .iter()
-            .filter(|text| text.contains(&dir))
-            .count()
-            >= 2,
-        "both browses posted: {:?}",
-        surface.sent()
-    );
-}
-
-#[tokio::test]
 async fn history_paging_reaches_the_component() {
     let surface = SignalSurface::new(Script::default(), None, Arc::new(FakeGit::inert())).await;
     let dir = surface.tmp.path().to_string_lossy().into_owned();

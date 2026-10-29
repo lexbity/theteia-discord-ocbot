@@ -49,8 +49,10 @@ fn every_message_type_carries_operator_only_mentions() {
             &Footer::default(),
             &report_context(1, true),
             &Redactor::default(),
+            None,
+            None,
         ),
-        staged_preview("label", "prompt text", 3, OPERATOR, "fresh"),
+        staged_preview("label", "prompt text", 3, OPERATOR, "fresh", None),
         OutgoingMessage {
             content: "status".to_owned(),
             attachment: None,
@@ -139,6 +141,8 @@ fn report_footer_is_inline_and_stays_under_cap() {
         &footer,
         &report_context(2, true),
         &Redactor::default(),
+        None,
+        None,
     );
     assert!(message.content.len() <= 2_000);
     assert!(message.content.contains("Duration 1m 30s"));

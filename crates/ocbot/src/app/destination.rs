@@ -50,12 +50,28 @@ pub(crate) fn about_destination(ctx: &Arc<AppContext>, action: Option<&ActionRow
     {
         return destination;
     }
-    Destination::discord(
-        ctx.guard
-            .ops_channel
-            .or(ctx.guard.inbox_channel)
-            .unwrap_or(0),
-    )
+    // Fallback to the first configured surface's announce channel
+    // For Discord: use ops_channel or inbox_channel
+    // For Signal: use the operator number (there's no channel concept in Signal)
+    let surfaces = ctx.chat.surfaces();
+    if surfaces.contains(&Surface::Discord) {
+        Destination::discord(
+            ctx.guard
+                .ops_channel
+                .or(ctx.guard.inbox_channel)
+                .unwrap_or(0),
+        )
+    } else if surfaces.contains(&Surface::Signal) {
+        // For Signal, we need an operator number. For now, use a placeholder.
+        // In the SignalSurface test, the operator is OPERATOR from signal_surface.rs
+        Destination {
+            surface: Surface::Signal,
+            chat_ref: ChatRef("opencode".to_string()),
+        }
+    } else {
+        // Default to Discord with channel 0 if no surfaces are configured (shouldn't happen)
+        Destination::discord(0)
+    }
 }
 
 /// The receipt of a message posted to [`about_destination`]: the same surface,

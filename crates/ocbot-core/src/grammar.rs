@@ -74,20 +74,6 @@ pub enum Intent {
     Release,
     /// `mute`.
     Mute,
-    /// `ls [path] [page]`: browse (a path opens that directory, a page applies
-    /// only with a path or to the remembered cwd).
-    Ls {
-        /// The directory to browse, when given.
-        path: Option<String>,
-        /// The page to render, when given.
-        page: Option<usize>,
-    },
-    /// `cd <path>`: open the browser at a directory (a pending input when the
-    /// path is omitted).
-    Cd {
-        /// The directory, when given on the command line.
-        path: Option<String>,
-    },
     /// `history [page]`.
     History {
         /// The page to render, when given.
@@ -143,8 +129,6 @@ impl Intent {
             Intent::Abort => "abort",
             Intent::Release => "release",
             Intent::Mute => "mute",
-            Intent::Ls { .. } => "ls",
-            Intent::Cd { .. } => "cd",
             Intent::History { .. } => "history",
             Intent::Reset => "reset",
             Intent::ResetGo { .. } => "resetgo",
@@ -221,10 +205,6 @@ pub fn parse(input: &str) -> Result<Intent, GrammarError> {
         "abort" => Ok(Intent::Abort),
         "release" => Ok(Intent::Release),
         "mute" => Ok(Intent::Mute),
-        "ls" => Ok(parse_ls(rest)),
-        "cd" => Ok(Intent::Cd {
-            path: non_empty(rest).map(str::to_owned),
-        }),
         "history" => Ok(Intent::History {
             page: parse_optional_page(rest)?,
         }),
@@ -293,37 +273,7 @@ fn parse_run(rest: &str) -> Result<Intent, GrammarError> {
 }
 
 /// `ls [path] [page]`: at most two tokens; a trailing number is the page.
-fn parse_ls(rest: &str) -> Intent {
-    let tokens: Vec<&str> = rest.split_whitespace().collect();
-    match tokens.as_slice() {
-        [] => Intent::Ls {
-            path: None,
-            page: None,
-        },
-        [only] => Intent::Ls {
-            path: Some((*only).to_owned()),
-            page: None,
-        },
-        [path, maybe_page] => Intent::Ls {
-            path: Some((*path).to_owned()),
-            page: maybe_page.parse::<usize>().ok(),
-        },
-        _ => {
-            // More than two tokens: the page must be the last one (a path with
-            // spaces is not addressable here; the operator can `cd` first).
-            match tokens.split_last() {
-                Some((last, head)) => Intent::Ls {
-                    path: Some(head.join(" ")),
-                    page: last.parse::<usize>().ok(),
-                },
-                None => Intent::Ls {
-                    path: None,
-                    page: None,
-                },
-            }
-        }
-    }
-}
+
 
 /// `gate <label> <option>`: the option is the last token, the label the rest
 /// (so a label containing spaces still resolves).
@@ -441,31 +391,6 @@ mod tests {
             Intent::Run {
                 path: None,
                 prompt: None
-            }
-        );
-    }
-
-    #[test]
-    fn ls_reads_an_optional_path_and_page() {
-        assert_eq!(
-            parse("ls").unwrap(),
-            Intent::Ls {
-                path: None,
-                page: None
-            }
-        );
-        assert_eq!(
-            parse("ls /var/log").unwrap(),
-            Intent::Ls {
-                path: Some("/var/log".to_owned()),
-                page: None
-            }
-        );
-        assert_eq!(
-            parse("ls /var/log 2").unwrap(),
-            Intent::Ls {
-                path: Some("/var/log".to_owned()),
-                page: Some(2)
             }
         );
     }

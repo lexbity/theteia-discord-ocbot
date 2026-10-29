@@ -81,3 +81,37 @@ pub enum GitError {
         kind: &'static str,
     },
 }
+
+/// A failure in project operations (SPEC-005).
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+pub enum ProjectError {
+    /// The projects root is not configured.
+    #[error("projects root not configured")]
+    NotConfigured,
+    /// The project was not found.
+    #[error("project not found: {0}")]
+    NotFound(String),
+    /// No projects exist in the configured root.
+    #[error("no projects found in {0}")]
+    NoProjects(String),
+    /// No plans exist in the project.
+    #[error("no plans found in project: {0}")]
+    NoPlans(String),
+    /// Failed to read a directory.
+    #[error("failed to read directory {0}: {1}")]
+    IoError(String, String),
+    /// Failed to read a file.
+    #[error("failed to read file {0}: {1}")]
+    ReadError(String, String),
+}
+
+/// A failure loading per-project configuration.
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+pub enum ProjectConfigError {
+    /// Invalid TOML syntax in the config file.
+    #[error("invalid TOML in {0}: {1}")]
+    ParseError(String, String),
+    /// Failed to read the config file.
+    #[error("failed to read config {0}: {1}")]
+    IoError(String, String),
+}

@@ -1,11 +1,14 @@
 //! Port adapters: the opencode client, git (argv-only), SQLite, the clock,
 //! serenity, and the signal-cli JSON-RPC surface (SPEC-004 PH-3).
+//!
+//! Project adapters (SPEC-005) for project-centric remote control.
 
 pub mod clock;
 pub mod discord;
 pub mod fs;
 pub mod git;
 pub mod opencode;
+pub mod projects;
 pub mod signal;
 pub mod store;
 

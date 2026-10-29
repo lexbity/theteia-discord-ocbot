@@ -14,7 +14,7 @@ use proptest::prelude::*;
 
 /// The canonical verbs the grammar recognizes.
 const VERBS: &[&str] = &[
-    "run", "prompt", "status", "abort", "release", "mute", "ls", "cd", "history", "reset",
+    "run", "prompt", "status", "abort", "release", "mute", "history", "reset",
     "resetgo", "send", "edit", "pick", "accept", "park", "follow", "discard", "gate", "help",
 ];
 

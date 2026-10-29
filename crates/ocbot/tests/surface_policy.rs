@@ -82,7 +82,7 @@ fn pure_matrix_full_excerpt_off_by_attachments() {
 #[test]
 fn discord_defaults_excerpt_and_no_attachments_signal_defaults_full_and_yes() {
     let config = Config::parse(
-        "opencode_url = \"http://127.0.0.1:8080\"\n[discord]\nallowed_user_id = 42\n[signal]\nsocket = \"/run/signal-cli/socket\"\noperator_number = \"+15551234567\"\n",
+        "opencode_url = \"http://127.0.0.1:8080\"\nprojects_root = \"/tmp\"\n[discord]\nallowed_user_id = 42\n[signal]\nsocket = \"/run/signal-cli/socket\"\noperator_number = \"+15551234567\"\n",
     )
     .unwrap();
     assert_eq!(
@@ -95,7 +95,7 @@ fn discord_defaults_excerpt_and_no_attachments_signal_defaults_full_and_yes() {
 #[test]
 fn the_discord_opt_back_in_restores_attachments() {
     let config = Config::parse(
-        "opencode_url = \"http://127.0.0.1:8080\"\n[discord]\nallowed_user_id = 42\nreport_attachments = true\n",
+        "opencode_url = \"http://127.0.0.1:8080\"\nprojects_root = \"/tmp\"\n[discord]\nallowed_user_id = 42\nreport_attachments = true\n",
     )
     .unwrap();
     assert_eq!(

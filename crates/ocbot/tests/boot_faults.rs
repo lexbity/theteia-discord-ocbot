@@ -39,6 +39,7 @@ fn shipped_baseline() -> String {
 fn config_text(dir: &Path, opencode_url: &str, browse_roots: &str, ruleset: &str) -> String {
     format!(
         "opencode_url = {opencode_url:?}\n\
+         projects_root = {:?}\n\
          db_path = {:?}\n\
          templates_dir = {:?}\n\
          metrics_bind = \"127.0.0.1:0\"\n\
@@ -48,6 +49,7 @@ fn config_text(dir: &Path, opencode_url: &str, browse_roots: &str, ruleset: &str
          {ruleset}\n\
          [discord]\n\
          allowed_user_id = 42\n",
+        dir.to_string_lossy(),
         dir.join("ocbot.db").to_string_lossy(),
         templates_dir(),
         shipped_baseline(),

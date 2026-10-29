@@ -219,23 +219,66 @@ pub fn decision_buttons(outcome: &Outcome, context: &ReportContext) -> Vec<Compo
 /// text, so scrubbing first is what makes the byte accounting exact — and the
 /// appended notes ([`report_tail`]) are part of the budget, not an
 /// afterthought. Assembled `content` can never exceed the cap (P10).
+///
+/// For project-centric runs (SPEC-005), the project and plan names are displayed
+/// prominently, and the diff stat is omitted (contains filesystem paths).
 pub fn report(
     label: &str,
     outcome: &Outcome,
     footer: &Footer,
     context: &ReportContext,
     redactor: &Redactor,
+    project: Option<&str>,
+    plan: Option<&str>,
 ) -> OutgoingMessage {
     let label = truncate_chars(&collapse_whitespace(label), LABEL_MAX_CHARS);
     let head = headline(outcome, &redactor.scrub(&label));
-    // `Footer::render` is single-line and self-clamped; scrub it too — the
-    // diff-stat summary carries repo file paths (R-12 inline discipline).
-    let footer_line = redactor.scrub(&footer.render());
+    
+    // For project-centric runs, create a footer without diff stat (SPEC-005)
+    // The diff stat contains filesystem paths which should be hidden
+    let footer_line = if project.is_some() || plan.is_some() {
+        // Use stats only (NO diff stat with paths)
+        let duration = footer.duration();
+        let tokens = footer.tokens();
+        let cost = footer.cost();
+        let parts: Vec<&str> = vec![
+            duration.as_deref(),
+            tokens.as_deref(),
+            cost.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let joined = if parts.is_empty() {
+            "Duration n/a".to_owned()
+        } else {
+            parts.join(" · ")
+        };
+        redactor.scrub(&truncate_chars(&joined, FOOTER_MAX_CHARS))
+    } else {
+        // `Footer::render` is single-line and self-clamped; scrub it too — the
+        // diff-stat summary carries repo file paths (R-12 inline discipline).
+        redactor.scrub(&footer.render())
+    };
     let tail = report_tail(context);
+    
+    // Build the content with project/plan info (SPEC-005)
+    let mut message_text = String::new();
+    if let (Some(project), Some(plan)) = (project, plan) {
+        message_text.push_str(&format!("**Project: {}**\n**Plan: {}**\n\n", project, plan));
+    } else if let Some(project) = project {
+        message_text.push_str(&format!("**Project: {}**\n\n", project));
+    }
+    
+    message_text.push_str(&head);
+    message_text.push_str("\n```\n");
     let (excerpt, truncated) =
-        report_excerpt(&report_body(outcome), &head, &footer_line, &tail, redactor);
-    let mut message_text = format!("{head}\n```\n{excerpt}\n```\n{footer_line}");
+        report_excerpt(&report_body(outcome), &message_text, &footer_line, &tail, redactor);
+    message_text.push_str(&excerpt);
+    message_text.push_str("\n```\n");
+    message_text.push_str(&footer_line);
     message_text.push_str(&tail);
+    
     let attachment = if truncated {
         let full = report_body(outcome);
         Some(AttachmentSpec {
@@ -319,55 +362,84 @@ pub fn staged_preview(
     action_id: i64,
     operator_id: u64,
     template: &str,
+    project_name: Option<&str>,
 ) -> OutgoingMessage {
     let label = truncate_chars(&collapse_whitespace(label), LABEL_MAX_CHARS);
-    let head = format!("**Ready to run: {label}**\n_template: {template}_");
-    let fixed = head.len() + "```\n".len() * 2 + 2;
-    let neutralized = fence_neutralize(prompt);
-    let capacity = DISCORD_MESSAGE_CAP.saturating_sub(fixed);
-    let (block, truncated) = split_excerpt(&neutralized, capacity);
-    let can_mark = truncated && capacity > PREVIEW_CLAMPED.len() + 1;
-    let block = if can_mark {
-        // Re-split with the note's bytes reserved so the note itself cannot
-        // push the message past the cap (the clamped label bounds `fixed`,
-        // so the guard is belt rather than a reachable branch).
-        let (clamped, _) = split_excerpt(
-            &neutralized,
-            capacity.saturating_sub(PREVIEW_CLAMPED.len() + 1),
-        );
-        clamped
-    } else {
-        block
-    };
-    let mut content = format!("{head}\n```\n{block}\n```");
-    if can_mark {
-        content.push_str(PREVIEW_CLAMPED);
-    }
     let toggle_label = if template == "resume" {
         "Use fresh template"
     } else {
         "Use resume template"
     };
-    OutgoingMessage {
-        content,
-        attachment: None,
-        components: vec![
-            component_button(
-                "Send as-is",
-                format!("v1:send:{action_id}"),
-                ButtonKind::Primary,
-            ),
-            component_button(
-                "Edit & send",
-                format!("v1:edit:{action_id}"),
-                ButtonKind::Secondary,
-            ),
-            component_button(
-                toggle_label,
-                format!("v1:tpl:{action_id}"),
-                ButtonKind::Secondary,
-            ),
-        ],
-        mention_allowlist: vec![operator_id],
+    
+    if let Some(project) = project_name {
+        // SPEC-005: Project-centric preview - don't show prompt, show project name
+        let content = format!(
+            "**Ready to run: {label}**\n_Project: {project}_\n_Template: {template}_"
+        );
+        OutgoingMessage {
+            content,
+            attachment: None,
+            components: vec![
+                component_button(
+                    "Send as-is",
+                    format!("v1:send:{action_id}"),
+                    ButtonKind::Primary,
+                ),
+                component_button(
+                    "Edit & send",
+                    format!("v1:edit:{action_id}"),
+                    ButtonKind::Secondary,
+                ),
+                component_button(
+                    toggle_label,
+                    format!("v1:tpl:{action_id}"),
+                    ButtonKind::Secondary,
+                ),
+            ],
+            mention_allowlist: vec![operator_id],
+        }
+    } else {
+        // Legacy preview - show prompt
+        let head = format!("**Ready to run: {label}**\n_template: {template}_");
+        let fixed = head.len() + "```\n".len() * 2 + 2;
+        let neutralized = fence_neutralize(prompt);
+        let capacity = DISCORD_MESSAGE_CAP.saturating_sub(fixed);
+        let (block, truncated) = split_excerpt(&neutralized, capacity);
+        let can_mark = truncated && capacity > PREVIEW_CLAMPED.len() + 1;
+        let block = if can_mark {
+            let (clamped, _) = split_excerpt(
+                &neutralized,
+                capacity.saturating_sub(PREVIEW_CLAMPED.len() + 1),
+            );
+            clamped
+        } else {
+            block
+        };
+        let mut content = format!("{head}\n```\n{block}\n```");
+        if can_mark {
+            content.push_str(PREVIEW_CLAMPED);
+        }
+        OutgoingMessage {
+            content,
+            attachment: None,
+            components: vec![
+                component_button(
+                    "Send as-is",
+                    format!("v1:send:{action_id}"),
+                    ButtonKind::Primary,
+                ),
+                component_button(
+                    "Edit & send",
+                    format!("v1:edit:{action_id}"),
+                    ButtonKind::Secondary,
+                ),
+                component_button(
+                    toggle_label,
+                    format!("v1:tpl:{action_id}"),
+                    ButtonKind::Secondary,
+                ),
+            ],
+            mention_allowlist: vec![operator_id],
+        }
     }
 }

@@ -59,10 +59,10 @@ async fn plan(ctx: &Arc<AppContext>, source: &InteractionSource) -> Result<AckPl
             "prompt" => Ok(AckPlan::Modal(
                 handlers::prompt::prompt_modal(ctx, source).await?,
             )),
-            "ls" | "status" | "history" | "reset" | "release" | "abort" | "mute" => {
+            "status" | "history" | "reset" | "release" | "abort" | "mute" => {
                 Ok(AckPlan::DeferPublic)
             }
-            "cd" => Ok(AckPlan::Modal(handlers::ls::cd_modal(ctx, source).await?)),
+            "projects" => Ok(AckPlan::DeferPublic),
             other => Err(AppError::UnknownCommand(other.to_owned())),
         },
         SourceKind::Component { custom_id } => {
@@ -149,7 +149,6 @@ async fn plan(ctx: &Arc<AppContext>, source: &InteractionSource) -> Result<AckPl
 const EXACT_MODALS: &[&str] = &[
     handlers::run::NEW_RUN_MODAL,
     handlers::prompt::PROMPT_MODAL,
-    handlers::ls::CD_MODAL,
 ];
 
 /// The modal `custom_id` prefixes the plan phase acknowledges as an update:
@@ -206,8 +205,11 @@ const DEFERRED_PREFIXES: &[&str] = &[
     "v1:planp:",
     "v1:planuse:",
     "v1:tpl:",
-    "v1:ls:",
-    "v1:lssel:",
+    "v1:project_select:",
+    "v1:readme_full:",
+    "v1:plan_select:",
+    "v1:load_plan:",
+    "v1:run_noplan:",
 ];
 
 /// Custom ids whose plan is a plain deferral (all work is in the execute pass).
@@ -254,8 +256,8 @@ pub async fn execute(
                 handlers::mute::execute(ctx, source).await?;
                 Ok(None)
             }
-            "ls" => {
-                handlers::ls::execute_ls(ctx, source).await?;
+            "projects" => {
+                handlers::projects::list_projects(ctx, source).await?;
                 Ok(None)
             }
             other => Err(AppError::UnknownCommand(other.to_owned())),
@@ -307,13 +309,28 @@ pub async fn execute(
                 handlers::run::plan_use(ctx, parse_action_id(id)?, source).await
             } else if let Some(id) = custom_id.strip_prefix("v1:tpl:") {
                 handlers::run::toggle_template(ctx, parse_action_id(id)?, source).await
-            } else if let Some(rest) = custom_id.strip_prefix("v1:ls:") {
-                handlers::ls::component(ctx, source, rest).await
-            } else if let Some(index) = custom_id.strip_prefix("v1:lssel:") {
-                handlers::ls::select(ctx, source, parse_index(index)?).await
             } else if custom_id.starts_with("v1:planother:") {
                 // A Component `v1:planother` plans a modal and never executes.
                 Err(AppError::AlreadyHandled)
+            } else if custom_id == "v1:projects" {
+                handlers::projects::list_projects(ctx, source).await?;
+                Ok(None)
+            } else if let Some(project) = custom_id.strip_prefix("v1:project_select:") {
+                handlers::projects::select_project(ctx, project, source).await?;
+                Ok(None)
+            } else if let Some(rest) = custom_id.strip_prefix("v1:readme_full:") {
+                let project = parse_project_name(rest)?;
+                handlers::projects::show_full_readme(ctx, &project, source).await?;
+                Ok(None)
+            } else if let Some(rest) = custom_id.strip_prefix("v1:plan_select:") {
+                let (project, plan) = parse_project_and_plan(rest)?;
+                handlers::projects::select_plan(ctx, &project, &plan, source).await?;
+                Ok(None)
+            } else if let Some(rest) = custom_id.strip_prefix("v1:load_plan:") {
+                let (project, plan) = parse_project_and_plan(rest)?;
+                handlers::projects::load_plan_and_run(ctx, &project, &plan, source).await
+            } else if let Some(project) = custom_id.strip_prefix("v1:run_noplan:") {
+                handlers::projects::run_without_plan(ctx, project, source).await
             } else {
                 Err(AppError::UnknownCustomId(custom_id.to_owned()))
             }
@@ -323,8 +340,6 @@ pub async fn execute(
                 handlers::run::execute_newrun(ctx, source).await
             } else if custom_id == handlers::prompt::PROMPT_MODAL {
                 handlers::prompt::execute_prompt(ctx, source).await
-            } else if custom_id == handlers::ls::CD_MODAL {
-                handlers::ls::execute_cd(ctx, source).await
             } else if let Some(id) = custom_id.strip_prefix(handlers::run::PLAN_OTHER_MODAL) {
                 handlers::run::execute_plan_other(ctx, parse_action_id(id)?, source).await
             } else if let Some(id) = custom_id.strip_prefix("v1:editgo:") {
@@ -370,7 +385,7 @@ fn parse_page(raw: &str) -> Result<usize, AppError> {
         .map_err(|_| AppError::UnknownCustomId(format!("bad page {raw:?}")))
 }
 
-/// Parse a bare usize index (`v1:lssel:<idx>`, `v1:ls:open:<idx>`).
+/// Parse a bare usize index.
 fn parse_index(raw: &str) -> Result<usize, AppError> {
     raw.trim()
         .parse()
@@ -404,6 +419,28 @@ fn parse_form_pick(raw: &str) -> Result<(i64, String), AppError> {
         .split_once(':')
         .ok_or_else(|| AppError::UnknownCustomId(format!("bad form pick {raw:?}")))?;
     Ok((parse_action_id(id)?, value.to_owned()))
+}
+
+/// Parse a project name from a custom_id segment (SPEC-005).
+/// The project name may contain path separators but not colons.
+fn parse_project_name(raw: &str) -> Result<String, AppError> {
+    if raw.is_empty() {
+        return Err(AppError::UnknownCustomId(format!("empty project name")));
+    }
+    // Project names are opaque and may contain path separators
+    Ok(raw.to_owned())
+}
+
+/// Parse project and plan names from a custom_id segment (SPEC-005).
+/// Format: "project_name:plan_name"
+fn parse_project_and_plan(raw: &str) -> Result<(String, String), AppError> {
+    let (project, plan) = raw
+        .split_once(':')
+        .ok_or_else(|| AppError::UnknownCustomId(format!("bad project:plan pair {raw:?}")))?;
+    if project.is_empty() || plan.is_empty() {
+        return Err(AppError::UnknownCustomId(format!("empty project or plan name in {raw:?}")));
+    }
+    Ok((project.to_owned(), plan.to_owned()))
 }
 
 /// Load an action and assert it is in one of `allowed`; a state mismatch is a

@@ -17,7 +17,7 @@ use std::sync::Arc;
 use ocbot::adapters::fs::FsAdapter;
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::context::{AppContext, ChatPort};
-use ocbot::app::handlers::{files, ls};
+use ocbot::app::handlers::files;
 use ocbot::app::interaction::{InteractionSource, SourceKind, TextInput};
 use ocbot_core::ports::{FsPort, GitPort, OpenCodePort};
 
@@ -102,80 +102,6 @@ fn modal_source(custom_id: &str, id: &str, value: &str) -> InteractionSource {
 }
 
 #[tokio::test]
-async fn symlink_swapped_between_browse_and_select_is_refused() {
-    let rig = rig();
-    std::fs::write(rig.root.join("inside.txt"), "inside").expect("inside");
-    let outside = rig.tmp.path().join("outside");
-    std::fs::create_dir_all(&outside).expect("outside");
-    std::fs::write(outside.join("secret.txt"), "secret").expect("secret");
-
-    let link = rig.root.join("link.txt");
-    std::os::unix::fs::symlink(rig.root.join("inside.txt"), &link).expect("symlink inside");
-
-    // It resolves while the link points inside the root.
-    let index = only_index(&rig, "link.txt").await;
-    let selected = ls::select(
-        &rig.ctx,
-        &button_source(&format!("v1:lssel:{index}")),
-        index,
-    )
-    .await
-    .expect("select inside");
-    assert!(selected.unwrap().contains("inside.txt"));
-    let first_draft = rig
-        .store
-        .draft_path(&format!("discord:{OPERATOR}"))
-        .await
-        .expect("draft")
-        .unwrap();
-    assert!(first_draft.ends_with("inside.txt"));
-
-    // Swap the link to escape the root; the re-check at the next use must catch
-    // it (FR-35: containment re-verified at use time, not at list time).
-    std::fs::remove_file(&link).expect("unlink");
-    std::os::unix::fs::symlink(outside.join("secret.txt"), &link).expect("symlink outside");
-    let error = ls::select(
-        &rig.ctx,
-        &button_source(&format!("v1:lssel:{index}")),
-        index,
-    )
-    .await
-    .expect_err("escape refused");
-    assert!(
-        format!("{error}").contains("outside the allowed roots"),
-        "got: {error}"
-    );
-    // The refused selection did not overwrite the draft.
-    assert_eq!(
-        rig.store
-            .draft_path(&format!("discord:{OPERATOR}"))
-            .await
-            .expect("draft"),
-        Some(first_draft)
-    );
-}
-
-#[tokio::test]
-async fn out_of_root_cd_has_zero_side_effects() {
-    let rig = rig();
-    let outside = rig.tmp.path().join("elsewhere");
-    std::fs::create_dir_all(&outside).expect("outside");
-
-    let error = ls::execute_cd(
-        &rig.ctx,
-        &modal_source("v1:cd", "path", &outside.display().to_string()),
-    )
-    .await
-    .expect_err("outside refused");
-    assert!(format!("{error}").contains("outside the allowed roots"));
-    assert!(rig.discord.posts().is_empty(), "no message posted");
-    assert!(
-        rig.store.recent_dirs(10).await.expect("dirs").is_empty(),
-        "no project created"
-    );
-}
-
-#[tokio::test]
 async fn attachments_are_sanitized_under_the_inbox() {
     let rig = rig();
     let path = files::ingest(
@@ -205,17 +131,4 @@ async fn attachments_are_sanitized_under_the_inbox() {
             .expect("draft"),
         Some(path.to_string_lossy().into_owned())
     );
-}
-
-/// The index of the only entry named `name` in the rig's root.
-async fn only_index(rig: &Rig, name: &str) -> usize {
-    let entries = rig.ctx.fs.list(&rig.root, false).await.expect("list");
-    entries
-        .iter()
-        .position(|entry| entry.name == name)
-        .unwrap_or_else(|| panic!("{name} not listed; entries: {:?}", names(&entries)))
-}
-
-fn names(entries: &[ocbot_core::ports::DirEntry]) -> Vec<&str> {
-    entries.iter().map(|entry| entry.name.as_str()).collect()
 }
