@@ -18,7 +18,6 @@ use ocbot::adapters::fs::FsAdapter;
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::context::{AppContext, ChatPort};
 use ocbot::app::handlers::files;
-use ocbot::app::interaction::{InteractionSource, SourceKind, TextInput};
 use ocbot_core::ports::{FsPort, GitPort, OpenCodePort};
 
 use common::{FakeChat, FakeClock, FakeGit, FakeOpenCode};
@@ -29,10 +28,8 @@ const CHANNEL: u64 = 7;
 struct Rig {
     ctx: Arc<AppContext>,
     store: StoreHandle,
-    discord: FakeChat,
-    root: PathBuf,
     inbox: PathBuf,
-    tmp: tempfile::TempDir,
+    _temp_dir: tempfile::TempDir,
 }
 
 fn rig() -> Rig {
@@ -47,8 +44,7 @@ fn rig() -> Rig {
     let fs: Arc<dyn FsPort> = Arc::new(
         FsAdapter::new(vec![root.clone()], inbox.clone(), false, clock.clone()).expect("fs"),
     );
-    let discord = FakeChat::new();
-    let discord_port: Arc<dyn ChatPort> = Arc::new(discord.clone());
+    let discord_port: Arc<dyn ChatPort> = Arc::new(FakeChat::new());
     let ctx = common::context_with_fs(
         store.clone(),
         opencode,
@@ -64,40 +60,8 @@ fn rig() -> Rig {
     Rig {
         ctx,
         store,
-        discord,
-        root,
         inbox,
-        tmp,
-    }
-}
-
-fn button_source(custom_id: &str) -> InteractionSource {
-    InteractionSource {
-        kind: SourceKind::Component {
-            custom_id: custom_id.to_owned(),
-        },
-        user_id: format!("discord:{OPERATOR}"),
-        destination: ocbot_core::Destination::discord(CHANNEL),
-        guild_id: Some(1),
-        message_id: Some(10),
-        is_dm: false,
-    }
-}
-
-fn modal_source(custom_id: &str, id: &str, value: &str) -> InteractionSource {
-    InteractionSource {
-        kind: SourceKind::ModalSubmit {
-            custom_id: custom_id.to_owned(),
-            values: vec![TextInput {
-                id: id.to_owned(),
-                value: value.to_owned(),
-            }],
-        },
-        user_id: format!("discord:{OPERATOR}"),
-        destination: ocbot_core::Destination::discord(CHANNEL),
-        guild_id: Some(1),
-        message_id: None,
-        is_dm: false,
+        _temp_dir: tmp,
     }
 }
 

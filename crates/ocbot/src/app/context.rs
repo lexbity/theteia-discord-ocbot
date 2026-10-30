@@ -8,7 +8,9 @@ use async_trait::async_trait;
 use tokio::sync::{mpsc, watch};
 
 use ocbot_core::error::OcError as CoreOcError;
-use ocbot_core::ports::{Clock, FsPort, GitPort, OpenCodePort, PermissionRule, ProjectConfigPort, ProjectPort};
+use ocbot_core::ports::{
+    Clock, FsPort, GitPort, OpenCodePort, PermissionRule, ProjectConfigPort, ProjectPort,
+};
 use ocbot_core::{Destination, OutgoingMessage, PostReceipt, Redactor, Surface};
 use opencode_v2_client::EventFrame;
 

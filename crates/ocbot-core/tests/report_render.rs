@@ -31,7 +31,15 @@ fn plain_report(
     footer: &Footer,
     context: &ReportContext,
 ) -> OutgoingMessage {
-    report(label, outcome, footer, context, &Redactor::default(), None, None)
+    report(
+        label,
+        outcome,
+        footer,
+        context,
+        &Redactor::default(),
+        None,
+        None,
+    )
 }
 
 #[test]
@@ -354,7 +362,14 @@ fn redaction_cannot_grow_the_message_past_the_cap() {
 #[test]
 fn staged_preview_stays_within_the_cap_and_flags_truncation() {
     // The preview embeds `{git_log}` lines of unbounded subject length.
-    let preview = staged_preview("task", &"line of prompt text\n".repeat(500), 3, 9, "fresh", None);
+    let preview = staged_preview(
+        "task",
+        &"line of prompt text\n".repeat(500),
+        3,
+        9,
+        "fresh",
+        None,
+    );
     assert!(
         preview.content.len() <= DISCORD_MESSAGE_CAP,
         "content was {} bytes",

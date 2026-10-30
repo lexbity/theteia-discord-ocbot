@@ -146,10 +146,7 @@ async fn plan(ctx: &Arc<AppContext>, source: &InteractionSource) -> Result<AckPl
 
 /// The modal `custom_id`s the plan phase acknowledges publicly: the three bare
 /// modals, with no action suffix.
-const EXACT_MODALS: &[&str] = &[
-    handlers::run::NEW_RUN_MODAL,
-    handlers::prompt::PROMPT_MODAL,
-];
+const EXACT_MODALS: &[&str] = &[handlers::run::NEW_RUN_MODAL, handlers::prompt::PROMPT_MODAL];
 
 /// The modal `custom_id` prefixes the plan phase acknowledges as an update:
 /// every modal opened from a component, carrying an action or gate rowid.
@@ -421,24 +418,26 @@ fn parse_form_pick(raw: &str) -> Result<(i64, String), AppError> {
     Ok((parse_action_id(id)?, value.to_owned()))
 }
 
-/// Parse a project name from a custom_id segment (SPEC-005).
+/// Parse a project name from a `custom_id` segment (SPEC-005).
 /// The project name may contain path separators but not colons.
 fn parse_project_name(raw: &str) -> Result<String, AppError> {
     if raw.is_empty() {
-        return Err(AppError::UnknownCustomId(format!("empty project name")));
+        return Err(AppError::UnknownCustomId("empty project name".to_owned()));
     }
     // Project names are opaque and may contain path separators
     Ok(raw.to_owned())
 }
 
-/// Parse project and plan names from a custom_id segment (SPEC-005).
-/// Format: "project_name:plan_name"
+/// Parse project and plan names from a `custom_id` segment (SPEC-005).
+/// Format: `project_name:plan_name`.
 fn parse_project_and_plan(raw: &str) -> Result<(String, String), AppError> {
     let (project, plan) = raw
         .split_once(':')
         .ok_or_else(|| AppError::UnknownCustomId(format!("bad project:plan pair {raw:?}")))?;
     if project.is_empty() || plan.is_empty() {
-        return Err(AppError::UnknownCustomId(format!("empty project or plan name in {raw:?}")));
+        return Err(AppError::UnknownCustomId(format!(
+            "empty project or plan name in {raw:?}"
+        )));
     }
     Ok((project.to_owned(), plan.to_owned()))
 }

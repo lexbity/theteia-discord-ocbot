@@ -423,18 +423,9 @@ mod tests {
 
     #[test]
     fn projects_parses_with_no_arguments() {
-        assert_eq!(
-            parse("projects").unwrap(),
-            Intent::Projects
-        );
-        assert_eq!(
-            parse("PROJECTS").unwrap(),
-            Intent::Projects
-        );
-        assert_eq!(
-            parse("  projects  ").unwrap(),
-            Intent::Projects
-        );
+        assert_eq!(parse("projects").unwrap(), Intent::Projects);
+        assert_eq!(parse("PROJECTS").unwrap(), Intent::Projects);
+        assert_eq!(parse("  projects  ").unwrap(), Intent::Projects);
     }
 
     #[test]

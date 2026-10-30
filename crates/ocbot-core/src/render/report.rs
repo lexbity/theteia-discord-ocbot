@@ -46,7 +46,7 @@ pub struct Footer {
 
 impl Footer {
     /// The single-line footer, always rendered inside the message budget: the
-    /// result is clamped to [`FOOTER_MAX_CHARS`] so the doc's "inside the
+    /// result is clamped to `FOOTER_MAX_CHARS` so the doc's "inside the
     /// budget" claim holds by construction, not by convention.
     pub fn render(&self) -> String {
         let parts = [self.duration(), self.diff(), self.tokens(), self.cost()];
@@ -217,7 +217,7 @@ pub fn decision_buttons(outcome: &Outcome, context: &ReportContext) -> Vec<Compo
 /// The invariant is total: every dynamic piece (label, body, footer) is
 /// redacted and clamped *before* the budget math — redaction can lengthen
 /// text, so scrubbing first is what makes the byte accounting exact — and the
-/// appended notes ([`report_tail`]) are part of the budget, not an
+/// appended notes (`report_tail`) are part of the budget, not an
 /// afterthought. Assembled `content` can never exceed the cap (P10).
 ///
 /// For project-centric runs (SPEC-005), the project and plan names are displayed
@@ -233,7 +233,7 @@ pub fn report(
 ) -> OutgoingMessage {
     let label = truncate_chars(&collapse_whitespace(label), LABEL_MAX_CHARS);
     let head = headline(outcome, &redactor.scrub(&label));
-    
+
     // For project-centric runs, create a footer without diff stat (SPEC-005)
     // The diff stat contains filesystem paths which should be hidden
     let footer_line = if project.is_some() || plan.is_some() {
@@ -241,14 +241,10 @@ pub fn report(
         let duration = footer.duration();
         let tokens = footer.tokens();
         let cost = footer.cost();
-        let parts: Vec<&str> = vec![
-            duration.as_deref(),
-            tokens.as_deref(),
-            cost.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
+        let parts: Vec<&str> = vec![duration.as_deref(), tokens.as_deref(), cost.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect();
         let joined = if parts.is_empty() {
             "Duration n/a".to_owned()
         } else {
@@ -261,7 +257,7 @@ pub fn report(
         redactor.scrub(&footer.render())
     };
     let tail = report_tail(context);
-    
+
     // Build the content with project/plan info (SPEC-005)
     let mut message_text = if let (Some(project), Some(plan)) = (project, plan) {
         format!("**Project: {project}**\n**Plan: {plan}**\n\n{head}")
@@ -271,13 +267,18 @@ pub fn report(
         head
     };
     message_text.push_str("\n```\n");
-    let (excerpt, truncated) =
-        report_excerpt(&report_body(outcome), &message_text, &footer_line, &tail, redactor);
+    let (excerpt, truncated) = report_excerpt(
+        &report_body(outcome),
+        &message_text,
+        &footer_line,
+        &tail,
+        redactor,
+    );
     message_text.push_str(&excerpt);
     message_text.push_str("\n```\n");
     message_text.push_str(&footer_line);
     message_text.push_str(&tail);
-    
+
     let attachment = if truncated {
         let full = report_body(outcome);
         Some(AttachmentSpec {
@@ -369,12 +370,11 @@ pub fn staged_preview(
     } else {
         "Use resume template"
     };
-    
+
     if let Some(project) = project_name {
         // SPEC-005: Project-centric preview - don't show prompt, show project name
-        let content = format!(
-            "**Ready to run: {label}**\n_Project: {project}_\n_Template: {template}_"
-        );
+        let content =
+            format!("**Ready to run: {label}**\n_Project: {project}_\n_Template: {template}_");
         OutgoingMessage {
             content,
             attachment: None,

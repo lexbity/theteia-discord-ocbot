@@ -34,7 +34,9 @@ use crate::app::wake::Dispatcher;
 use crate::app::watcher::Watcher;
 use crate::config::{Config, Secrets, config_path};
 use ocbot_core::Redactor;
-use ocbot_core::ports::{Clock, FsPort, GitPort, OpenCodePort, PermissionRule, ProjectConfigPort, ProjectPort};
+use ocbot_core::ports::{
+    Clock, FsPort, GitPort, OpenCodePort, PermissionRule, ProjectConfigPort, ProjectPort,
+};
 
 /// The tokio entry invoked by `main`. Returns the process exit code.
 #[expect(

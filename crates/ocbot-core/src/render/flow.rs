@@ -317,10 +317,10 @@ pub fn modal_family_samples() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CANCEL_WORD, FLOW_MODAL, FLOW_PROMPT, FLOW_RUN, MODAL_FAMILIES, cancelled,
-        default_hint, draft_echo, expired, field_prompt, first_step, flow_steps, form_header,
-        is_cancel, is_modal_id, modal_family_samples, next_step, restart_notice, step_field,
-        step_prompt, unknown_flow, with_cancel_hint,
+        CANCEL_WORD, FLOW_MODAL, FLOW_PROMPT, FLOW_RUN, MODAL_FAMILIES, cancelled, default_hint,
+        draft_echo, expired, field_prompt, first_step, flow_steps, form_header, is_cancel,
+        is_modal_id, modal_family_samples, next_step, restart_notice, step_field, step_prompt,
+        unknown_flow, with_cancel_hint,
     };
 
     #[test]

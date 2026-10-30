@@ -355,7 +355,7 @@ impl SurfaceRegistry {
 }
 
 /// A policy-applying [`ChatPort`] decorator (SPEC-004 D-12/FR-102/FR-107):
-/// every posted/broadcast spec is transformed by [`apply_surface_policy`]
+/// every posted/broadcast spec is transformed by `apply_surface_policy`
 /// with the surface's resolved config before reaching the transport. This is
 /// the *only* place report policy is enforced — handlers stay policy-free.
 /// Quiet ops (`edit`/`react`) pass through: they are status, not reports.

@@ -125,7 +125,7 @@ fn date_conversion_matches_known_days() {
 
 use ocbot_core::paths::project_display_name;
 use ocbot_core::ports::{
-    default_plans_dirs, default_readme_file, PlanInfo, ProjectConfig, ProjectDetails, ProjectInfo,
+    PlanInfo, ProjectConfig, ProjectDetails, ProjectInfo, default_plans_dirs, default_readme_file,
 };
 use std::path::PathBuf;
 

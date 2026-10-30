@@ -76,7 +76,8 @@ pub fn project_details_message(
         ButtonKind::Secondary,
     ));
 
-    let readme_text = details.readme_preview
+    let readme_text = details
+        .readme_preview
         .as_deref()
         .map(|preview| format!("\n**README Preview**\n> {preview}\n"))
         .unwrap_or_default();
@@ -179,16 +180,23 @@ pub fn staged_preview_project(
         &super::label::collapse_whitespace(label),
         super::report::LABEL_MAX_CHARS,
     );
-    let content = format!(
-        "**Ready to run: {label}**\n_Project: {project_name}_\n_Template: {template}_\n"
-    );
+    let content =
+        format!("**Ready to run: {label}**\n_Project: {project_name}_\n_Template: {template}_\n");
 
     OutgoingMessage {
         content,
         attachment: None,
         components: vec![
-            component_button("Send as-is", format!("v1:send:{action_id}"), ButtonKind::Primary),
-            component_button("Edit & send", format!("v1:edit:{action_id}"), ButtonKind::Secondary),
+            component_button(
+                "Send as-is",
+                format!("v1:send:{action_id}"),
+                ButtonKind::Primary,
+            ),
+            component_button(
+                "Edit & send",
+                format!("v1:edit:{action_id}"),
+                ButtonKind::Secondary,
+            ),
             component_button(
                 if template == "resume" {
                     "Use fresh template"
@@ -277,10 +285,14 @@ mod tests {
     fn test_full_readme_message() {
         let readme = "# Full README\n\nThis is the full content.";
         let message = full_readme_message("user/project", Some(readme), 123);
-        assert!(message.content.contains("**Project: user/project - Full README**"));
+        assert!(
+            message
+                .content
+                .contains("**Project: user/project - Full README**")
+        );
         assert!(message.content.contains("# Full README"));
-        assert!(message.components.len() == 1);
-        assert!(message.components[0].label == "Back to Project");
+        assert_eq!(message.components.len(), 1);
+        assert_eq!(message.components[0].label, "Back to Project");
     }
 
     #[test]
@@ -299,15 +311,16 @@ mod tests {
         assert!(message.content.contains("**Preview**"));
         // Should only show first 20 lines
         assert!(!message.content.contains("Step 21"));
-        assert!(message.components.len() == 2);
+        assert_eq!(message.components.len(), 2);
     }
 
     #[test]
     fn test_staged_preview_project() {
-        let message = staged_preview_project("Test Label", "prompt", 42, 123, "fresh", "user/project");
+        let message =
+            staged_preview_project("Test Label", "prompt", 42, 123, "fresh", "user/project");
         assert!(message.content.contains("**Ready to run: Test Label**"));
         assert!(message.content.contains("_Project: user/project_"));
         assert!(message.content.contains("_Template: fresh_"));
-        assert!(message.components.len() == 3);
+        assert_eq!(message.components.len(), 3);
     }
 }

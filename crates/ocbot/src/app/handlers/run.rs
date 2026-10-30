@@ -190,9 +190,13 @@ pub async fn execute_newrun_with_presets(
 ) -> Result<Option<String>, AppError> {
     // Use the pre-filled label if provided, otherwise get from modal input
     let label = label_override.unwrap_or_else(|| {
-        source.input("label").map(str::trim).unwrap_or_default().to_owned()
+        source
+            .input("label")
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_owned()
     });
-    
+
     if label.is_empty() {
         return Err(AppError::Other("a label is required".to_owned()));
     }
@@ -208,7 +212,13 @@ pub async fn execute_newrun_with_presets(
     // Use the pre-filled plan path if provided
     let plan_path_resolved = if let Some(path) = plan_path {
         // The plan path from project selection is already validated
-        Some(ctx.fs.resolve(Path::new(path)).await?.to_string_lossy().into_owned())
+        Some(
+            ctx.fs
+                .resolve(Path::new(path))
+                .await?
+                .to_string_lossy()
+                .into_owned(),
+        )
     } else {
         None
     };
@@ -232,7 +242,14 @@ pub async fn execute_newrun_with_presets(
         .upsert_project(&dir_name, branch.as_deref(), base.as_deref())
         .await?;
 
-    let prompt = prompt_for(ctx, &canonical, &label, plan_path_resolved.as_deref(), "fresh").await?;
+    let prompt = prompt_for(
+        ctx,
+        &canonical,
+        &label,
+        plan_path_resolved.as_deref(),
+        "fresh",
+    )
+    .await?;
     let run_id = ctx
         .store
         .insert_run_with_plan(&dir_name, "free", plan_path_resolved.as_deref())
@@ -284,7 +301,14 @@ pub async fn plan_pick(
     let option: &PickOption = options
         .get(index)
         .ok_or_else(|| AppError::Other(format!("plan item {index} is gone")))?;
-    let prompt = prompt_for(ctx, dir_path, &option.label, Some(&plan_path), &action.template).await?;
+    let prompt = prompt_for(
+        ctx,
+        dir_path,
+        &option.label,
+        Some(&plan_path),
+        &action.template,
+    )
+    .await?;
     if !ctx
         .store
         .restage_label_prompt(action_id, &option.label, &prompt)
@@ -367,7 +391,16 @@ pub async fn execute_plan_other(
     {
         return Err(AppError::AlreadyHandled);
     }
-    show_preview(ctx, source, action_id, step, &prompt, &action.template, dir_path).await?;
+    show_preview(
+        ctx,
+        source,
+        action_id,
+        step,
+        &prompt,
+        &action.template,
+        dir_path,
+    )
+    .await?;
     Ok(Some("step set — review and send".to_owned()))
 }
 
@@ -418,7 +451,16 @@ pub async fn toggle_template(
     {
         return Err(AppError::AlreadyHandled);
     }
-    show_preview(ctx, source, action_id, &action.label, &prompt, next, dir_path).await?;
+    show_preview(
+        ctx,
+        source,
+        action_id,
+        &action.label,
+        &prompt,
+        next,
+        dir_path,
+    )
+    .await?;
     Ok(Some(format!("template: {next}")))
 }
 
@@ -665,7 +707,7 @@ async fn show_preview(
 ) -> Result<(), AppError> {
     // Check if this directory is under projects_root (SPEC-005)
     let is_project_run = directory.starts_with(&ctx.projects_root);
-    
+
     let preview = if is_project_run {
         // Project-centric preview: don't show prompt, show project name
         let project_name = ocbot_core::paths::project_display_name(directory);
@@ -688,7 +730,7 @@ async fn show_preview(
             None,
         )
     };
-    
+
     if let Some(receipt) = source.receipt() {
         ctx.chat.edit(&receipt, &preview).await;
     } else {

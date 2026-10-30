@@ -110,11 +110,19 @@ async fn build_and_deliver(
         operator_id: ctx.guard.discord_operator().unwrap_or(0),
         followups: action.followups,
     };
-    
+
     // Get project and plan info for SPEC-005
     let (project, plan) = get_project_and_plan(ctx, action).await;
-    
-    let message = report(&action.label, outcome, &footer, &context, &ctx.redactor, project.as_deref(), plan.as_deref());
+
+    let message = report(
+        &action.label,
+        outcome,
+        &footer,
+        &context,
+        &ctx.redactor,
+        project.as_deref(),
+        plan.as_deref(),
+    );
     let dest = crate::app::destination::destination_for(action)?;
 
     let receipt = post_report(ctx, &dest, &message).await?;
@@ -229,21 +237,26 @@ async fn action_is_git(ctx: &Arc<AppContext>, action: &ActionRow) -> bool {
 
 /// Get project and plan info for SPEC-005 report rendering.
 /// Returns the project display name and plan filename (without path).
-async fn get_project_and_plan(ctx: &Arc<AppContext>, action: &ActionRow) -> (Option<String>, Option<String>) {
+async fn get_project_and_plan(
+    ctx: &Arc<AppContext>,
+    action: &ActionRow,
+) -> (Option<String>, Option<String>) {
     let Ok(Some(run)) = ctx.store.run(action.run_id).await else {
         return (None, None);
     };
-    
-    let project = if !run.dir.is_empty() {
-        Some(ocbot_core::paths::project_display_name(Path::new(&run.dir)))
-    } else {
+
+    let project = if run.dir.is_empty() {
         None
+    } else {
+        Some(ocbot_core::paths::project_display_name(Path::new(&run.dir)))
     };
-    
+
     let plan = run.plan_path.as_ref().and_then(|p| {
-        Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned())
+        Path::new(p)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
     });
-    
+
     (project, plan)
 }
 

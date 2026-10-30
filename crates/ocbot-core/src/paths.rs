@@ -192,12 +192,7 @@ pub fn project_display_name(dir: &Path) -> String {
             let last = normal_components[normal_components.len() - 1].to_string_lossy();
             let second_last = normal_components[normal_components.len() - 2].to_string_lossy();
             // Use the OS-specific separator
-            format!(
-                "{}{}{}",
-                second_last,
-                std::path::MAIN_SEPARATOR,
-                last
-            )
+            format!("{}{}{}", second_last, std::path::MAIN_SEPARATOR, last)
         }
     }
 }
@@ -266,14 +261,8 @@ mod tests {
     fn project_display_name_falls_back_to_last_component() {
         use std::path::Path;
         // Single normal component
-        assert_eq!(
-            project_display_name(Path::new("/project")),
-            "project"
-        );
-        assert_eq!(
-            project_display_name(Path::new("project")),
-            "project"
-        );
+        assert_eq!(project_display_name(Path::new("/project")), "project");
+        assert_eq!(project_display_name(Path::new("project")), "project");
     }
 
     #[test]
@@ -291,10 +280,7 @@ mod tests {
             project_display_name(Path::new("project-alpha")),
             "project-alpha"
         );
-        assert_eq!(
-            project_display_name(Path::new("./project")),
-            "project"
-        );
+        assert_eq!(project_display_name(Path::new("./project")), "project");
     }
 
     #[test]
@@ -320,10 +306,7 @@ mod tests {
     #[test]
     fn project_display_name_handles_nested_paths() {
         use std::path::Path;
-        assert_eq!(
-            project_display_name(Path::new("/a/b/c/d")),
-            "c/d"
-        );
+        assert_eq!(project_display_name(Path::new("/a/b/c/d")), "c/d");
     }
 
     #[test]

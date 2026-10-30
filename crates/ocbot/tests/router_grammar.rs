@@ -113,9 +113,7 @@ async fn slash_commands_map_to_their_ack_plans() {
             "{name} opens a modal"
         );
     }
-    for name in [
-        "status", "history", "reset", "release", "abort", "mute",
-    ] {
+    for name in ["status", "history", "reset", "release", "abort", "mute"] {
         assert!(
             matches!(
                 router::guarded_plan(&ctx, &slash(name)).await,

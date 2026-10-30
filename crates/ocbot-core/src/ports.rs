@@ -294,7 +294,11 @@ pub fn default_readme_file() -> String {
 
 /// Default README filenames to search for (in order).
 pub fn default_readme_files() -> Vec<String> {
-    vec!["README.md".to_owned(), "README.txt".to_owned(), "README".to_owned()]
+    vec![
+        "README.md".to_owned(),
+        "README.txt".to_owned(),
+        "README".to_owned(),
+    ]
 }
 
 /// Per-project configuration loaded from `ocbot.toml` (SPEC-005 Q5).
@@ -330,10 +334,7 @@ pub trait ProjectPort: Send + Sync {
     ) -> Result<ProjectDetails, crate::error::ProjectError>;
 
     /// Get full README content for a project.
-    fn get_readme(
-        &self,
-        project_name: &str,
-    ) -> Result<Option<String>, crate::error::ProjectError>;
+    fn get_readme(&self, project_name: &str) -> Result<Option<String>, crate::error::ProjectError>;
 
     /// Get the content of a specific plan file.
     fn get_plan_content(
@@ -343,7 +344,10 @@ pub trait ProjectPort: Send + Sync {
     ) -> Result<String, crate::error::ProjectError>;
 
     /// Get the full directory path for a project (internal use only).
-    fn get_project_dir(&self, project_name: &str) -> Result<std::path::PathBuf, crate::error::ProjectError>;
+    fn get_project_dir(
+        &self,
+        project_name: &str,
+    ) -> Result<std::path::PathBuf, crate::error::ProjectError>;
 
     /// Get the full path for a plan file (internal use only).
     fn get_plan_path(

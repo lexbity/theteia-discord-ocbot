@@ -11,6 +11,13 @@ db_path = "ocbot.db"
 # Directory containing fresh.md / resume.md (P13, load-time validated).
 templates_dir = "templates"
 
+# Required root directory containing one subdirectory per project (SPEC-005).
+projects_root = "/home/lex/projects"
+
+# Defaults used when a project has no ocbot.toml configuration.
+default_plans_dirs = ["devdocs/plans"]
+default_readme_files = ["README.md", "README.txt", "README"]
+
 # Watcher poll interval (S-2 locked default).
 poll_interval_ms = 2000
 

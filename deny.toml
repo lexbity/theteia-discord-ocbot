@@ -2,13 +2,12 @@
 [advisories]
 version = 2
 yanked = "warn"
-# rustls-webpki 0.102.8 (the opencode of DMs: the serenity gateway TLS chain,
-# tokio-tungstenite 0.21 <-- rustls 0.22) carries four CRL/name-constraint
-# advisories with no 0.102-line fix. The pinned serenity 0.12.x (S-9) cannot
-# move its tungstenite line, and native-tls is banned (openssl). The bot runs
-# on loopback with the operator bot token; the extra affected surface is the
-# TLS handshake toward Discord itself. Tracked by re-running `cargo-deny`
-# after any serenity bump and re-reviewing the pin (COMPAT.md).
+# rustls-webpki 0.102.8 (Serenity's gateway TLS chain via tokio-tungstenite
+# 0.21 and rustls 0.22) has no patched 0.102 release. Serenity 0.12.x (S-9)
+# pins that dependency line, and native-tls is banned (OpenSSL). These specific
+# advisories are accepted only for that unfixable transitive version. Re-run
+# cargo-deny after any Serenity bump and remove exceptions once the dependency
+# moves to patched rustls-webpki (COMPAT.md).
 ignore = [
     { id = "RUSTSEC-2026-0049", reason = "webpki 0.102 line unfixable; forced by serenity 0.12 S-9 pin; loopback bot" },
     { id = "RUSTSEC-2026-0098", reason = "webpki 0.102 line unfixable; forced by serenity 0.12 S-9 pin; loopback bot" },
@@ -18,6 +17,7 @@ ignore = [
     { id = "RUSTSEC-2026-0347", reason = "rustls/webpki 0.102 line unfixable; forced by serenity 0.12 S-9 pin; loopback bot" },
     { id = "RUSTSEC-2026-0348", reason = "rustls/webpki 0.102 line unfixable; forced by serenity 0.12 S-9 pin; loopback bot" },
     { id = "RUSTSEC-2026-0349", reason = "rustls/webpki 0.102 line unfixable; forced by serenity 0.12 S-9 pin; loopback bot" },
+    { id = "RUSTSEC-2026-0382", reason = "rustls-webpki 0.102.8 has no patched 0.102 release; forced by serenity 0.12.x via tokio-tungstenite 0.21; remove after dependency upgrade" },
 ]
 
 [licenses]

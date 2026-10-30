@@ -18,6 +18,8 @@ use ocbot_core::{Column, State, WriteValue};
 
 use super::now_unix;
 
+type SelectedProjectAndPlan = (String, String, Option<String>, Option<String>);
+
 /// Errors surfaced by the store actor.
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -868,7 +870,7 @@ store_method! {
         |connection: &mut Connection| -> rusqlite::Result<()> {
             connection
                 .execute(
-                    "INSERT OR REPLACE INTO project_state (user_id, selected_project, selected_project_dir, selected_plan, selected_plan_path) 
+                    "INSERT OR REPLACE INTO project_state (user_id, selected_project, selected_project_dir, selected_plan, selected_plan_path)
                      VALUES (?1, ?2, ?3, NULL, NULL)",
                     params![user_id, project_name, project_dir],
                 )
@@ -889,11 +891,11 @@ store_method! {
     };
 
     /// Get the selected project and plan for a user (SPEC-005).
-    GetSelectedProjectAndPlan as get_selected_project_and_plan(user_id: &str => String) -> Option<(String, String, Option<String>, Option<String>)> {
-        |connection: &mut Connection| -> rusqlite::Result<Option<(String, String, Option<String>, Option<String>)>> {
+    GetSelectedProjectAndPlan as get_selected_project_and_plan(user_id: &str => String) -> Option<SelectedProjectAndPlan> {
+        |connection: &mut Connection| -> rusqlite::Result<Option<SelectedProjectAndPlan>> {
             connection
                 .query_row(
-                    "SELECT selected_project, selected_project_dir, selected_plan, selected_plan_path 
+                    "SELECT selected_project, selected_project_dir, selected_plan, selected_plan_path
                      FROM project_state WHERE user_id = ?1",
                     params![user_id],
                     |row| {

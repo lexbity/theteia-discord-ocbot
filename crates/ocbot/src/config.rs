@@ -393,7 +393,11 @@ fn default_default_plans_dirs() -> Vec<String> {
 }
 
 fn default_default_readme_files() -> Vec<String> {
-    vec!["README.md".to_owned(), "README.txt".to_owned(), "README".to_owned()]
+    vec![
+        "README.md".to_owned(),
+        "README.txt".to_owned(),
+        "README".to_owned(),
+    ]
 }
 
 fn default_plan_depth_min() -> u32 {
@@ -888,6 +892,23 @@ allowed_user_id = 42
     }
 
     #[test]
+    fn example_config_documents_the_required_project_settings() {
+        let config = Config::parse(include_str!("../../../config/config.toml.example"))
+            .expect("example config must parse");
+
+        assert_eq!(config.projects_root, "/home/lex/projects");
+        assert_eq!(config.default_plans_dirs, vec!["devdocs/plans".to_owned()]);
+        assert_eq!(
+            config.default_readme_files,
+            vec![
+                "README.md".to_owned(),
+                "README.txt".to_owned(),
+                "README".to_owned()
+            ]
+        );
+    }
+
+    #[test]
     fn spec_005_missing_projects_root_is_a_validation_error() {
         let config = Config::parse("opencode_url = \"http://127.0.0.1:8080\"")
             .expect("missing projects_root uses its empty serde default");
@@ -970,10 +991,9 @@ typo_key = 1
 
     #[test]
     fn rejects_non_loopback_without_override() {
-        let bad = Config::parse(
-            "opencode_url = \"http://example.com\"\nprojects_root = \"/tmp\"\n",
-        )
-        .expect("parses");
+        let bad =
+            Config::parse("opencode_url = \"http://example.com\"\nprojects_root = \"/tmp\"\n")
+                .expect("parses");
         let errors = bad.validate().expect_err("non-loopback rejected");
         assert!(errors.iter().any(|error| error.contains("FR-4")));
     }

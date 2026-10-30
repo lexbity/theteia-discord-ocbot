@@ -10,7 +10,9 @@ use std::sync::Arc;
 
 use ocbot_core::error::{ProjectConfigError, ProjectError};
 use ocbot_core::paths::project_display_name;
-use ocbot_core::ports::{PlanInfo, ProjectConfig, ProjectConfigPort, ProjectDetails, ProjectInfo, ProjectPort};
+use ocbot_core::ports::{
+    PlanInfo, ProjectConfig, ProjectConfigPort, ProjectDetails, ProjectInfo, ProjectPort,
+};
 
 /// Adapter for loading per-project `ocbot.toml` configuration.
 pub struct TomlProjectConfigAdapter;
@@ -23,11 +25,13 @@ impl ProjectConfigPort for TomlProjectConfigAdapter {
             return Ok(None);
         }
 
-        let content = std::fs::read_to_string(&config_path)
-            .map_err(|e| ProjectConfigError::IoError(config_path.display().to_string(), e.to_string()))?;
+        let content = std::fs::read_to_string(&config_path).map_err(|e| {
+            ProjectConfigError::IoError(config_path.display().to_string(), e.to_string())
+        })?;
 
-        let config: ProjectConfig = toml::from_str(&content)
-            .map_err(|e| ProjectConfigError::ParseError(config_path.display().to_string(), e.to_string()))?;
+        let config: ProjectConfig = toml::from_str(&content).map_err(|e| {
+            ProjectConfigError::ParseError(config_path.display().to_string(), e.to_string())
+        })?;
 
         Ok(Some(config))
     }
@@ -138,23 +142,26 @@ impl FsProjectAdapter {
 
         Ok(all_plans)
     }
-
 }
 
 impl ProjectPort for FsProjectAdapter {
     fn list_projects(&self) -> Result<Vec<ProjectInfo>, ProjectError> {
         let mut projects = Vec::new();
 
-        let entries = std::fs::read_dir(&self.projects_root)
-            .map_err(|e| ProjectError::IoError(self.projects_root.display().to_string(), e.to_string()))?;
+        let entries = std::fs::read_dir(&self.projects_root).map_err(|e| {
+            ProjectError::IoError(self.projects_root.display().to_string(), e.to_string())
+        })?;
 
         for entry in entries {
-            let entry = entry
-                .map_err(|e| ProjectError::IoError(self.projects_root.display().to_string(), e.to_string()))?;
+            let entry = entry.map_err(|e| {
+                ProjectError::IoError(self.projects_root.display().to_string(), e.to_string())
+            })?;
 
             if entry
                 .file_type()
-                .map_err(|e| ProjectError::IoError(entry.path().display().to_string(), e.to_string()))?
+                .map_err(|e| {
+                    ProjectError::IoError(entry.path().display().to_string(), e.to_string())
+                })?
                 .is_dir()
             {
                 let display_name = project_display_name(&entry.path());
@@ -166,7 +173,9 @@ impl ProjectPort for FsProjectAdapter {
         }
 
         if projects.is_empty() {
-            return Err(ProjectError::NoProjects(self.projects_root.display().to_string()));
+            return Err(ProjectError::NoProjects(
+                self.projects_root.display().to_string(),
+            ));
         }
 
         // Sort alphabetically by display name
@@ -182,9 +191,7 @@ impl ProjectPort for FsProjectAdapter {
         let project_config = self
             .config_adapter
             .load_config(&project_dir)
-            .map_err(|e| {
-                ProjectError::IoError(project_dir.display().to_string(), e.to_string())
-            })?;
+            .map_err(|e| ProjectError::IoError(project_dir.display().to_string(), e.to_string()))?;
 
         let config = project_config.unwrap_or_default();
 
@@ -202,16 +209,16 @@ impl ProjectPort for FsProjectAdapter {
         };
 
         // Find and read README preview
-        let readme_preview = Self::find_readme_preview(&project_dir, &readme_file, &self.default_readme_files)
-            .map_err(|e| {
-                ProjectError::ReadError(project_dir.display().to_string(), e.to_string())
-            })?;
+        let readme_preview =
+            Self::find_readme_preview(&project_dir, &readme_file, &self.default_readme_files)
+                .map_err(|e| {
+                    ProjectError::ReadError(project_dir.display().to_string(), e.to_string())
+                })?;
 
         // Collect all plans from all plan directories
-        let plans = Self::collect_all_plans(&project_dir, &plans_dirs)
-            .map_err(|e| {
-                ProjectError::ReadError(project_dir.display().to_string(), e.to_string())
-            })?;
+        let plans = Self::collect_all_plans(&project_dir, &plans_dirs).map_err(|e| {
+            ProjectError::ReadError(project_dir.display().to_string(), e.to_string())
+        })?;
 
         Ok(ProjectDetails {
             name: project_name.to_owned(),
@@ -227,9 +234,7 @@ impl ProjectPort for FsProjectAdapter {
         let project_config = self
             .config_adapter
             .load_config(&project_dir)
-            .map_err(|e| {
-                ProjectError::IoError(project_dir.display().to_string(), e.to_string())
-            })?;
+            .map_err(|e| ProjectError::IoError(project_dir.display().to_string(), e.to_string()))?;
 
         let config = project_config.unwrap_or_default();
         let readme_file = if config.readme_file.is_empty() {
@@ -252,18 +257,20 @@ impl ProjectPort for FsProjectAdapter {
         for default in &self.default_readme_files {
             let path = project_dir.join(default);
             if path.exists() {
-                return std::fs::read_to_string(&path)
-                    .map(Some)
-                    .map_err(|e| {
-                        ProjectError::ReadError(path.display().to_string(), e.to_string())
-                    });
+                return std::fs::read_to_string(&path).map(Some).map_err(|e| {
+                    ProjectError::ReadError(path.display().to_string(), e.to_string())
+                });
             }
         }
 
         Ok(None)
     }
 
-    fn get_plan_content(&self, project_name: &str, plan_name: &str) -> Result<String, ProjectError> {
+    fn get_plan_content(
+        &self,
+        project_name: &str,
+        plan_name: &str,
+    ) -> Result<String, ProjectError> {
         let plan_path = self.get_plan_path(project_name, plan_name)?;
 
         std::fs::read_to_string(&plan_path)
@@ -294,9 +301,7 @@ impl ProjectPort for FsProjectAdapter {
         let project_config = self
             .config_adapter
             .load_config(&project_dir)
-            .map_err(|e| {
-                ProjectError::IoError(project_dir.display().to_string(), e.to_string())
-            })?;
+            .map_err(|e| ProjectError::IoError(project_dir.display().to_string(), e.to_string()))?;
 
         let config = project_config.unwrap_or_default();
         let plans_dirs = if config.plans_dirs.is_empty() {
@@ -392,12 +397,12 @@ mod tests {
             Arc::new(MockConfigAdapter),
         );
 
-        let projects = adapter.list_projects().unwrap();
-        assert_eq!(projects.len(), 3);
+        let listed_projects = adapter.list_projects().unwrap();
+        assert_eq!(listed_projects.len(), 3);
         // Sorted alphabetically
-        assert!(projects[0].name.contains("alpha"));
-        assert!(projects[1].name.contains("beta"));
-        assert!(projects[2].name.contains("gamma"));
+        assert!(listed_projects[0].name.contains("alpha"));
+        assert!(listed_projects[1].name.contains("beta"));
+        assert!(listed_projects[2].name.contains("gamma"));
     }
 
     #[test]
@@ -488,7 +493,11 @@ mod tests {
         fs::create_dir(&project_dir).unwrap();
 
         let readme_path = project_dir.join("README.md");
-        fs::write(&readme_path, "# Test Project\n\nDescription here\n\nMore text").unwrap();
+        fs::write(
+            &readme_path,
+            "# Test Project\n\nDescription here\n\nMore text",
+        )
+        .unwrap();
 
         let adapter = FsProjectAdapter::new(
             temp_dir.path().to_path_buf(),
@@ -747,8 +756,11 @@ mod tests {
         let display_name = &projects[0].name;
         let project_dir_resolved = adapter.get_project_dir(display_name).unwrap();
 
-        let plans = FsProjectAdapter::collect_all_plans(&project_dir_resolved, &["devdocs/plans".to_owned(), ".plans".to_owned()])
-            .unwrap();
+        let plans = FsProjectAdapter::collect_all_plans(
+            &project_dir_resolved,
+            &["devdocs/plans".to_owned(), ".plans".to_owned()],
+        )
+        .unwrap();
         assert_eq!(plans.len(), 2);
     }
 
@@ -782,8 +794,11 @@ mod tests {
         let display_name = &projects[0].name;
         let project_dir_resolved = adapter.get_project_dir(display_name).unwrap();
 
-        let plans = FsProjectAdapter::collect_all_plans(&project_dir_resolved, &["devdocs/plans".to_owned(), ".plans".to_owned()])
-            .unwrap();
+        let plans = FsProjectAdapter::collect_all_plans(
+            &project_dir_resolved,
+            &["devdocs/plans".to_owned(), ".plans".to_owned()],
+        )
+        .unwrap();
 
         // Should only have one "duplicate.md" (first occurrence)
         assert_eq!(plans.len(), 1);
