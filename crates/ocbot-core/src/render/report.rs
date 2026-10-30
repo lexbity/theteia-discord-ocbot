@@ -5,6 +5,8 @@
 //! decision buttons. The footer is composed *before* truncation so it can never
 //! be cut, and the excerpt is budgeted against the Discord cap.
 
+use std::fmt::Write as _;
+
 use crate::outcome::Outcome;
 use crate::outcome::TokenCounts;
 
@@ -22,20 +24,18 @@ pub const EXCERPT_TARGET: usize = 1_500;
 /// The longest label carried inline. Labels are operator text of unbounded
 /// length; the headline must always leave room for the excerpt and footer.
 pub const LABEL_MAX_CHARS: usize = 200;
-/// The longest single-line footer. The diff-stat summary is one line; this
-/// guards a pathological summary line so the footer can never crowd out the
-/// excerpt entirely.
+/// The longest single-line footer. The stats line is short by construction;
+/// this guards so the footer can never crowd out the excerpt entirely.
 const FOOTER_MAX_CHARS: usize = 300;
 /// The filename used for the full report attachment.
 pub const REPORT_ATTACHMENT_NAME: &str = "report.md";
 
-/// The report footer facts (spec P3/P10: git diff stat vs base, duration,
-/// tokens/cost — degrading to "n/a" on anything unknown).
+/// The report footer facts (SPEC-005 §flow 6: duration, tokens/cost — each
+/// degrading to "n/a" independently, A7/S-5 posture). The git diff stat was
+/// removed with SPEC-005: its summary carries filesystem paths, and the
+/// decision-relevant facts are the stats.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Footer {
-    /// The `git diff --stat` text vs the action's pre-run state, when
-    /// available.
-    pub diff_stat: Option<String>,
     /// Wall-clock duration in seconds.
     pub duration_secs: Option<f64>,
     /// Token usage.
@@ -49,7 +49,7 @@ impl Footer {
     /// result is clamped to `FOOTER_MAX_CHARS` so the doc's "inside the
     /// budget" claim holds by construction, not by convention.
     pub fn render(&self) -> String {
-        let parts = [self.duration(), self.diff(), self.tokens(), self.cost()];
+        let parts = [self.duration(), self.tokens(), self.cost()];
         let parts: Vec<&str> = parts.iter().filter_map(|part| (*part).as_deref()).collect();
         let joined = if parts.is_empty() {
             "Duration n/a".to_owned()
@@ -76,14 +76,6 @@ impl Footer {
         Some(format!("Duration {human}"))
     }
 
-    fn diff(&self) -> Option<String> {
-        let stat = self.diff_stat.as_deref()?;
-        let summary = summarize_diff_stat(stat)
-            .unwrap_or_else(|| stat.lines().next().unwrap_or_default().trim().to_owned());
-        let summary = summary.trim();
-        (!summary.is_empty()).then(|| summary.to_owned())
-    }
-
     fn tokens(&self) -> Option<String> {
         let tokens = self.tokens?;
         let total = tokens.input + tokens.output + tokens.reasoning;
@@ -102,18 +94,6 @@ impl Footer {
         let cost = self.cost?;
         Some(format!("${cost:.2}"))
     }
-}
-
-/// Extract the compact summary line from `git diff --stat` output, if any
-/// (e.g. ` 3 files changed, 12 insertions(+), 4 deletions(-)`).
-fn summarize_diff_stat(stat: &str) -> Option<String> {
-    stat.lines()
-        .rev()
-        .find(|line| {
-            let lower = line.to_ascii_lowercase();
-            lower.contains("insertion") || lower.contains("deletion") || lower.contains("changed")
-        })
-        .map(|line| line.trim().to_owned())
 }
 
 /// Replace every triple-backtick fence inside `text` so the excerpt cannot
@@ -211,17 +191,20 @@ pub fn decision_buttons(outcome: &Outcome, context: &ReportContext) -> Vec<Compo
     }
 }
 
-/// The full report message: headline + fenced excerpt + always-inline footer +
-/// context notes, followed by the decision buttons (FR-15).
+/// The full report message: an optional project/plan header, headline + fenced
+/// excerpt + always-inline stats footer, followed by the decision buttons
+/// (FR-15).
 ///
-/// The invariant is total: every dynamic piece (label, body, footer) is
-/// redacted and clamped *before* the budget math — redaction can lengthen
-/// text, so scrubbing first is what makes the byte accounting exact — and the
-/// appended notes (`report_tail`) are part of the budget, not an
+/// The invariant is total: every dynamic piece (label, header names, body,
+/// footer) is redacted and clamped *before* the budget math — redaction can
+/// lengthen text, so scrubbing first is what makes the byte accounting exact —
+/// and the appended notes (`report_tail`) are part of the budget, not an
 /// afterthought. Assembled `content` can never exceed the cap (P10).
 ///
-/// For project-centric runs (SPEC-005), the project and plan names are displayed
-/// prominently, and the diff stat is omitted (contains filesystem paths).
+/// SPEC-005: the footer is stats only — the git diff stat was removed, its
+/// summary carries filesystem paths. `project` and `plan` are display names
+/// (never paths), sanitized like every other filesystem-sourced string; the
+/// agent's own response body is preserved in full (Q3), redaction only.
 pub fn report(
     label: &str,
     outcome: &Outcome,
@@ -234,38 +217,36 @@ pub fn report(
     let label = truncate_chars(&collapse_whitespace(label), LABEL_MAX_CHARS);
     let head = headline(outcome, &redactor.scrub(&label));
 
-    // For project-centric runs, create a footer without diff stat (SPEC-005)
-    // The diff stat contains filesystem paths which should be hidden
-    let footer_line = if project.is_some() || plan.is_some() {
-        // Use stats only (NO diff stat with paths)
-        let duration = footer.duration();
-        let tokens = footer.tokens();
-        let cost = footer.cost();
-        let parts: Vec<&str> = vec![duration.as_deref(), tokens.as_deref(), cost.as_deref()]
-            .into_iter()
-            .flatten()
-            .collect();
-        let joined = if parts.is_empty() {
-            "Duration n/a".to_owned()
-        } else {
-            parts.join(" · ")
-        };
-        redactor.scrub(&truncate_chars(&joined, FOOTER_MAX_CHARS))
-    } else {
-        // `Footer::render` is single-line and self-clamped; scrub it too — the
-        // diff-stat summary carries repo file paths (R-12 inline discipline).
-        redactor.scrub(&footer.render())
-    };
+    // `Footer::render` is single-line and self-clamped; scrub it too — any
+    // operator echo inside the stats can only ever be label text (R-12 inline
+    // discipline).
+    let footer_line = redactor.scrub(&footer.render());
     let tail = report_tail(context);
 
-    // Build the content with project/plan info (SPEC-005)
-    let mut message_text = if let (Some(project), Some(plan)) = (project, plan) {
-        format!("**Project: {project}**\n**Plan: {plan}**\n\n{head}")
-    } else if let Some(project) = project {
-        format!("**Project: {project}**\n\n{head}")
-    } else {
-        head
-    };
+    // The project/plan header (SPEC-005 §flow 6): names are filesystem
+    // text, so they pass the same redaction (R-12) and sanitization as every
+    // other dynamic piece — scrubbed *before* clamping so redaction growth
+    // cannot push the header past its budget. Empty names render no line
+    // (degenerate input, never a production one — the row would be noise).
+    let mut message_text = String::new();
+    if let Some(project) = project.filter(|name| !name.trim().is_empty()) {
+        let _ = writeln!(
+            message_text,
+            "**Project: {}**",
+            short_name(&redactor.scrub(project), PROJECT_NAME_MAX_CHARS)
+        );
+    }
+    if let Some(plan) = plan.filter(|name| !name.trim().is_empty()) {
+        let _ = writeln!(
+            message_text,
+            "**Plan: {}**",
+            short_name(&redactor.scrub(plan), PROJECT_NAME_MAX_CHARS)
+        );
+    }
+    if !message_text.is_empty() {
+        message_text.push('\n');
+    }
+    message_text.push_str(&head);
     message_text.push_str("\n```\n");
     let (excerpt, truncated) = report_excerpt(
         &report_body(outcome),

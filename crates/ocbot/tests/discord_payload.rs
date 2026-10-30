@@ -128,7 +128,6 @@ fn mentions_builder_serializes_to_the_fr3_shape() {
 #[test]
 fn report_footer_is_inline_and_stays_under_cap() {
     let footer = Footer {
-        diff_stat: Some(" 2 files changed, 8 insertions(+), 1 deletion(-)".to_owned()),
         duration_secs: Some(90.0),
         tokens: Some(core_token_counts()),
         cost: Some(0.12),
@@ -145,8 +144,11 @@ fn report_footer_is_inline_and_stays_under_cap() {
         None,
     );
     assert!(message.content.len() <= 2_000);
-    assert!(message.content.contains("Duration 1m 30s"));
-    assert!(message.content.contains("8 insertions(+)"));
+    assert!(
+        message.content.contains("Duration 1m 30s"),
+        "{}",
+        message.content
+    );
     assert!(message.content.contains("$0.12"));
 }
 

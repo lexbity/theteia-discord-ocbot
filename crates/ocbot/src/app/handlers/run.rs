@@ -87,7 +87,7 @@ pub async fn begin_modal(
 }
 
 /// Execute phase for the `v1:newrun` modal: read the typed inputs and stage
-/// the run through the shared [`stage_new_run`] core.
+/// the run through the shared `stage_new_run` core.
 pub async fn execute_newrun(
     ctx: &Arc<AppContext>,
     source: &InteractionSource,
@@ -609,11 +609,10 @@ async fn load_plan(ctx: &Arc<AppContext>, plan_path: &str) -> Result<Vec<PickOpt
 }
 
 /// Post (or edit in place) the staged preview and remember its origin.
-/// For project-centric runs, this uses the project name in the preview.
-/// Render the staged-action preview: label, opaque project name and template
-/// only (SPEC-005 G-01) — the stored prompt and the Edit modal keep the full
-/// text. Every staged surface (modal runs, project runs, picks, template
-/// toggles) renders through this one path.
+/// The preview is label + opaque project name + template only (SPEC-005
+/// G-01) — the stored prompt and the Edit modal keep the full text. Every
+/// staged surface (modal runs, project runs, picks, template toggles) renders
+/// through this one path.
 async fn show_preview(
     ctx: &Arc<AppContext>,
     source: &InteractionSource,

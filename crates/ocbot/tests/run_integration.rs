@@ -1,7 +1,8 @@
-//! SPEC-005 phase 11 (run integration): the single staging core behind both
-//! `/run` entry points, the opaque preview on every re-render path (pick,
-//! other-step, plan-use, template toggle), and the dirty-tree warning naming
-//! the project, never the worktree path.
+//! SPEC-005 phases 11-12 (run integration + report delivery): the single
+//! staging core behind both `/run` entry points, the opaque preview on every
+//! re-render path (pick, other-step, plan-use, template toggle), the
+//! dirty-tree warning naming the project, never the worktree path, and the
+//! completed report heading the project/plan with a stats-only footer.
 
 #![allow(
     clippy::unwrap_used,
@@ -32,6 +33,7 @@ struct Rig {
     ctx: Arc<ocbot::app::context::AppContext>,
     chat: FakeChat,
     store: StoreHandle,
+    opencode: FakeOpenCode,
     project_token: String,
     plan_token: String,
     private_path: String,
@@ -53,9 +55,10 @@ fn rig() -> Rig {
 
     let store = StoreHandle::open_in_memory().expect("store");
     let chat = FakeChat::new();
+    let opencode = FakeOpenCode::new();
     let mut ctx = common::context(
         store.clone(),
-        Arc::new(FakeOpenCode::new()),
+        Arc::new(opencode.clone()),
         Arc::new(FakeGit::inert()),
         Arc::new(chat.clone()),
         OPERATOR,
@@ -86,6 +89,7 @@ fn rig() -> Rig {
         ctx,
         chat,
         store,
+        opencode,
     }
 }
 
@@ -485,4 +489,149 @@ async fn presets_refuse_an_empty_directory_or_label_without_side_effects() {
         rig.store.staged_actions().await.expect("staged").is_empty(),
         "a refused preset stages nothing"
     );
+}
+
+/// Stage a preset run, send it through the router, and finalize it with a
+/// completed snapshot; returns the delivered report message.
+async fn deliver_report(rig: &Rig, dir: &str, plan: Option<&str>) -> ocbot_core::OutgoingMessage {
+    use ocbot::app::completion::{DetectedBy, finalize_action};
+
+    let outcome = run::execute_newrun_with_presets(
+        &rig.ctx,
+        &component("v1:load_plan:synthetic"),
+        dir,
+        plan,
+        Some("solo.md".to_owned()),
+    )
+    .await
+    .expect("stage");
+    assert!(
+        outcome.unwrap_or_default().contains("staged"),
+        "the plan-less-shaped staging previews directly"
+    );
+
+    let staged = rig
+        .store
+        .staged_actions()
+        .await
+        .expect("staged")
+        .pop()
+        .expect("action");
+    let started = router::execute(&rig.ctx, &component(&format!("v1:send:{}", staged.id)))
+        .await
+        .expect("send route")
+        .expect("started hint");
+    assert!(started.contains("started"), "{started}");
+
+    let action = rig
+        .store
+        .action(staged.id)
+        .await
+        .expect("read")
+        .expect("row");
+    assert_eq!(action.state, ocbot_core::State::Running);
+    let session = action.session_id.clone().expect("session bound");
+    rig.opencode
+        .set_snapshot(&session, FakeOpenCode::completed_snapshot());
+
+    let delivered = finalize_action(&rig.ctx, &action, false, DetectedBy::Fallback)
+        .await
+        .expect("finalize");
+    assert!(delivered, "the report went out");
+    let row = rig
+        .store
+        .action(staged.id)
+        .await
+        .expect("read")
+        .expect("row");
+    assert_eq!(
+        row.state,
+        ocbot_core::State::Reported,
+        "one CAS to reported"
+    );
+
+    rig.chat.last_post().expect("report").message
+}
+
+#[tokio::test]
+async fn a_completed_plan_run_reports_project_plan_and_stats_without_paths() {
+    let rig = rig();
+    let project_dir = rig.temp_dir.path().join("project-alpha");
+    let plans_dir = project_dir.join("devdocs").join("plans");
+    std::fs::create_dir_all(&plans_dir).expect("plans dir");
+    let plan_path = plans_dir.join("solo.md");
+    std::fs::write(&plan_path, "# Solo\n1. only item\n").expect("plan");
+
+    let report = deliver_report(
+        &rig,
+        &project_dir.to_string_lossy(),
+        Some(&plan_path.to_string_lossy()),
+    )
+    .await;
+
+    // SPEC-005 §flow 6: Project + Plan prominent, full agent response,
+    // stats-only footer, no filesystem anywhere.
+    assert!(
+        report.content.contains(&format!(
+            "**Project: {}**",
+            project_display_name(&project_dir)
+        )),
+        "{}",
+        report.content
+    );
+    assert!(
+        report.content.contains("**Plan: solo.md**"),
+        "{}",
+        report.content
+    );
+    assert!(
+        report.content.contains("✅ Completed"),
+        "{}",
+        report.content
+    );
+    assert!(report.content.contains("PONG"), "the body survives");
+    assert!(report.content.contains("15 tok"), "{}", report.content);
+    assert!(report.content.contains("$0.01"), "{}", report.content);
+    assert!(
+        !report.content.contains(&rig.private_path),
+        "absolute paths leaked: {}",
+        report.content
+    );
+    assert!(
+        !report.content.contains("devdocs/plans"),
+        "the plan's directory leaked: {}",
+        report.content
+    );
+    // The decision buttons are the normal report grammar.
+    assert!(
+        report
+            .components
+            .iter()
+            .any(|button| button.custom_id.starts_with("v1:followup:")),
+        "follow-up is offered"
+    );
+    assert_no_paths(&rig);
+}
+
+#[tokio::test]
+async fn a_plan_less_run_reports_the_project_and_no_plan_line() {
+    let rig = rig();
+    let project_dir = rig.temp_dir.path().join("project-alpha");
+
+    let report = deliver_report(&rig, &project_dir.to_string_lossy(), None).await;
+
+    assert!(
+        report.content.contains(&format!(
+            "**Project: {}**",
+            project_display_name(&project_dir)
+        )),
+        "{}",
+        report.content
+    );
+    assert!(
+        !report.content.contains("**Plan:"),
+        "no plan was given: {}",
+        report.content
+    );
+    assert_no_paths(&rig);
 }

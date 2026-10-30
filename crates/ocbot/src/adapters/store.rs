@@ -79,7 +79,7 @@ pub struct ActionRow {
     pub outcome_kind: Option<String>,
     /// The full report text.
     pub report_full: Option<String>,
-    /// The footer json (diff stat text, duration, tokens, cost).
+    /// The footer json (duration, tokens, cost).
     pub footer_json: Option<String>,
     /// The Discord message id of the delivered report (dedupe key, P9).
     pub report_msg_id: Option<String>,

@@ -42,19 +42,17 @@ async fn read_only_commands_on_a_real_repo() {
     assert_eq!(log.len(), 1);
     assert_eq!(log[0].sha, head);
     assert_eq!(log[0].subject, "initial");
-    // Diff against HEAD on a clean tree is empty.
-    assert!(git.diff_stat(&repo, &head).await.expect("diff").is_empty());
 
-    // Dirty the tree: an untracked file shows in status, a tracked edit shows
-    // in the diff stat.
+    // Dirty the tree: an untracked file and a tracked edit show in status.
+    // (SPEC-005 removed the report diff stat; `git diff` is no longer part of
+    // the bot's surface.)
     common::write_file(&repo, "new.txt", "x\n");
     assert!(!git.status_porcelain(&repo).await.expect("dirty").is_empty());
     common::append_file(&repo, "README.md", "more\n");
+    let status = git.status_porcelain(&repo).await.expect("dirty");
     assert!(
-        git.diff_stat(&repo, &head)
-            .await
-            .expect("diff")
-            .contains("README.md")
+        status.contains("README.md") && status.contains("new.txt"),
+        "{status}"
     );
 
     // An unrelated directory is not a repo.
@@ -108,7 +106,7 @@ async fn slow_git_times_out_and_gets_killed() {
         assert!(attempt < 3, "three transient spawn collisions in a row");
         attempt += 1;
         let error = slow_git
-            .diff_stat(&repo, "HEAD")
+            .status_porcelain(&repo)
             .await
             .expect_err("must time out");
         match error {

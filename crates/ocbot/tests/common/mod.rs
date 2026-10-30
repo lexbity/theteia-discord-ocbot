@@ -67,8 +67,6 @@ pub enum Call {
     GitBranch(String),
     /// git: `status_porcelain(dir)`
     GitStatus(String),
-    /// git: `diff_stat(dir, base)`
-    GitDiffStat(String, String),
     /// git: `log(dir, base)`
     GitLog(String, Option<String>),
     /// git: `is_ancestor`
@@ -391,18 +389,6 @@ impl GitPort for FakeGit {
             return self.fake_adapter.status_porcelain(repo).await;
         }
         Ok(String::new())
-    }
-
-    async fn diff_stat(&self, directory: &Path, base: &str) -> Result<String, GitError> {
-        self.calls.lock().expect("lock").push(Call::GitDiffStat(
-            directory.display().to_string(),
-            base.to_owned(),
-        ));
-        let repo = self.repo.as_ref().ok_or(GitError::Spawn {
-            kind: "diff-stat",
-            message: "no repo".to_owned(),
-        })?;
-        self.fake_adapter.diff_stat(repo, base).await
     }
 
     async fn log(

@@ -103,7 +103,7 @@ async fn build_and_deliver(
     target: State,
     snapshot: Option<&AssistantSnapshot>,
 ) -> Result<bool, AppError> {
-    let footer = build_footer(ctx, action, snapshot).await;
+    let footer = build_footer(action, snapshot);
     let context = ReportContext {
         action_id: action.id,
         is_git: action_is_git(ctx, action).await,
@@ -199,22 +199,15 @@ fn report_body(outcome: &Outcome) -> String {
     }
 }
 
-/// The ground-truth footer: git diff stat vs the pre-run HEAD, duration,
-/// tokens/cost — each degrading independently (A7/S-5 posture).
-async fn build_footer(
-    ctx: &Arc<AppContext>,
-    action: &ActionRow,
-    snapshot: Option<&AssistantSnapshot>,
-) -> Footer {
+/// The ground-truth footer: duration, tokens/cost — each degrading
+/// independently (A7/S-5 posture). SPEC-005 removed the git diff stat from
+/// the report footer (its summary carries filesystem paths), so completion
+/// never runs `git diff` for report purposes.
+fn build_footer(action: &ActionRow, snapshot: Option<&AssistantSnapshot>) -> Footer {
     let duration_secs = action
         .started_at
         .map(|started| (secs_to_f64(now_unix()) - secs_to_f64(started)).max(0.0));
-    let diff_stat = match action.start_head.clone() {
-        Some(start_head) => poll_diff(ctx, action.run_id, &start_head).await,
-        None => None,
-    };
     Footer {
-        diff_stat,
         duration_secs,
         tokens: snapshot.and_then(|snapshot| snapshot.tokens),
         cost: snapshot.and_then(|snapshot| snapshot.cost),
@@ -258,20 +251,6 @@ async fn get_project_and_plan(
     });
 
     (project, plan)
-}
-
-/// Best-effort `git diff --stat` vs a base sha (R-9: the adapter timeout
-/// degrades to "n/a").
-async fn poll_diff(ctx: &Arc<AppContext>, run_id: i64, base: &str) -> Option<String> {
-    let run = ctx.store.run(run_id).await.ok().flatten()?;
-    let directory = Path::new(&run.dir);
-    if !ctx.git.is_repo(directory).await.ok()? {
-        return None;
-    }
-    match ctx.git.diff_stat(directory, base).await {
-        Ok(stat) if !stat.is_empty() => Some(stat),
-        _ => None,
-    }
 }
 
 /// Seconds as f64 without an `as` cast (bounded to u32 → `f64::from`).

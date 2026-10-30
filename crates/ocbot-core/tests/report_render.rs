@@ -106,7 +106,6 @@ fn redaction_scrubs_the_inline_path_but_keeps_the_record() {
 fn report_stays_under_cap_and_carries_footer() {
     let long = "word ".repeat(2_000);
     let footer = Footer {
-        diff_stat: Some(" 3 files changed, 12 insertions(+), 4 deletions(-)".to_owned()),
         duration_secs: Some(252.0),
         tokens: Some(TokenCounts {
             input: 31_000.0,
@@ -129,7 +128,13 @@ fn report_stays_under_cap_and_carries_footer() {
     assert!(message.content.contains("Duration 4m 12s"));
     assert!(message.content.contains("31.4k tok"));
     assert!(message.content.contains("$0.41"));
-    assert!(message.content.contains("12 insertions(+)"));
+    // SPEC-005: the footer is the stats line only — the diff-stat prose
+    // ("files changed", "insertions") can no longer be rendered at all.
+    assert!(
+        !message.content.contains("insertions") && !message.content.contains("files changed"),
+        "{}",
+        message.content
+    );
     assert_eq!(message.mention_allowlist, vec![42]);
     let attached = message.attachment.expect("truncated report is attached");
     assert_eq!(attached.filename, "report.md");
@@ -298,21 +303,24 @@ fn notes_are_budgeted_not_appended_past_the_cap() {
 }
 
 #[test]
-fn oversized_label_and_footer_cannot_break_the_cap() {
-    // A label far past LABEL_MAX_CHARS and a pathological one-line diff stat
-    // (no insertion/deletion summary, so the footer falls back to the first
-    // line — here 5 000 chars of path).
+fn oversized_label_and_header_names_cannot_break_the_cap() {
+    // A label far past LABEL_MAX_CHARS and pathological project/plan display
+    // names (filesystem-sourced, unbounded length): every dynamic piece is
+    // clamped before the budget math, so the cap holds by construction.
     let footer = Footer {
-        diff_stat: Some(format!("{} | 1000 +\n", "p".repeat(5_000))),
+        duration_secs: Some(1.0),
         ..Footer::default()
     };
-    let message = plain_report(
+    let message = report(
         &"label ".repeat(1_000),
         &Outcome::Completed {
             report: "x".repeat(10),
         },
         &footer,
         &done_context(2, true),
+        &Redactor::default(),
+        Some(&"p".repeat(5_000)),
+        Some(&"q".repeat(5_000)),
     );
     assert!(
         message.content.len() <= DISCORD_MESSAGE_CAP,
@@ -321,19 +329,90 @@ fn oversized_label_and_footer_cannot_break_the_cap() {
     );
     assert!(
         !message.content.contains(&"p".repeat(400)),
-        "the footer line was clamped, not carried whole"
+        "the project name was clamped, not carried whole"
+    );
+    assert!(
+        !message.content.contains(&"q".repeat(400)),
+        "the plan name was clamped, not carried whole"
+    );
+    assert!(
+        !message.content.contains(&"label ".repeat(60)),
+        "the label was clamped: {}",
+        message.content
     );
 }
 
 #[test]
-fn footer_render_clamps_a_pathological_summary() {
-    let footer = Footer {
-        diff_stat: Some("z".repeat(5_000)),
-        ..Footer::default()
-    };
-    let rendered = footer.render();
-    assert!(rendered.chars().count() <= 300, "footer was {rendered}");
-    assert!(rendered.ends_with('…'));
+fn header_names_cannot_smuggle_markup() {
+    // Display names come from the filesystem: backticks would close the bold
+    // span and control characters could break the line structure. Both are
+    // neutralized by the shared name sanitizer.
+    let message = report(
+        "task",
+        &Outcome::Completed {
+            report: "ok".to_owned(),
+        },
+        &Footer::default(),
+        &done_context(4, false),
+        &Redactor::default(),
+        Some("weird\nname`x`\u{0007}tail"),
+        Some("po`wn\n.md"),
+    );
+    assert!(
+        message.content.contains("**Project: weird name'x' tail**"),
+        "{}",
+        message.content
+    );
+    assert!(
+        message.content.contains("**Plan: po'wn .md**"),
+        "{}",
+        message.content
+    );
+    assert!(
+        !message.content.contains("name`x`") && !message.content.contains("po`wn"),
+        "no raw backticked name survived the header: {}",
+        message.content
+    );
+    assert!(
+        !message.content.contains('\u{0007}'),
+        "no control character survived: {}",
+        message.content
+    );
+}
+
+#[test]
+fn header_names_pass_through_redaction() {
+    // Project and plan display names are filesystem text: a secret-bearing
+    // repo or filename must not ride the header verbatim (R-12).
+    let redactor = Redactor::new(&["topsecret".to_owned()]).expect("pattern compiles");
+    let message = report(
+        "task",
+        &Outcome::Completed {
+            report: "ok".to_owned(),
+        },
+        &Footer::default(),
+        &done_context(9, false),
+        &redactor,
+        Some("org/topsecret-repo"),
+        Some("topsecret-migration.md"),
+    );
+    assert!(
+        !message.content.contains("topsecret"),
+        "{}",
+        message.content
+    );
+    assert!(
+        message.content.contains("**Project: org/[redacted]-repo**"),
+        "{}",
+        message.content
+    );
+    assert!(
+        message
+            .content
+            .contains("**Plan: [redacted]-migration.md**"),
+        "{}",
+        message.content
+    );
 }
 
 #[test]
@@ -464,24 +543,8 @@ fn footer_tokens_and_cost_render_in_both_scales() {
 }
 
 #[test]
-fn blank_or_unsummarizable_diff_stat_disappears_from_the_footer() {
-    let blank = Footer {
-        diff_stat: Some("   \n".to_owned()),
-        ..Footer::default()
-    };
-    assert_eq!(blank.render(), "Duration n/a");
-    // No summary line: the first line stands in, trimmed.
-    let no_summary = Footer {
-        diff_stat: Some("whatever.txt | 1 +\n".to_owned()),
-        ..Footer::default()
-    };
-    assert_eq!(no_summary.render(), "whatever.txt | 1 +");
-}
-
-#[test]
-fn project_centric_report_shows_names_but_never_the_diff_stat() {
+fn project_centric_report_shows_names_and_stats_only() {
     let footer = Footer {
-        diff_stat: Some(" 2 files changed, 5 insertions(+), 1 deletion(-)".to_owned()),
         duration_secs: Some(90.0),
         tokens: Some(TokenCounts {
             input: 100.0,
@@ -516,10 +579,7 @@ fn project_centric_report_shows_names_but_never_the_diff_stat() {
 
 #[test]
 fn project_only_report_degrades_to_a_stats_only_footer() {
-    let footer = Footer {
-        diff_stat: Some(" 1 file changed, 1 insertion(+)".to_owned()),
-        ..Footer::default()
-    };
+    let footer = Footer::default();
     let message = report(
         "poke",
         &Outcome::Completed {
@@ -568,7 +628,6 @@ fn report_respects_the_cap_across_a_deterministic_corpus() {
         };
         let small = |value: u64| f64::from(u32::try_from(value).expect("bounded by %"));
         let footer = Footer {
-            diff_stat: (next() % 4 == 0).then(|| "f".repeat(fit(next() % 5_000))),
             duration_secs: Some(small(next() % 20_000)),
             tokens: Some(TokenCounts {
                 input: small(next() % 100_000),
@@ -583,11 +642,64 @@ fn report_respects_the_cap_across_a_deterministic_corpus() {
             operator_id: 42,
             followups: i64::try_from(next() % 4).expect("bounded by %"),
         };
-        let message = plain_report(&label, &outcome, &footer, &context);
+        // SPEC-005: cycle every header shape (project+plan, project-only,
+        // plan-only, bare) with adversarial filesystem-sourced name lengths;
+        // the cap must hold across all of them.
+        let name = |value: u64| "n".repeat(1 + fit(value % 500));
+        let (project, plan) = match case % 4 {
+            0 => (Some(name(next())), Some(name(next()))),
+            1 => (Some(name(next())), None),
+            2 => (None, Some(name(next()))),
+            _ => (None, None),
+        };
+        let message = report(
+            &label,
+            &outcome,
+            &footer,
+            &context,
+            &Redactor::default(),
+            project.as_deref(),
+            plan.as_deref(),
+        );
         assert!(
             message.content.len() <= DISCORD_MESSAGE_CAP,
             "case {case}: {} bytes",
             message.content.len()
         );
+        if project.is_some() {
+            assert!(
+                message.content.contains("**Project: ") || message.content.contains("**Project: n"),
+                "the project header renders when a name is given"
+            );
+        }
     }
+}
+
+#[test]
+fn blank_header_names_render_no_line_at_all() {
+    // Empty/whitespace display names are degenerate input: the report must
+    // fall back to the bare headline, not render "**Project: **" noise or a
+    // stray blank line above the headline.
+    let message = report(
+        "task",
+        &Outcome::Completed {
+            report: "ok".to_owned(),
+        },
+        &Footer::default(),
+        &done_context(9, true),
+        &Redactor::default(),
+        Some(""),
+        Some("   "),
+    );
+    assert!(
+        !message.content.contains("**Project:"),
+        "{}",
+        message.content
+    );
+    assert!(!message.content.contains("**Plan:"), "{}", message.content);
+    assert!(
+        message.content.starts_with("✅ Completed — **task**"),
+        "no stray blank line above the headline: {}",
+        message.content
+    );
 }

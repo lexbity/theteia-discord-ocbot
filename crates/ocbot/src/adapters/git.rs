@@ -1,7 +1,7 @@
 //! The git adapter — the **only** place in the codebase that spawns a process
 //! (spec P7/D-4/NFR-10, enforced by clippy disallowed-methods and gate G5).
-//! Phase 2 ships the read-only half: head, branch, status, diff stat, log,
-//! ancestry. All commands are argv-only — a shell can never be involved and
+//! Phase 2 ships the read-only half: head, branch, status, log, ancestry.
+//! All commands are argv-only — a shell can never be involved and
 //! `-C <dir>` roots every command in its directory.
 //!
 //! The two `#![expect(clippy::disallowed_methods)]` sites are this adapter's
@@ -153,11 +153,6 @@ impl GitPort for GitAdapter {
 
     async fn status_porcelain(&self, directory: &Path) -> Result<String, GitError> {
         self.capture("status", &["status", "--porcelain"], directory)
-            .await
-    }
-
-    async fn diff_stat(&self, directory: &Path, base: &str) -> Result<String, GitError> {
-        self.capture("diff-stat", &["diff", "--stat", base], directory)
             .await
     }
 

@@ -216,8 +216,6 @@ pub trait GitPort: Send + Sync {
     async fn branch(&self, directory: &Path) -> Result<String, GitError>;
     /// The porcelain status output (empty when clean).
     async fn status_porcelain(&self, directory: &Path) -> Result<String, GitError>;
-    /// The `git diff --stat` text vs `base` (10 s timeout in the adapter).
-    async fn diff_stat(&self, directory: &Path, base: &str) -> Result<String, GitError>;
     /// Recent commits on `directory`, optionally from `base` (exclusive).
     async fn log(&self, directory: &Path, base: Option<&str>) -> Result<Vec<CommitRow>, GitError>;
     /// Whether `sha` is an ancestor of `of`.
