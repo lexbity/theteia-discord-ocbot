@@ -95,6 +95,7 @@ pub struct Config {
     pub allow_freeform_paths: bool,
     /// Root directory containing all projects (SPEC-005).
     /// REQUIRED: must be explicitly set.
+    #[serde(default = "default_projects_root")]
     pub projects_root: String,
     /// Default directories to search for plans in projects (SPEC-005).
     #[serde(default = "default_default_plans_dirs")]
@@ -383,6 +384,10 @@ fn default_inbox_dir() -> String {
     "inbox".to_owned()
 }
 
+fn default_projects_root() -> String {
+    String::new()
+}
+
 fn default_default_plans_dirs() -> Vec<String> {
     vec!["devdocs/plans".to_owned()]
 }
@@ -543,17 +548,26 @@ impl Config {
         } else {
             let root = Path::new(&self.projects_root);
             if !root.exists() {
-                errors.push(format!("projects_root {} does not exist", self.projects_root));
-            }
-            if !root.is_dir() {
-                errors.push(format!("projects_root {} is not a directory", self.projects_root));
+                errors.push(format!(
+                    "projects_root {} does not exist",
+                    self.projects_root
+                ));
+            } else if !root.is_dir() {
+                errors.push(format!(
+                    "projects_root {} is not a directory",
+                    self.projects_root
+                ));
             }
         }
         if self.default_plans_dirs.is_empty() {
-            errors.push("default_plans_dirs must contain at least one directory (SPEC-005)".to_owned());
+            errors.push(
+                "default_plans_dirs must contain at least one directory (SPEC-005)".to_owned(),
+            );
         }
         if self.default_readme_files.is_empty() {
-            errors.push("default_readme_files must contain at least one filename (SPEC-005)".to_owned());
+            errors.push(
+                "default_readme_files must contain at least one filename (SPEC-005)".to_owned(),
+            );
         }
         if !(1..=6).contains(&self.plan_heading_min) || !(1..=6).contains(&self.plan_heading_max) {
             errors.push(format!(
@@ -856,6 +870,92 @@ allowed_user_id = 42
     fn parses_and_validates_loopback() {
         let config = Config::parse(GOOD).expect("parses");
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn spec_005_project_defaults_are_applied_when_omitted() {
+        let config = Config::parse(GOOD).expect("parses");
+
+        assert_eq!(config.default_plans_dirs, vec!["devdocs/plans".to_owned()]);
+        assert_eq!(
+            config.default_readme_files,
+            vec![
+                "README.md".to_owned(),
+                "README.txt".to_owned(),
+                "README".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn spec_005_missing_projects_root_is_a_validation_error() {
+        let config = Config::parse("opencode_url = \"http://127.0.0.1:8080\"")
+            .expect("missing projects_root uses its empty serde default");
+
+        let errors = config.validate().expect_err("projects_root is required");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("projects_root is required")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn spec_005_projects_root_must_exist_and_be_a_directory() {
+        let temp_dir = tempfile::tempdir().expect("temporary directory");
+        let missing_root = temp_dir.path().join("missing-projects");
+        let mut config = Config::parse(GOOD).expect("parses");
+        config.projects_root = missing_root.to_string_lossy().into_owned();
+
+        let errors = config.validate().expect_err("missing root is invalid");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("projects_root") && error.contains("does not exist")),
+            "{errors:?}"
+        );
+        assert!(
+            !errors
+                .iter()
+                .any(|error| error.contains("projects_root") && error.contains("not a directory")),
+            "a missing path should not produce a redundant not-a-directory error: {errors:?}"
+        );
+
+        let file_root = temp_dir.path().join("not-a-directory");
+        std::fs::write(&file_root, "file").expect("create a file root");
+        config.projects_root = file_root.to_string_lossy().into_owned();
+
+        let errors = config.validate().expect_err("file root is invalid");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("projects_root") && error.contains("not a directory")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn spec_005_default_plan_and_readme_lists_must_not_be_empty() {
+        let mut config = Config::parse(GOOD).expect("parses");
+        config.default_plans_dirs.clear();
+        config.default_readme_files.clear();
+
+        let errors = config
+            .validate()
+            .expect_err("empty project defaults are invalid");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("default_plans_dirs")),
+            "{errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("default_readme_files")),
+            "{errors:?}"
+        );
     }
 
     #[test]

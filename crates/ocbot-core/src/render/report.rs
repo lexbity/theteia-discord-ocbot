@@ -263,14 +263,13 @@ pub fn report(
     let tail = report_tail(context);
     
     // Build the content with project/plan info (SPEC-005)
-    let mut message_text = String::new();
-    if let (Some(project), Some(plan)) = (project, plan) {
-        message_text.push_str(&format!("**Project: {}**\n**Plan: {}**\n\n", project, plan));
+    let mut message_text = if let (Some(project), Some(plan)) = (project, plan) {
+        format!("**Project: {project}**\n**Plan: {plan}**\n\n{head}")
     } else if let Some(project) = project {
-        message_text.push_str(&format!("**Project: {}**\n\n", project));
-    }
-    
-    message_text.push_str(&head);
+        format!("**Project: {project}**\n\n{head}")
+    } else {
+        head
+    };
     message_text.push_str("\n```\n");
     let (excerpt, truncated) =
         report_excerpt(&report_body(outcome), &message_text, &footer_line, &tail, redactor);

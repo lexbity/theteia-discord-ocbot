@@ -115,6 +115,8 @@ pub enum Intent {
         /// The decision option (`once`/`always`/`reject`, or a form value).
         option: String,
     },
+    /// `projects`: list available projects (SPEC-005).
+    Projects,
     /// `help`: the legend and the command table.
     Help,
 }
@@ -137,6 +139,7 @@ impl Intent {
             Intent::Pick { .. } => "pick",
             Intent::Decision { verb, .. } => verb.as_str(),
             Intent::Gate { .. } => "gate",
+            Intent::Projects => "projects",
             Intent::Help => "help",
         }
     }
@@ -252,6 +255,7 @@ pub fn parse(input: &str) -> Result<Intent, GrammarError> {
             })
         }
         "gate" => parse_gate(rest),
+        "projects" => Ok(Intent::Projects),
         "help" => Ok(Intent::Help),
         other => Err(GrammarError::UnknownVerb(other.to_owned())),
     }
@@ -271,9 +275,6 @@ fn parse_run(rest: &str) -> Result<Intent, GrammarError> {
         })
     }
 }
-
-/// `ls [path] [page]`: at most two tokens; a trailing number is the page.
-
 
 /// `gate <label> <option>`: the option is the last token, the label the rest
 /// (so a label containing spaces still resolves).
@@ -417,6 +418,22 @@ mod tests {
                 verb: "gate",
                 argument: "a label and a decision"
             }
+        );
+    }
+
+    #[test]
+    fn projects_parses_with_no_arguments() {
+        assert_eq!(
+            parse("projects").unwrap(),
+            Intent::Projects
+        );
+        assert_eq!(
+            parse("PROJECTS").unwrap(),
+            Intent::Projects
+        );
+        assert_eq!(
+            parse("  projects  ").unwrap(),
+            Intent::Projects
         );
     }
 

@@ -8,7 +8,7 @@ use super::{ButtonKind, OutgoingMessage, component_button};
 
 /// Render list of projects.
 ///
-/// Displays all available projects under the projects_root directory.
+/// Displays all available projects under the `projects_root` directory.
 /// Projects are shown with their opaque display names only.
 pub fn project_list_message(
     projects: &[crate::ports::ProjectInfo],
@@ -19,7 +19,10 @@ pub fn project_list_message(
     } else {
         let mut content = "**Projects**\n".to_owned();
         for project in projects {
-            content.push_str(&format!("📁 {}\n", project.name));
+            content.push('📁');
+            content.push(' ');
+            content.push_str(&project.name);
+            content.push('\n');
         }
         content
     };
@@ -75,13 +78,13 @@ pub fn project_details_message(
 
     let readme_text = details.readme_preview
         .as_deref()
-        .map(|preview| format!("\n**README Preview**\n> {}\n", preview))
+        .map(|preview| format!("\n**README Preview**\n> {preview}\n"))
         .unwrap_or_default();
 
-    let plans_text = if !details.plans.is_empty() {
-        "\n**Available Plans**\n".to_owned()
-    } else {
+    let plans_text = if details.plans.is_empty() {
         String::new()
+    } else {
+        "\n**Available Plans**\n".to_owned()
     };
 
     let no_plans = if details.plans.is_empty() {
@@ -91,8 +94,8 @@ pub fn project_details_message(
     };
 
     let content = format!(
-        "**Project: {}**{}{}{}",
-        details.name, readme_text, plans_text, no_plans
+        "**Project: {}**{readme_text}{plans_text}{no_plans}",
+        details.name
     );
 
     OutgoingMessage {
@@ -112,8 +115,8 @@ pub fn full_readme_message(
     operator_id: u64,
 ) -> OutgoingMessage {
     let content = match readme {
-        Some(text) => format!("**Project: {} - Full README**\n\n{}", project_name, text),
-        None => format!("**Project: {}**\nNo README found.", project_name),
+        Some(text) => format!("**Project: {project_name} - Full README**\n\n{text}"),
+        None => format!("**Project: {project_name}**\nNo README found."),
     };
 
     OutgoingMessage {
@@ -121,7 +124,7 @@ pub fn full_readme_message(
         attachment: None,
         components: vec![component_button(
             "Back to Project",
-            format!("v1:project_select:{}", project_name),
+            format!("v1:project_select:{project_name}"),
             ButtonKind::Primary,
         )],
         mention_allowlist: vec![operator_id],
@@ -139,8 +142,7 @@ pub fn plan_preview_message(
 ) -> OutgoingMessage {
     let preview = content.lines().take(20).collect::<Vec<_>>().join("\n");
     let content = format!(
-        "**Project: {}**\n**Plan: {}**\n\n**Preview**\n```\n{}\n```\n",
-        project_name, plan_name, preview
+        "**Project: {project_name}**\n**Plan: {plan_name}**\n\n**Preview**\n```\n{preview}\n```\n"
     );
 
     OutgoingMessage {
@@ -149,12 +151,12 @@ pub fn plan_preview_message(
         components: vec![
             component_button(
                 "Load This Plan",
-                format!("v1:load_plan:{}:{}", project_name, plan_name),
+                format!("v1:load_plan:{project_name}:{plan_name}"),
                 ButtonKind::Success,
             ),
             component_button(
                 "Back to Project",
-                format!("v1:project_select:{}", project_name),
+                format!("v1:project_select:{project_name}"),
                 ButtonKind::Secondary,
             ),
         ],
@@ -178,23 +180,22 @@ pub fn staged_preview_project(
         super::report::LABEL_MAX_CHARS,
     );
     let content = format!(
-        "**Ready to run: {}**\n_Project: {}_\n_template: {}_\n",
-        label, project_name, template
+        "**Ready to run: {label}**\n_Project: {project_name}_\n_Template: {template}_\n"
     );
 
     OutgoingMessage {
         content,
         attachment: None,
         components: vec![
-            component_button("Send as-is", format!("v1:send:{}", action_id), ButtonKind::Primary),
-            component_button("Edit & send", format!("v1:edit:{}", action_id), ButtonKind::Secondary),
+            component_button("Send as-is", format!("v1:send:{action_id}"), ButtonKind::Primary),
+            component_button("Edit & send", format!("v1:edit:{action_id}"), ButtonKind::Secondary),
             component_button(
                 if template == "resume" {
                     "Use fresh template"
                 } else {
                     "Use resume template"
                 },
-                format!("v1:tpl:{}", action_id),
+                format!("v1:tpl:{action_id}"),
                 ButtonKind::Secondary,
             ),
         ],
@@ -306,7 +307,7 @@ mod tests {
         let message = staged_preview_project("Test Label", "prompt", 42, 123, "fresh", "user/project");
         assert!(message.content.contains("**Ready to run: Test Label**"));
         assert!(message.content.contains("_Project: user/project_"));
-        assert!(message.content.contains("_template: fresh_"));
+        assert!(message.content.contains("_Template: fresh_"));
         assert!(message.components.len() == 3);
     }
 }

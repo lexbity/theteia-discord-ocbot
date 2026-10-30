@@ -385,6 +385,7 @@ impl SignalInbound {
             }
             Intent::Decision { verb, label } => self.decide(verb, label).await,
             Intent::Gate { label, option } => self.gate(&label, &option).await,
+            Intent::Projects => self.slash("projects").await,
             Intent::Help => self.post_notice(help_text()).await,
         }
     }
