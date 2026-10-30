@@ -152,14 +152,17 @@ fn short_report_has_no_attachment() {
 
 #[test]
 fn preview_carries_send_edit_and_template_buttons() {
-    let preview = staged_preview("poke", "do the thing", 123, 9, "fresh", None);
+    let preview = staged_preview("poke", 123, 9, "fresh", "user/repo");
+    assert!(preview.content.contains("**Ready to run: poke**"));
+    assert!(preview.content.contains("_Project: user/repo_"));
+    assert!(preview.content.contains("_Template: fresh_"));
     assert_eq!(preview.components.len(), 3);
     assert_eq!(preview.components[0].custom_id, "v1:send:123");
     assert_eq!(preview.components[1].custom_id, "v1:edit:123");
     assert_eq!(preview.components[2].custom_id, "v1:tpl:123");
     assert_eq!(preview.components[2].label, "Use resume template");
     assert_eq!(preview.mention_allowlist, vec![9]);
-    let resume = staged_preview("poke", "do the thing", 123, 9, "resume", None);
+    let resume = staged_preview("poke", 123, 9, "resume", "user/repo");
     assert_eq!(resume.components[2].label, "Use fresh template");
 }
 
@@ -360,32 +363,37 @@ fn redaction_cannot_grow_the_message_past_the_cap() {
 }
 
 #[test]
-fn staged_preview_stays_within_the_cap_and_flags_truncation() {
-    // The preview embeds `{git_log}` lines of unbounded subject length.
-    let preview = staged_preview(
-        "task",
-        &"line of prompt text\n".repeat(500),
-        3,
-        9,
-        "fresh",
-        None,
+fn staged_preview_is_bounded_and_carries_no_prompt_chrome() {
+    // SPEC-005 G-01: the preview dropped the prompt, so its size is bounded
+    // structurally; oversized inputs are clamped and no fenced block ever
+    // appears.
+    let preview = staged_preview("task", 3, 9, "fresh", &"p".repeat(5_000));
+    assert!(
+        preview.content.len() < 400,
+        "the oversized name was not clamped: {} bytes",
+        preview.content.len()
     );
+    assert!(preview.content.contains('…'), "{}", preview.content);
+    assert!(!preview.content.contains("```"), "{}", preview.content);
+
+    // An oversized label is clamped too, and the template line survives.
+    let preview = staged_preview(&"l".repeat(5_000), 3, 9, "resume", "user/repo");
     assert!(
         preview.content.len() <= DISCORD_MESSAGE_CAP,
         "content was {} bytes",
         preview.content.len()
     );
+    assert!(preview.content.contains("_Template: resume_"));
+
+    // A control character inside a filesystem-sourced name cannot smuggle a
+    // line break into the italic span.
+    let preview = staged_preview("task", 3, 9, "fresh", "weird\nname\u{0007}with controls");
     assert!(
-        preview.content.contains("preview truncated"),
-        "the clamp is flagged: {}",
+        preview
+            .content
+            .contains("_Project: weird name with controls_"),
+        "{}",
         preview.content
-    );
-    // An oversized label is clamped too.
-    let preview = staged_preview(&"l".repeat(5_000), "short", 3, 9, "resume", None);
-    assert!(
-        preview.content.len() <= DISCORD_MESSAGE_CAP,
-        "content was {} bytes",
-        preview.content.len()
     );
 }
 
@@ -528,33 +536,6 @@ fn project_only_report_degrades_to_a_stats_only_footer() {
     // No duration/tokens/cost known: the stats-only footer still degrades.
     assert!(message.content.contains("Duration n/a"));
     assert!(!message.content.contains("file changed"));
-}
-
-#[test]
-fn project_preview_hides_the_prompt_and_names_the_project() {
-    let fresh = staged_preview(
-        "migrate",
-        "SECRET PROMPT TEXT",
-        44,
-        7,
-        "fresh",
-        Some("gamma"),
-    );
-    assert!(
-        !fresh.content.contains("SECRET PROMPT"),
-        "prompt stays hidden"
-    );
-    assert!(fresh.content.contains("**Ready to run: migrate**"));
-    assert!(fresh.content.contains("_Project: gamma_"));
-    assert!(fresh.content.contains("_Template: fresh_"));
-    assert_eq!(fresh.components[0].custom_id, "v1:send:44");
-    assert_eq!(fresh.components[1].custom_id, "v1:edit:44");
-    assert_eq!(fresh.components[2].label, "Use resume template");
-    assert_eq!(fresh.mention_allowlist, vec![7]);
-
-    let resume = staged_preview("migrate", "p", 44, 7, "resume", Some("gamma"));
-    assert!(resume.content.contains("_Template: resume_"));
-    assert_eq!(resume.components[2].label, "Use fresh template");
 }
 
 #[test]

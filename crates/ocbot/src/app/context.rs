@@ -197,6 +197,4 @@ pub struct AppContext {
     pub projects: Arc<dyn ProjectPort>,
     /// The project config port for loading per-project configuration (SPEC-005).
     pub project_config: Arc<dyn ProjectConfigPort>,
-    /// The projects root directory (SPEC-005).
-    pub projects_root: std::path::PathBuf,
 }

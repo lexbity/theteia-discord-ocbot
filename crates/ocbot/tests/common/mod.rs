@@ -846,7 +846,6 @@ pub fn context_with_fs(
             Arc::new(ocbot::adapters::projects::TomlProjectConfigAdapter),
         )),
         project_config: Arc::new(ocbot::adapters::projects::TomlProjectConfigAdapter),
-        projects_root: std::path::PathBuf::from("/tmp/projects"),
     })
 }
 

@@ -8,7 +8,7 @@
 use crate::outcome::Outcome;
 use crate::outcome::TokenCounts;
 
-use super::label::{collapse_whitespace, truncate_chars};
+use super::label::{collapse_whitespace, short_name, truncate_chars};
 use super::redact::Redactor;
 use super::{
     AttachmentSpec, ButtonKind, ComponentSpec, OutgoingMessage, component_button,
@@ -342,103 +342,57 @@ fn report_body(outcome: &Outcome) -> String {
     }
 }
 
-/// The note appended when the preview's fenced prompt was clamped.
-const PREVIEW_CLAMPED: &str = "\n_(preview truncated — Edit & send shows the full prompt)_";
+/// Longest opaque project name a preview shows; display names are two path
+/// components, but a hostile filesystem must not be able to grow the line.
+const PROJECT_NAME_MAX_CHARS: usize = 160;
 
-/// A preview spec for a staged action: the prompt text plus the
-/// Send / Edit-and-send buttons (`custom_id` grammar `v1:send:<id>` /
-/// `v1:edit:<id>`) and the Phase 6 template toggle (`v1:tpl:<id>`).
+/// A preview spec for a staged action: the label, the opaque project name and
+/// the template, plus the Send / Edit-and-send buttons (`custom_id` grammar
+/// `v1:send:<id>` / `v1:edit:<id>`) and the template toggle (`v1:tpl:<id>`).
 ///
 /// `template` is the envelope currently rendered (`"fresh"` or `"resume"`); the
 /// toggle button offers the *other* one. Re-rendering happens at review time so
 /// `{git_log}`/`{git_status}` are fresh (FR-6/P13).
 ///
-/// The prompt embeds operator text and `{git_log}` lines of unbounded subject
-/// length, so the fenced block is clamped to the Discord cap (P10); the stored
-/// prompt — and the Edit modal — keeps the full text.
+/// The prompt is **never shown** (SPEC-005 G-01: paths and prompt bodies stay
+/// out of user-facing chrome); the stored prompt — and the Edit modal — keep
+/// the full text.
 pub fn staged_preview(
     label: &str,
-    prompt: &str,
     action_id: i64,
     operator_id: u64,
     template: &str,
-    project_name: Option<&str>,
+    project_name: &str,
 ) -> OutgoingMessage {
     let label = truncate_chars(&collapse_whitespace(label), LABEL_MAX_CHARS);
+    let project = short_name(project_name, PROJECT_NAME_MAX_CHARS);
     let toggle_label = if template == "resume" {
         "Use fresh template"
     } else {
         "Use resume template"
     };
-
-    if let Some(project) = project_name {
-        // SPEC-005: Project-centric preview - don't show prompt, show project name
-        let content =
-            format!("**Ready to run: {label}**\n_Project: {project}_\n_Template: {template}_");
-        OutgoingMessage {
-            content,
-            attachment: None,
-            components: vec![
-                component_button(
-                    "Send as-is",
-                    format!("v1:send:{action_id}"),
-                    ButtonKind::Primary,
-                ),
-                component_button(
-                    "Edit & send",
-                    format!("v1:edit:{action_id}"),
-                    ButtonKind::Secondary,
-                ),
-                component_button(
-                    toggle_label,
-                    format!("v1:tpl:{action_id}"),
-                    ButtonKind::Secondary,
-                ),
-            ],
-            mention_allowlist: vec![operator_id],
-        }
-    } else {
-        // Legacy preview - show prompt
-        let head = format!("**Ready to run: {label}**\n_template: {template}_");
-        let fixed = head.len() + "```\n".len() * 2 + 2;
-        let neutralized = fence_neutralize(prompt);
-        let capacity = DISCORD_MESSAGE_CAP.saturating_sub(fixed);
-        let (block, truncated) = split_excerpt(&neutralized, capacity);
-        let can_mark = truncated && capacity > PREVIEW_CLAMPED.len() + 1;
-        let block = if can_mark {
-            let (clamped, _) = split_excerpt(
-                &neutralized,
-                capacity.saturating_sub(PREVIEW_CLAMPED.len() + 1),
-            );
-            clamped
-        } else {
-            block
-        };
-        let mut content = format!("{head}\n```\n{block}\n```");
-        if can_mark {
-            content.push_str(PREVIEW_CLAMPED);
-        }
-        OutgoingMessage {
-            content,
-            attachment: None,
-            components: vec![
-                component_button(
-                    "Send as-is",
-                    format!("v1:send:{action_id}"),
-                    ButtonKind::Primary,
-                ),
-                component_button(
-                    "Edit & send",
-                    format!("v1:edit:{action_id}"),
-                    ButtonKind::Secondary,
-                ),
-                component_button(
-                    toggle_label,
-                    format!("v1:tpl:{action_id}"),
-                    ButtonKind::Secondary,
-                ),
-            ],
-            mention_allowlist: vec![operator_id],
-        }
+    let content =
+        format!("**Ready to run: {label}**\n_Project: {project}_\n_Template: {template}_");
+    OutgoingMessage {
+        content,
+        attachment: None,
+        components: vec![
+            component_button(
+                "Send as-is",
+                format!("v1:send:{action_id}"),
+                ButtonKind::Primary,
+            ),
+            component_button(
+                "Edit & send",
+                format!("v1:edit:{action_id}"),
+                ButtonKind::Secondary,
+            ),
+            component_button(
+                toggle_label,
+                format!("v1:tpl:{action_id}"),
+                ButtonKind::Secondary,
+            ),
+        ],
+        mention_allowlist: vec![operator_id],
     }
 }

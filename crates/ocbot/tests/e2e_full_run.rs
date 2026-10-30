@@ -185,7 +185,12 @@ async fn upload_browse_pick_review_edit_send_report() {
         action.prompt_sent
     );
     let review = discord.edits().pop().expect("review edit").2;
-    assert!(review.content.contains("template: resume"));
+    assert!(review.content.contains("_Template: resume_"));
+    assert!(
+        !review.content.contains("Repository state:"),
+        "the rendered prompt stays out of the review chrome: {}",
+        review.content
+    );
     assert!(
         review
             .components

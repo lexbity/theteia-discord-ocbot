@@ -19,7 +19,7 @@ use ocbot_core::ports::{PlanInfo, ProjectDetails, ProjectInfo};
 use ocbot_core::render::projects::PROJECTS_PAGE_SIZE;
 use ocbot_core::render::{
     DISCORD_MESSAGE_CAP, OutgoingMessage, full_readme_message, plan_preview_message,
-    project_details_message, project_list_message, staged_preview_project,
+    project_details_message, project_list_message,
 };
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -382,48 +382,5 @@ fn plan_preview_neutralizes_fences_and_marks_truncation() {
         message.components.iter().any(
             |component| component.custom_id == format!("v1:load_plan:{project_ref}:{plan_ref}")
         )
-    );
-}
-
-#[test]
-fn staged_preview_hides_the_prompt_and_toggles_templates() {
-    let fresh = staged_preview_project("migrate", "SECRET", 7, 42, "fresh", "user/alpha");
-    assert!(!fresh.content.contains("SECRET"), "prompt is never shown");
-    assert!(fresh.content.contains("**Ready to run: migrate**"));
-    assert!(fresh.content.contains("_Project: user/alpha_"));
-    assert!(fresh.content.contains("_Template: fresh_"));
-    assert_eq!(fresh.mention_allowlist, vec![42]);
-    assert!(
-        fresh
-            .components
-            .iter()
-            .any(|component| component.custom_id == "v1:send:7")
-    );
-    assert!(
-        fresh
-            .components
-            .iter()
-            .any(|component| component.custom_id == "v1:edit:7")
-    );
-    assert!(
-        fresh
-            .components
-            .iter()
-            .any(|component| component.custom_id == "v1:tpl:7")
-    );
-    assert!(
-        fresh
-            .components
-            .iter()
-            .any(|component| component.label == "Use resume template")
-    );
-
-    let resume = staged_preview_project("migrate", "SECRET", 7, 42, "resume", "user/alpha");
-    assert!(resume.content.contains("_Template: resume_"));
-    assert!(
-        resume
-            .components
-            .iter()
-            .any(|component| component.label == "Use fresh template")
     );
 }

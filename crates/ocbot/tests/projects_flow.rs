@@ -67,7 +67,6 @@ fn project_rig() -> ProjectRig {
         default_readme_files(),
         Arc::new(TomlProjectConfigAdapter),
     ));
-    context.projects_root = temp_dir.path().to_path_buf();
     let projects = context
         .projects
         .list_projects()
@@ -388,7 +387,6 @@ async fn project_errors_never_put_paths_in_front_of_the_operator() {
             default_readme_files(),
             Arc::new(TomlProjectConfigAdapter),
         ));
-        context.projects_root = projects_root.clone();
     }
     let source = source();
     let private_path = temp_dir.path().to_string_lossy().into_owned();
@@ -488,7 +486,6 @@ async fn a_moved_project_tree_invalidates_stored_selections_for_both_run_paths()
             default_readme_files(),
             Arc::new(TomlProjectConfigAdapter),
         ));
-        ctx.projects_root = root.to_path_buf();
     };
     {
         let context = Arc::get_mut(&mut ctx).expect("exclusive test context");

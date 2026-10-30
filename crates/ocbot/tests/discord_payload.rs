@@ -52,7 +52,7 @@ fn every_message_type_carries_operator_only_mentions() {
             None,
             None,
         ),
-        staged_preview("label", "prompt text", 3, OPERATOR, "fresh", None),
+        staged_preview("label", 3, OPERATOR, "fresh", "user/repo"),
         OutgoingMessage {
             content: "status".to_owned(),
             attachment: None,

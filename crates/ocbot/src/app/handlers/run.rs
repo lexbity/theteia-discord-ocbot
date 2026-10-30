@@ -1,5 +1,7 @@
 //! The `/run` flow (spec FR-6, completed in Phase 6): directory → optional plan
-//! → item picker → rendered-prompt review (Edit & send / Send) → staged action.
+//! → item picker → staged action with an opaque review (Send as-is / Edit &
+//! send; SPEC-005 G-01 keeps the rendered prompt and any path out of the
+//! preview — the Edit modal carries the full text).
 //! The plan is read-only input parsed fresh at each open (P12); a pick only
 //! prefills the label. The dirty-tree warning with its "Run anyway" button
 //! (FR-27) and the review-time fresh/resume template toggle (P13) live here too.
@@ -32,8 +34,7 @@ const GIT_LOG_ROWS: usize = 15;
 const GIT_STATUS_LINES: usize = 15;
 
 /// Plan phase for `/run`: the new-run modal, directory prefilled from history
-/// and the plan field from the user's draft path (a browser selection or an
-/// uploaded attachment, P11).
+/// and the plan field from the user's draft path (an uploaded attachment, P11).
 pub async fn begin_modal(
     ctx: &Arc<AppContext>,
     source: &InteractionSource,
@@ -48,9 +49,9 @@ pub async fn begin_modal(
             .cloned()
             .unwrap_or_default(),
     };
-    // Only a *file* draft (an upload or a selected file) is a plausible plan;
-    // a directory selection is meant for the plan field only after `/ls` drills
-    // in, so it is not prefilled here.
+    // Only a *file* draft (an uploaded attachment, P11) is a plausible plan;
+    // the working directory lives in its own field, so a non-file draft is
+    // never prefilled here.
     let plan_prefill = ctx
         .store
         .draft_path(&source.user_id)
@@ -85,9 +86,8 @@ pub async fn begin_modal(
     })
 }
 
-/// Execute phase for the `v1:newrun` modal: validate inputs, resolve a plan when
-/// given (containment re-checked at use, FR-35), stage the action, and either
-/// post the plan picker or the rendered preview.
+/// Execute phase for the `v1:newrun` modal: read the typed inputs and stage
+/// the run through the shared [`stage_new_run`] core.
 pub async fn execute_newrun(
     ctx: &Arc<AppContext>,
     source: &InteractionSource,
@@ -105,22 +105,64 @@ pub async fn execute_newrun(
     if directory.is_empty() {
         return Err(AppError::Other("a directory is required".to_owned()));
     }
-    let canonical = ctx.fs.resolve(Path::new(&directory)).await?;
+    let plan_input = source.input("plan").map(str::trim).unwrap_or_default();
+    stage_new_run(ctx, source, &directory, Some(plan_input), label).await
+}
+
+/// Execute a new run with pre-filled directory and plan path (SPEC-005).
+/// This is used by the project-centric interface where the user selects a
+/// project and plan, not from modal inputs; the only operator-provided value
+/// is the label (SPEC-005 flow 7).
+pub async fn execute_newrun_with_presets(
+    ctx: &Arc<AppContext>,
+    source: &InteractionSource,
+    directory: &str,
+    plan_path: Option<&str>,
+    label_override: Option<String>,
+) -> Result<Option<String>, AppError> {
+    let label = label_override
+        .unwrap_or_else(|| {
+            source
+                .input("label")
+                .map(str::trim)
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .trim()
+        .to_owned();
+    if label.is_empty() {
+        return Err(AppError::Other("a label is required".to_owned()));
+    }
+    if directory.is_empty() {
+        return Err(AppError::Other("a directory is required".to_owned()));
+    }
+    stage_new_run(ctx, source, directory, plan_path, &label).await
+}
+
+/// The single staging core behind both `/run` entry points: resolve the
+/// directory through the fs port (containment re-checked at use, FR-35), read
+/// and parse the optional plan *before* any DB write so a refusal leaves zero
+/// side effects, upsert the project with its git slots, stage the action, then
+/// offer either the plan picker or the opaque preview.
+async fn stage_new_run(
+    ctx: &Arc<AppContext>,
+    source: &InteractionSource,
+    directory: &str,
+    plan_input: Option<&str>,
+    label: &str,
+) -> Result<Option<String>, AppError> {
+    let canonical = ctx.fs.resolve(Path::new(directory)).await?;
     let dir_name = canonical.to_string_lossy().into_owned();
 
-    // The plan path is optional and strictly resolved through the fs port, so a
-    // refusal happens before any DB write (zero side effects).
-    let plan_input = source.input("plan").map(str::trim).unwrap_or_default();
-    let plan_path = if plan_input.is_empty() {
-        None
-    } else {
-        Some(
+    let plan_path = match plan_input.map(str::trim) {
+        None | Some("") => None,
+        Some(path) => Some(
             ctx.fs
-                .resolve(Path::new(plan_input))
+                .resolve(Path::new(path))
                 .await?
                 .to_string_lossy()
                 .into_owned(),
-        )
+        ),
     };
     // Read and parse the plan *before* any DB write: a containment/read failure
     // must leave zero side effects (FR-35).
@@ -159,7 +201,7 @@ pub async fn execute_newrun(
         .audit(&source.user_id, "run", Some(action_id), "staged")
         .await?;
 
-    if plan_path.is_some() && !plan_options.is_empty() {
+    if !plan_options.is_empty() {
         let picker = plan_picker_message(
             label,
             &plan_options,
@@ -172,115 +214,7 @@ pub async fn execute_newrun(
         return Ok(Some("pick a plan step (or Other: type it)".to_owned()));
     }
 
-    show_preview(ctx, source, action_id, label, &prompt, "fresh", &canonical).await?;
-    Ok(Some(
-        "staged — choose **Send as-is** or **Edit & send**".to_owned(),
-    ))
-}
-
-/// Execute a new run with pre-filled directory and plan path (SPEC-005).
-/// This is used by the project-centric interface where the user selects a
-/// project and plan from the project browser, not from modal inputs.
-pub async fn execute_newrun_with_presets(
-    ctx: &Arc<AppContext>,
-    source: &InteractionSource,
-    directory: &str,
-    plan_path: Option<&str>,
-    label_override: Option<String>,
-) -> Result<Option<String>, AppError> {
-    // Use the pre-filled label if provided, otherwise get from modal input
-    let label = label_override.unwrap_or_else(|| {
-        source
-            .input("label")
-            .map(str::trim)
-            .unwrap_or_default()
-            .to_owned()
-    });
-
-    if label.is_empty() {
-        return Err(AppError::Other("a label is required".to_owned()));
-    }
-
-    if directory.is_empty() {
-        return Err(AppError::Other("a directory is required".to_owned()));
-    }
-
-    // Use the pre-filled directory (already validated by project selection)
-    let canonical = ctx.fs.resolve(Path::new(directory)).await?;
-    let dir_name = canonical.to_string_lossy().into_owned();
-
-    // Use the pre-filled plan path if provided
-    let plan_path_resolved = if let Some(path) = plan_path {
-        // The plan path from project selection is already validated
-        Some(
-            ctx.fs
-                .resolve(Path::new(path))
-                .await?
-                .to_string_lossy()
-                .into_owned(),
-        )
-    } else {
-        None
-    };
-
-    // Read and parse the plan *before* any DB write: a containment/read failure
-    // must leave zero side effects (FR-35).
-    let plan_options = match &plan_path_resolved {
-        Some(path) => load_plan(ctx, path).await?,
-        None => Vec::new(),
-    };
-
-    let (branch, base) = if ctx.git.is_repo(&canonical).await? {
-        (
-            ctx.git.branch(&canonical).await.ok(),
-            ctx.git.head(&canonical).await.ok(),
-        )
-    } else {
-        (None, None)
-    };
-    ctx.store
-        .upsert_project(&dir_name, branch.as_deref(), base.as_deref())
-        .await?;
-
-    let prompt = prompt_for(
-        ctx,
-        &canonical,
-        &label,
-        plan_path_resolved.as_deref(),
-        "fresh",
-    )
-    .await?;
-    let run_id = ctx
-        .store
-        .insert_run_with_plan(&dir_name, "free", plan_path_resolved.as_deref())
-        .await?;
-    let chat_ref = source.destination.chat_ref.0.clone();
-    let action_id = ctx
-        .store
-        .insert_action(run_id, Some(&chat_ref), &label, &prompt, 1)
-        .await?;
-    ctx.store
-        .set_action_destination(action_id, source.destination.surface.as_str(), &chat_ref)
-        .await?;
-    ctx.store.set_ui_cwd(&source.user_id, &dir_name).await?;
-    ctx.store
-        .audit(&source.user_id, "run", Some(action_id), "staged")
-        .await?;
-
-    if plan_path_resolved.is_some() && !plan_options.is_empty() {
-        let picker = plan_picker_message(
-            &label,
-            &plan_options,
-            0,
-            action_id,
-            ocbot_core::mentionable_id(&source.user_id),
-        );
-        let receipt = ctx.chat.post(&source.destination, &picker).await?;
-        ctx.store.set_origin(action_id, &receipt.msg_id.0).await?;
-        return Ok(Some("pick a plan step (or Other: type it)".to_owned()));
-    }
-
-    show_preview(ctx, source, action_id, &label, &prompt, "fresh", &canonical).await?;
+    show_preview(ctx, source, action_id, label, "fresh", &canonical).await?;
     Ok(Some(
         "staged — choose **Send as-is** or **Edit & send**".to_owned(),
     ))
@@ -321,7 +255,6 @@ pub async fn plan_pick(
         source,
         action_id,
         &option.label,
-        &prompt,
         &action.template,
         dir_path,
     )
@@ -391,16 +324,7 @@ pub async fn execute_plan_other(
     {
         return Err(AppError::AlreadyHandled);
     }
-    show_preview(
-        ctx,
-        source,
-        action_id,
-        step,
-        &prompt,
-        &action.template,
-        dir_path,
-    )
-    .await?;
+    show_preview(ctx, source, action_id, step, &action.template, dir_path).await?;
     Ok(Some("step set — review and send".to_owned()))
 }
 
@@ -418,7 +342,6 @@ pub async fn plan_use(
         source,
         action_id,
         &action.label,
-        &action.prompt_sent,
         &action.template,
         dir_path,
     )
@@ -451,16 +374,7 @@ pub async fn toggle_template(
     {
         return Err(AppError::AlreadyHandled);
     }
-    show_preview(
-        ctx,
-        source,
-        action_id,
-        &action.label,
-        &prompt,
-        next,
-        dir_path,
-    )
-    .await?;
+    show_preview(ctx, source, action_id, &action.label, next, dir_path).await?;
     Ok(Some(format!("template: {next}")))
 }
 
@@ -492,11 +406,11 @@ pub async fn execute_send(
     let directory = run_directory(ctx, action.run_id).await?;
 
     if tree_dirty(ctx, &directory).await? && !action.include_existing {
+        let project_name = ocbot_core::paths::project_display_name(&directory);
         let message = OutgoingMessage {
             content: format!(
                 "⚠️ **{}**\nThe worktree at `{}` has uncommitted changes. Running will include them (FR-27).",
-                action.label,
-                directory.display(),
+                action.label, project_name,
             ),
             attachment: None,
             components: vec![component_button(
@@ -696,41 +610,26 @@ async fn load_plan(ctx: &Arc<AppContext>, plan_path: &str) -> Result<Vec<PickOpt
 
 /// Post (or edit in place) the staged preview and remember its origin.
 /// For project-centric runs, this uses the project name in the preview.
+/// Render the staged-action preview: label, opaque project name and template
+/// only (SPEC-005 G-01) — the stored prompt and the Edit modal keep the full
+/// text. Every staged surface (modal runs, project runs, picks, template
+/// toggles) renders through this one path.
 async fn show_preview(
     ctx: &Arc<AppContext>,
     source: &InteractionSource,
     action_id: i64,
     label: &str,
-    prompt: &str,
     template: &str,
     directory: &Path,
 ) -> Result<(), AppError> {
-    // Check if this directory is under projects_root (SPEC-005)
-    let is_project_run = directory.starts_with(&ctx.projects_root);
-
-    let preview = if is_project_run {
-        // Project-centric preview: don't show prompt, show project name
-        let project_name = ocbot_core::paths::project_display_name(directory);
-        ocbot_core::render::projects::staged_preview_project(
-            label,
-            prompt,
-            action_id,
-            ocbot_core::mentionable_id(&source.user_id),
-            template,
-            &project_name,
-        )
-    } else {
-        // Legacy preview: show prompt in code block
-        ocbot_core::render::staged_preview(
-            label,
-            prompt,
-            action_id,
-            ocbot_core::mentionable_id(&source.user_id),
-            template,
-            None,
-        )
-    };
-
+    let project_name = ocbot_core::paths::project_display_name(directory);
+    let preview = ocbot_core::render::staged_preview(
+        label,
+        action_id,
+        ocbot_core::mentionable_id(&source.user_id),
+        template,
+        &project_name,
+    );
     if let Some(receipt) = source.receipt() {
         ctx.chat.edit(&receipt, &preview).await;
     } else {

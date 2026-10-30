@@ -92,7 +92,6 @@ pub async fn run_from_env() -> Result<(), String> {
             Arc::new(crate::adapters::projects::TomlProjectConfigAdapter),
         )),
         project_config: Arc::new(crate::adapters::projects::TomlProjectConfigAdapter),
-        projects_root: std::path::PathBuf::from("/tmp/projects"),
     });
 
     match mode.as_str() {

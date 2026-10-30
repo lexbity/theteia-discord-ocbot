@@ -80,7 +80,6 @@ fn rig() -> Rig {
             default_readme_files(),
             Arc::new(TomlProjectConfigAdapter),
         ));
-        context.projects_root = temp_dir.path().to_path_buf();
     }
     let project_name = ctx
         .projects

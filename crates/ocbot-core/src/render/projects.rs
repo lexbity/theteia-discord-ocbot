@@ -10,6 +10,7 @@ use std::ops::Range;
 use crate::paths::{plan_action_token, project_action_token};
 use crate::render::report::{DISCORD_MESSAGE_CAP, fence_neutralize, split_excerpt};
 
+use super::label::{safe_name, short_name};
 use super::{ButtonKind, OutgoingMessage, component_button};
 
 /// Maximum number of selectable projects on one message page.
@@ -21,24 +22,6 @@ const PROJECT_LIST_TEXT_BUDGET: usize = 1_650;
 const README_PREVIEW_BUDGET: usize = 500;
 const README_PAGE_BODY_BUDGET: usize = 1_250;
 const PLAN_PREVIEW_MARKER: &str = "\n...[truncated]";
-
-fn safe_name(name: &str) -> String {
-    name.chars()
-        .map(|character| {
-            if character == '`' {
-                '\''
-            } else if character.is_control() {
-                ' '
-            } else {
-                character
-            }
-        })
-        .collect()
-}
-
-fn short_name(name: &str, max_chars: usize) -> String {
-    super::label::truncate_chars(&safe_name(name), max_chars)
-}
 
 fn char_prefix_bytes(text: &str, max_bytes: usize) -> usize {
     text.char_indices()
@@ -407,52 +390,6 @@ fn text_pages(text: &str, max_bytes: usize) -> Vec<String> {
     pages
 }
 
-/// Render staged preview for project-centric runs.
-///
-/// Shows the staged run information with project name but without exposing paths.
-pub fn staged_preview_project(
-    label: &str,
-    _prompt: &str, // Don't show prompt to user
-    action_id: i64,
-    operator_id: u64,
-    template: &str,
-    project_name: &str,
-) -> OutgoingMessage {
-    let label = super::label::truncate_chars(
-        &super::label::collapse_whitespace(label),
-        super::report::LABEL_MAX_CHARS,
-    );
-    let content =
-        format!("**Ready to run: {label}**\n_Project: {project_name}_\n_Template: {template}_\n");
-
-    OutgoingMessage {
-        content,
-        attachment: None,
-        components: vec![
-            component_button(
-                "Send as-is",
-                format!("v1:send:{action_id}"),
-                ButtonKind::Primary,
-            ),
-            component_button(
-                "Edit & send",
-                format!("v1:edit:{action_id}"),
-                ButtonKind::Secondary,
-            ),
-            component_button(
-                if template == "resume" {
-                    "Use fresh template"
-                } else {
-                    "Use resume template"
-                },
-                format!("v1:tpl:{action_id}"),
-                ButtonKind::Secondary,
-            ),
-        ],
-        mention_allowlist: vec![operator_id],
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -814,16 +751,6 @@ mod tests {
     }
 
     #[test]
-    fn test_staged_preview_project() {
-        let message =
-            staged_preview_project("Test Label", "prompt", 42, 123, "fresh", "user/project");
-        assert!(message.content.contains("**Ready to run: Test Label**"));
-        assert!(message.content.contains("_Project: user/project_"));
-        assert!(message.content.contains("_Template: fresh_"));
-        assert_eq!(message.components.len(), 3);
-    }
-
-    #[test]
     fn byte_name_truncation_handles_zero_and_multibyte_limits() {
         assert_eq!(truncate_utf8_bytes("text", 0), "");
         assert_eq!(truncate_utf8_bytes("abcdef", 4), "a…");
@@ -887,24 +814,6 @@ mod tests {
                 .components
                 .iter()
                 .all(|component| !component.custom_id.starts_with("v1:readme_page:"))
-        );
-    }
-
-    #[test]
-    fn staged_preview_switches_the_template_button_for_resume_runs() {
-        let resumed = staged_preview_project("Label", "prompt", 7, 123, "resume", "user/project");
-        assert!(resumed.content.contains("_Template: resume_"));
-        assert!(
-            resumed
-                .components
-                .iter()
-                .any(|component| component.label == "Use fresh template")
-        );
-        assert!(
-            resumed
-                .components
-                .iter()
-                .all(|component| component.label != "Use resume template")
         );
     }
 }

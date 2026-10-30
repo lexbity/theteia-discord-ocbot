@@ -43,7 +43,6 @@ pub use legend::{
 pub use policy::{ReportExcerpt, SUPPRESSED_ATTACHMENT_HINT, SurfacePolicy, apply_surface_policy};
 pub use projects::{
     full_readme_message, plan_preview_message, project_details_message, project_list_message,
-    staged_preview_project,
 };
 pub use redact::{REDACTED, RedactError, Redactor};
 pub use report::{

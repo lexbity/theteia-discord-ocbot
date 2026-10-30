@@ -34,6 +34,28 @@ pub(crate) fn inline_safe(text: &str) -> String {
     collapse_whitespace(text).replace('`', "'")
 }
 
+/// Rewrite a filesystem-sourced name so it cannot break the inline span it is
+/// placed in: a backtick would close the span early and a control character
+/// (newline included) could smuggle raw markup, so both become plain text.
+pub(crate) fn safe_name(name: &str) -> String {
+    name.chars()
+        .map(|character| {
+            if character == '`' {
+                '\''
+            } else if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
+}
+
+/// A sanitized name clamped to at most `max_chars` characters.
+pub(crate) fn short_name(name: &str, max_chars: usize) -> String {
+    truncate_chars(&safe_name(name), max_chars)
+}
+
 /// Truncate `text` to at most `max_chars` characters on a char boundary,
 /// marking the cut with an ellipsis. Callers budget message sizes in bytes;
 /// a char cap merely bounds the worst case (each char is at least its own
@@ -49,7 +71,18 @@ pub fn truncate_chars(text: &str, max_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{collapse_whitespace, inline_safe};
+    use super::{collapse_whitespace, inline_safe, safe_name, short_name, truncate_chars};
+
+    #[test]
+    fn short_name_neutralizes_and_clamps() {
+        assert_eq!(
+            short_name("user/pro`ject\u{0007}-alpha", 80),
+            "user/pro'ject -alpha"
+        );
+        assert_eq!(short_name(&"n".repeat(50), 10), "nnnnnnnnn…");
+        assert_eq!(safe_name("plain"), "plain");
+        assert_eq!(truncate_chars("exactly", 100), "exactly");
+    }
 
     #[test]
     fn collapse_trims_and_squashes_whitespace() {

@@ -229,13 +229,15 @@ pub async fn resume(
             action.id,
         )
         .await?;
+    // SPEC-005 G-01: the parked-retry preview carries the opaque project name;
+    // the stored prompt (re-staged verbatim into the child) stays out of the
+    // message chrome.
     let preview = staged_preview(
         &action.label,
-        &action.prompt_sent,
         child,
         ocbot_core::mentionable_id(operator),
         &action.template,
-        None,
+        &ocbot_core::paths::project_display_name(&dir),
     );
     ctx.chat.post(&dest, &preview).await?;
     checkpoint("CP-P4");

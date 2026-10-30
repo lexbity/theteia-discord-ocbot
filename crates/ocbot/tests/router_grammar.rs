@@ -388,11 +388,23 @@ async fn the_discord_command_table_matches_the_router_slash_grammar() {
         "every router verb must be registered with Discord and vice versa"
     );
     // Modal-led commands (`run`, `prompt`) have no execute slash arm: their
-    // work runs on the modal submit. Every other planned verb must dispatch.
+    // work runs on the modal submit. The difference is pinned exactly — a new
+    // modal-led verb or an accidentally double-routed verb both fail here.
     let plan_verbs = slash_verbs("plan");
-    for verb in slash_verbs("execute") {
+    let execute_verbs = slash_verbs("execute");
+    let modal_led: Vec<String> = plan_verbs
+        .iter()
+        .filter(|verb| !execute_verbs.contains(verb))
+        .cloned()
+        .collect();
+    assert_eq!(
+        modal_led,
+        vec!["prompt".to_owned(), "run".to_owned()],
+        "only the modal-led commands may plan without an execute slash arm"
+    );
+    for verb in &execute_verbs {
         assert!(
-            plan_verbs.contains(&verb),
+            plan_verbs.contains(verb),
             "execute dispatches `{verb}` but plan does not know it"
         );
     }

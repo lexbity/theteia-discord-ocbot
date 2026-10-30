@@ -400,7 +400,6 @@ pub async fn start() -> ExitCode {
         ls_page_size: config.ls_page_size,
         projects,
         project_config: project_config_adapter,
-        projects_root: Path::new(&config.projects_root).to_path_buf(),
     });
 
     // The Signal inbound pump needs the context (it routes through the same

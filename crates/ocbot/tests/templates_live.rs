@@ -1,6 +1,7 @@
-//! P13: the rendered prompt is stored verbatim and what the preview shows is
-//! byte-for-byte that stored prompt; Park & redo re-stages the *stored* prompt,
-//! never a re-render.
+//! P13 + SPEC-005 G-01: the rendered prompt is stored verbatim and reaches the
+//! operator only through the Edit modal — the staged preview is opaque chrome
+//! (label, project name, template) and never carries the prompt or a path.
+//! Park & redo re-stages the *stored* prompt, never a re-render.
 
 #![allow(
     clippy::unwrap_used,
@@ -16,6 +17,7 @@ use std::sync::Arc;
 use ocbot::adapters::store::StoreHandle;
 use ocbot::app::handlers::{park, run};
 use ocbot::app::interaction::{InteractionSource, SourceKind, TextInput};
+use ocbot_core::paths::project_display_name;
 use ocbot_core::ports::OpenCodePort;
 
 use common::{FakeChat, FakeGit, FakeOpenCode, append_file, context, init_repo, write_file};
@@ -43,14 +45,6 @@ fn modal(custom_id: &str, values: &[(&str, &str)]) -> InteractionSource {
     }
 }
 
-/// The fenced prompt body inside a `staged_preview` message.
-fn fenced(content: &str) -> &str {
-    let start = content.find("```\n").expect("opening fence") + 4;
-    let rest = &content[start..];
-    let end = rest.find("\n```").expect("closing fence");
-    &rest[..end]
-}
-
 fn make_repo(tmp: &tempfile::TempDir) -> std::path::PathBuf {
     let repo = tmp.path().join("work");
     std::fs::create_dir_all(&repo).expect("mkdir");
@@ -61,7 +55,7 @@ fn make_repo(tmp: &tempfile::TempDir) -> std::path::PathBuf {
 }
 
 #[tokio::test]
-async fn preview_shows_the_stored_prompt_byte_for_byte() {
+async fn preview_hides_the_prompt_and_the_edit_modal_keeps_it_verbatim() {
     let tmp = tempfile::tempdir().expect("tmp");
     let repo = make_repo(&tmp);
     let store = StoreHandle::open_in_memory().expect("store");
@@ -96,10 +90,33 @@ async fn preview_shows_the_stored_prompt_byte_for_byte() {
         .pop()
         .expect("action");
     let preview = discord.last_post().expect("preview").message;
+
+    // The whole preview is opaque chrome: label, display name, template —
+    // exactly, byte-for-byte, and nothing of the rendered prompt.
+    let project = project_display_name(&repo);
     assert_eq!(
-        fenced(&preview.content),
-        action.prompt_sent,
-        "the preview body is the stored prompt exactly"
+        preview.content,
+        format!("**Ready to run: verbatim**\n_Project: {project}_\n_Template: fresh_"),
+        "the preview is the opaque trio and nothing else"
+    );
+    assert!(
+        !action.prompt_sent.is_empty(),
+        "a rendered prompt exists to hide"
+    );
+    assert!(
+        !preview.content.contains(&action.prompt_sent),
+        "the prompt never rides the preview"
+    );
+
+    // P13's verbatim contract now lives where the operator actually needs it:
+    // the Edit modal prefills the stored prompt exactly.
+    let spec = run::edit_modal(&ctx, action.id)
+        .await
+        .expect("edit modal opens");
+    assert_eq!(
+        spec.inputs.first().and_then(|input| input.value.as_deref()),
+        Some(action.prompt_sent.as_str()),
+        "the Edit modal keeps the full stored prompt byte-for-byte"
     );
 }
 
@@ -142,6 +159,27 @@ async fn park_restages_the_stored_prompt_not_a_rerender() {
         "park reuses the stored prompt"
     );
     assert_eq!(staged[0].template, "fresh", "the template travels with it");
+
+    // The retry preview shows the same opaque chrome as any staging — the
+    // stored prompt is verbatim in the row, never in the message.
     let preview = discord.last_post().expect("retry preview").message;
-    assert_eq!(fenced(&preview.content), "STORED-PROMPT-8f3");
+    assert!(
+        !preview.content.contains("STORED-PROMPT-8f3"),
+        "{}",
+        preview.content
+    );
+    assert!(
+        !preview
+            .content
+            .contains(&repo.to_string_lossy().into_owned()),
+        "{}",
+        preview.content
+    );
+    let project = project_display_name(&repo);
+    assert!(
+        preview.content.contains(&format!("_Project: {project}_")),
+        "{}",
+        preview.content
+    );
+    assert!(preview.content.contains("_Template: fresh_"));
 }

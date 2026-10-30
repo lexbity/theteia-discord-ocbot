@@ -450,8 +450,12 @@ fn parse_form_pick(raw: &str) -> Result<(i64, String), AppError> {
 }
 
 /// Parse an opaque project token from a `custom_id` segment (SPEC-005).
+///
+/// The token shape is defined once by [`ocbot_core::paths::is_action_token`];
+/// repeating the literal grammar here would let the parser and the token
+/// minters drift apart.
 fn parse_project_token(raw: &str) -> Result<String, AppError> {
-    if raw.len() != 16 || !raw.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if !ocbot_core::paths::is_action_token(raw) {
         return Err(AppError::UnknownCustomId(
             "invalid project token".to_owned(),
         ));
