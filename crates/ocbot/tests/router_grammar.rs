@@ -326,3 +326,111 @@ async fn execute_toggles_the_staged_template() {
     assert_eq!(row.template, "resume");
     assert_eq!(row.state, ocbot_core::State::Staged);
 }
+
+/// The slice of the router source between a function's slash-command match
+/// head and its component arm, as `&str`.
+///
+/// `plan` is the first `SourceKind::SlashCommand` in the file, `execute` the
+/// last; the verbs are the quoted lowercase-letter literals in that segment.
+/// This mirrors how `router_prefix_sync` reads the router (SPEC-002 §4.4) so
+/// the slash grammar cannot drift from the adapter command table unnoticed.
+fn slash_segment(function: &str) -> String {
+    const MARKER: &str = "SourceKind::SlashCommand { name } => match name.as_str()";
+    let source = include_str!("../src/app/router.rs");
+    let start = match function {
+        "plan" => source.find(MARKER),
+        "execute" => source.rfind(MARKER),
+        other => panic!("unknown router function {other}"),
+    }
+    .expect("both plan and execute dispatch slash commands by name");
+    let rest = &source[start..];
+    let end = rest
+        .find("SourceKind::Component")
+        .expect("the component arm follows the slash arm");
+    rest[..end].to_owned()
+}
+
+/// The slash verbs the router dispatches in `plan` / `execute`, sorted.
+fn slash_verbs(function: &str) -> Vec<String> {
+    let mut verbs: Vec<String> = slash_segment(function)
+        .split('"')
+        .skip(1)
+        .step_by(2)
+        .filter(|literal| !literal.is_empty() && literal.chars().all(|ch| ch.is_ascii_alphabetic()))
+        .map(str::to_owned)
+        .collect();
+    verbs.sort();
+    verbs
+}
+
+/// SPEC-005 phase 10 drift guard: the Discord application-command table and
+/// the router's slash grammar are one contract. A command registered but not
+/// routed is a dead picker entry (the former `/ls` and `/cd`); a command
+/// routed but not registered is unreachable (`/projects` was, briefly).
+#[tokio::test]
+async fn the_discord_command_table_matches_the_router_slash_grammar() {
+    let mut registered: Vec<String> = ocbot::adapters::discord::SLASH_COMMANDS
+        .iter()
+        .map(|(name, _description)| (*name).to_owned())
+        .collect();
+    registered.sort();
+    let mut unique = registered.clone();
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        registered.len(),
+        "SLASH_COMMANDS contains a duplicate entry"
+    );
+
+    assert_eq!(
+        slash_verbs("plan"),
+        registered,
+        "every router verb must be registered with Discord and vice versa"
+    );
+    // Modal-led commands (`run`, `prompt`) have no execute slash arm: their
+    // work runs on the modal submit. Every other planned verb must dispatch.
+    let plan_verbs = slash_verbs("plan");
+    for verb in slash_verbs("execute") {
+        assert!(
+            plan_verbs.contains(&verb),
+            "execute dispatches `{verb}` but plan does not know it"
+        );
+    }
+
+    // Behavioural half: every registered name must survive the real plan
+    // phase (the textual match arms and the router cannot disagree).
+    let store = StoreHandle::open_in_memory().expect("store");
+    let ctx = base_ctx(&store);
+    for name in &registered {
+        assert!(
+            !matches!(
+                router::guarded_plan(&ctx, &slash(name)).await,
+                PlanOutcome::Failed(_)
+            ),
+            "{name} is registered but the router cannot plan it"
+        );
+    }
+    // And the SPEC-005 entry point defers publicly like the other readers.
+    assert!(matches!(
+        router::guarded_plan(&ctx, &slash("projects")).await,
+        PlanOutcome::Plan(AckPlan::DeferPublic)
+    ));
+    // The mirror image: a command Discord would never send (or a stale client
+    // inventing one) is refused loudly by both phases, never silently routed.
+    // `ls` and `cd` are pinned explicitly: SPEC-005 removed them, and they must
+    // stay removed from both the plan and the execute grammar.
+    for name in ["ls", "cd", "nonsense"] {
+        assert!(
+            matches!(
+                router::guarded_plan(&ctx, &slash(name)).await,
+                PlanOutcome::Failed(_)
+            ),
+            "{name} must fail the plan phase"
+        );
+        let result = router::execute(&ctx, &slash(name)).await;
+        assert!(
+            matches!(result, Err(ocbot::app::error::AppError::UnknownCommand(_))),
+            "{name} must fail the execute phase: {result:?}"
+        );
+    }
+}

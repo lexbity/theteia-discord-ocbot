@@ -164,7 +164,7 @@ pub fn help_text() -> String {
         "`run [dir]` — start a run (then send the prompt)".to_owned(),
         "`prompt [text]` — prompt the current directory's session".to_owned(),
         "`status` · `abort` · `release` · `mute` · `reset`".to_owned(),
-        "`ls [dir] [page]` · `cd <dir>` — browse".to_owned(),
+        "`projects` — browse projects and their plans".to_owned(),
         "`history [page]` — git history".to_owned(),
         "`send [label]` — send the staged action".to_owned(),
         "`edit [label]` — rewrite the staged prompt".to_owned(),
@@ -180,7 +180,9 @@ pub fn help_text() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ACCEPT_EMOJI, LegendEntry, PARK_EMOJI, keycap, normalize_emoji, render_legend};
+    use super::{
+        ACCEPT_EMOJI, LegendEntry, PARK_EMOJI, help_text, keycap, normalize_emoji, render_legend,
+    };
     use crate::render::ButtonKind;
     use crate::render::component_button;
 
@@ -250,5 +252,51 @@ mod tests {
         assert_eq!(normalize_emoji("🅿️"), "🅿");
         assert_eq!(normalize_emoji("🅿"), "🅿");
         assert_eq!(normalize_emoji(ACCEPT_EMOJI), ACCEPT_EMOJI);
+    }
+
+    #[test]
+    fn help_text_advertises_the_projects_verb_not_the_removed_browser() {
+        // SPEC-005: the filesystem browser is gone; the command table must
+        // reflect exactly what the surfaces can still route.
+        let text = help_text();
+        assert!(text.contains("`projects`"), "{text}");
+        assert!(!text.contains("ls [dir]"), "{text}");
+        assert!(!text.contains("cd <dir>"), "{text}");
+    }
+
+    #[test]
+    fn every_verb_advertised_by_help_text_resolves_on_the_surfaces() {
+        // Each backticked token in the command table must either be a verb the
+        // shared grammar knows (argument-missing still proves it routes) or be
+        // the flow-cancel keyword; a verb the bot advertises but no surface
+        // routes is a dead command (SPEC-005 phase 10).
+        let verbs: Vec<String> = help_text()
+            .split('`')
+            .skip(1)
+            .step_by(2)
+            .map(|token| {
+                token
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned()
+            })
+            .flat_map(|head| head.split('|').map(str::to_owned).collect::<Vec<_>>())
+            .filter(|verb| !verb.is_empty())
+            .collect();
+        assert!(!verbs.is_empty(), "the command table must advertise verbs");
+        for verb in verbs {
+            // `Ok` or `MissingArgument` both prove the verb is a real grammar
+            // entry; only an unknown verb means the table advertises a dead
+            // command.
+            let known = matches!(
+                crate::grammar::parse(&verb),
+                Ok(_) | Err(crate::grammar::GrammarError::MissingArgument { .. })
+            );
+            assert!(
+                known || crate::render::is_cancel(&verb),
+                "`{verb}` is advertised but no surface routes it"
+            );
+        }
     }
 }

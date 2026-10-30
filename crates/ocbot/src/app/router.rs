@@ -328,8 +328,9 @@ pub async fn execute(
             } else if let Some(page) = custom_id.strip_prefix("v1:projects:p:") {
                 handlers::projects::list_projects(ctx, parse_page(page)?, source).await?;
                 Ok(None)
-            } else if let Some(project) = custom_id.strip_prefix("v1:project_select:") {
-                handlers::projects::select_project(ctx, project, source).await?;
+            } else if let Some(rest) = custom_id.strip_prefix("v1:project_select:") {
+                let project = parse_project_token(rest)?;
+                handlers::projects::select_project(ctx, &project, source).await?;
                 Ok(None)
             } else if let Some(rest) = custom_id.strip_prefix("v1:project_page:") {
                 let (project, page) = parse_project_page(rest)?;

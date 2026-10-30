@@ -494,25 +494,34 @@ fn located_source(
     }
 }
 
+/// The slash commands this adapter registers with Discord (SPEC-005).
+///
+/// This table is the Discord face of the router's slash grammar: every name
+/// here must be a verb `router::plan` dispatches, and every verb the router
+/// dispatches must be registered here (a registered-but-unrouted command is a
+/// dead entry in the picker; a routed-but-unregistered command is
+/// unreachable). `tests/router_grammar.rs` pins the table against the router
+/// source and the real plan phase, so neither side can drift alone.
+pub const SLASH_COMMANDS: &[(&str, &str)] = &[
+    ("run", "Start a prompt run in a directory"),
+    ("prompt", "Send a free-form prompt to a directory's session"),
+    ("status", "Bot and server status"),
+    ("history", "Action history for the current directory"),
+    ("reset", "Reset the directory to a live commit"),
+    ("release", "Release a held directory lock"),
+    (
+        "abort",
+        "Interrupt the running action in the current directory",
+    ),
+    ("mute", "Toggle inbox reports for the current directory"),
+    ("projects", "Browse projects and their plans"),
+];
+
 #[serenity::async_trait]
 impl EventHandler for BotEvents {
     async fn ready(&self, ctx: Context, ready: Ready) {
         tracing::info!(user = %ready.user.name, "connected to discord");
-        for (name, description) in [
-            ("run", "Start a prompt run in a directory"),
-            ("prompt", "Send a free-form prompt to a directory's session"),
-            ("status", "Bot and server status"),
-            ("history", "Action history for the current directory"),
-            ("reset", "Reset the directory to a live commit"),
-            ("release", "Release a held directory lock"),
-            (
-                "abort",
-                "Interrupt the running action in the current directory",
-            ),
-            ("mute", "Toggle inbox reports for the current directory"),
-            ("ls", "Browse directories under the configured roots"),
-            ("cd", "Open a directory in the browser"),
-        ] {
+        for &(name, description) in SLASH_COMMANDS {
             let command = CreateCommand::new(name).description(description);
             if let Err(error) = ctx.http.create_global_command(&command).await {
                 tracing::warn!(command = name, error = %error, "command registration failed");

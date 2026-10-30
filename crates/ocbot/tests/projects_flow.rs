@@ -459,7 +459,11 @@ async fn a_moved_project_tree_invalidates_stored_selections_for_both_run_paths()
     // stored path.
     let temp_dir = tempfile::tempdir().expect("temporary parent");
     let alpha = |parent: &std::path::Path| {
-        let plans = parent.join("root").join("project-alpha").join("devdocs").join("plans");
+        let plans = parent
+            .join("root")
+            .join("project-alpha")
+            .join("devdocs")
+            .join("plans");
         std::fs::create_dir_all(&plans).expect("plan directory");
         std::fs::write(plans.join("roadmap.md"), "# Roadmap\n\n1. First step\n").expect("plan");
         parent.join("root")

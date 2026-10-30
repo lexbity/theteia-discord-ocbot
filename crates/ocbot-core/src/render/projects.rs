@@ -156,9 +156,10 @@ pub fn project_list_message(
     let mut components = Vec::new();
     for project in &ordered[range] {
         content.push_str(&project_line(project, PROJECT_LIST_TEXT_BUDGET));
+        let project_ref = project_action_token(&project.name);
         components.push(component_button(
             format!("📁 {}", short_name(&project.name, 77)),
-            format!("v1:project_select:{}", project_action_token(&project.name)),
+            format!("v1:project_select:{project_ref}"),
             ButtonKind::Primary,
         ));
     }
@@ -242,12 +243,10 @@ pub fn project_details_message(
         );
         for plan in &plans[range] {
             content.push_str(&plan_line(plan, plan_text_budget));
+            let plan_ref = plan_action_token(&details.name, &plan.name);
             components.push(component_button(
                 format!("📄 {}", short_name(&plan.name, 77)),
-                format!(
-                    "v1:plan_select:{project_ref}:{}",
-                    plan_action_token(&details.name, &plan.name)
-                ),
+                format!("v1:plan_select:{project_ref}:{plan_ref}"),
                 ButtonKind::Primary,
             ));
         }
