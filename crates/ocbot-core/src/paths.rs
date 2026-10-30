@@ -45,11 +45,12 @@ pub fn slug(label: &str) -> String {
     }
 }
 
-/// A stable 64-bit FNV-1a hash of a directory path, rendered as 16 hex chars.
+/// A stable 64-bit FNV-1a hash of an identifier string, rendered as 16 hex
+/// characters.
 ///
-/// Used in `v1:release:<dir_hash>` so a button can name a directory without
-/// carrying it (or any UI state) in the `custom_id` (D-6). The mapping is
-/// resolved at click time by hashing each held-lock directory and comparing.
+/// Used in component IDs when carrying a path or project/plan name would exceed
+/// platform limits or expose unnecessary details. This is not authorization:
+/// the handler resolves the token against current project state before acting.
 pub fn dir_hash(dir: &str) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in dir.as_bytes() {
@@ -57,6 +58,22 @@ pub fn dir_hash(dir: &str) -> String {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     format!("{hash:016x}")
+}
+
+/// Build a short opaque identifier for a project used in interactive component
+/// IDs. The token is stable across restarts and does not expose the project name.
+/// It is an identifier, not an authorization credential; callers must still
+/// resolve it against the configured project set.
+pub fn project_action_token(project_name: &str) -> String {
+    dir_hash(&format!("project\0{project_name}"))
+}
+
+/// Build a short opaque identifier for a plan scoped to one project.
+///
+/// Scoping the token to both names prevents two projects with an identically
+/// named plan from sharing the same component identifier.
+pub fn plan_action_token(project_name: &str, plan_name: &str) -> String {
+    dir_hash(&format!("plan\0{project_name}\0{plan_name}"))
 }
 
 /// Lexical containment: does `candidate` live at or under `root`?
@@ -199,7 +216,10 @@ pub fn project_display_name(dir: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{SLUG_MAX, dir_hash, project_display_name, slug};
+    use super::{
+        SLUG_MAX, dir_hash, plan_action_token, project_action_token, project_display_name, slug,
+        yyyymmdd,
+    };
 
     #[test]
     fn slug_is_branch_safe() {
@@ -232,11 +252,38 @@ mod tests {
     }
 
     #[test]
+    fn civil_date_conversion_handles_negative_eras_and_gregorian_leap_rules() {
+        // Year zero is a leap year in the proleptic Gregorian calendar; these
+        // dates cross the algorithm's negative-era boundary around 0000-03-01.
+        assert_eq!(yyyymmdd(-62_167_219_200), "00000101");
+        assert_eq!(yyyymmdd(-62_162_121_600), "00000229");
+        assert_eq!(yyyymmdd(-62_162_035_200), "00000301");
+        assert_eq!(yyyymmdd(-62_135_596_800), "00010101");
+
+        // 1900 is not a leap year, while 2000 is divisible by 400.
+        assert_eq!(yyyymmdd(-2_208_988_800), "19000101");
+        assert_eq!(yyyymmdd(951_782_400), "20000229");
+    }
+
+    #[test]
     fn dir_hash_is_stable_and_short() {
         let a = dir_hash("/home/lex/work");
         assert_eq!(a.len(), 16);
         assert_eq!(a, dir_hash("/home/lex/work"));
         assert_ne!(a, dir_hash("/home/lex/other"));
+    }
+
+    #[test]
+    fn project_action_tokens_are_short_stable_and_scoped() {
+        let project = project_action_token("user/project");
+        assert_eq!(project.len(), 16);
+        assert_eq!(project, project_action_token("user/project"));
+        assert_ne!(project, project_action_token("user/other"));
+
+        let plan = plan_action_token("user/project", "roadmap.md");
+        assert_eq!(plan.len(), 16);
+        assert_ne!(plan, plan_action_token("user/other", "roadmap.md"));
+        assert_ne!(plan, plan_action_token("user/project", "other.md"));
     }
 
     #[test]

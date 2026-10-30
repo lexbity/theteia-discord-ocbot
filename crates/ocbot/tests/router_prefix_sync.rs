@@ -6,19 +6,19 @@
 //! but not the other would either leave the interaction un-acked (timeout) or
 //! acked and then left unanswered (`UnknownCustomId` after the deferral).
 //!
-//! `DEFERRED_PREFIXES` is now the single source of truth. This test reads the
-//! router source with `include_str!` so a reintroduced literal list or a missing
-//! `execute` route turns this test red, and it drives every listed prefix
-//! through the real `guarded_plan` seam so the constant cannot drift from
-//! behaviour.
+//! `DEFERRED_PREFIXES` and `EXACT_DEFERRED_IDS` are the sources of truth. This
+//! test reads the router source with `include_str!` so a reintroduced literal
+//! list or a missing `execute` route turns this test red, and it drives every
+//! listed component through the real `guarded_plan` seam so declarations cannot
+//! drift from behaviour.
 //!
 //! Interpretation of FR-16: the state-dependent button families
 //! (`v1:send:`, `v1:runany:`, `v1:accept:`, `v1:park:`, `v1:discard:`,
 //! `v1:gate:`) are *not* plain deferrals — `plan` routes them through a
 //! per-action preflight that may return a modal or an ephemeral re-ack. They
 //! therefore live in their own branches, and the invariant this test enforces is
-//! that the *plain* deferral set is expressed exactly once, in
-//! `DEFERRED_PREFIXES`, and is wired to both phases.
+//! that the *plain* deferral set is expressed once in those two constants and is
+//! wired to both phases.
 
 #![allow(
     clippy::unwrap_used,
@@ -112,6 +112,18 @@ fn constant_prefixes() -> Vec<String> {
     literals(&rest[open..close])
 }
 
+/// Exact component IDs whose plan is a plain deferral.
+fn exact_deferred_ids() -> Vec<String> {
+    let source = router_source();
+    let start = source
+        .find("const EXACT_DEFERRED_IDS")
+        .expect("EXACT_DEFERRED_IDS is defined");
+    let rest = &source[start..];
+    let open = rest.find("= &[").expect("constant is an array") + 4;
+    let close = rest[open..].find(']').expect("array is closed") + open;
+    literals(&rest[open..close])
+}
+
 fn source(kind: SourceKind) -> InteractionSource {
     InteractionSource {
         kind,
@@ -146,6 +158,8 @@ fn base_ctx(store: &StoreHandle) -> Arc<AppContext> {
 async fn prefix_sync() {
     let constant = constant_prefixes();
     assert!(!constant.is_empty(), "DEFERRED_PREFIXES must not be empty");
+    let exact = exact_deferred_ids();
+    assert!(!exact.is_empty(), "EXACT_DEFERRED_IDS must not be empty");
 
     let mut unique = constant.clone();
     unique.sort();
@@ -156,14 +170,18 @@ async fn prefix_sync() {
         "DEFERRED_PREFIXES contains a duplicate entry"
     );
 
-    // `is_deferred_action` must derive from the constant and may only mention
-    // the history-pager special case; any other literal would be a
+    // `is_deferred_action` must derive from the two constants and may only
+    // mention the history-pager special case; any other literal would be a
     // reintroduced hardcoded list (FR-15).
     let router = router_source();
     let predicate = function_body(router, "fn is_deferred_action(");
     assert!(
         predicate.contains("DEFERRED_PREFIXES"),
         "is_deferred_action must use DEFERRED_PREFIXES, not an inline list"
+    );
+    assert!(
+        predicate.contains("EXACT_DEFERRED_IDS"),
+        "is_deferred_action must use EXACT_DEFERRED_IDS, not an inline list"
     );
     assert_eq!(
         literals(predicate),
@@ -181,29 +199,39 @@ async fn prefix_sync() {
     let execute = function_body(router, "fn execute(");
 
     let mut all = constant.clone();
+    all.extend(exact.iter().cloned());
     all.push(PAGE_HISTORY.to_owned());
 
     // Every deferred prefix must have an execute route; otherwise the ack is
     // sent and the follow-up dies as UnknownCustomId (a silent timeout bug).
-    for prefix in &all {
-        let route = format!("strip_prefix(\"{prefix}\")");
+    for id in &all {
+        let route = if exact.contains(id) {
+            format!("custom_id == \"{id}\"")
+        } else {
+            format!("strip_prefix(\"{id}\")")
+        };
         assert!(
             execute.contains(&route),
-            "{prefix:?} is deferred by plan but has no execute route (missing {route})"
+            "{id:?} is deferred by plan but has no execute route (missing {route})"
         );
     }
 
     // Behavioural sync: every listed prefix really plans a `DeferUpdate`.
     let store = StoreHandle::open_in_memory().expect("store");
     let ctx = base_ctx(&store);
-    for prefix in &all {
-        let source = component(&format!("{prefix}sync"));
+    for id in &all {
+        let custom_id = if exact.contains(id) {
+            id.clone()
+        } else {
+            format!("{id}sync")
+        };
+        let source = component(&custom_id);
         assert!(
             matches!(
                 router::guarded_plan(&ctx, &source).await,
                 PlanOutcome::Plan(AckPlan::DeferUpdate)
             ),
-            "{prefix} must plan a DeferUpdate through the real router"
+            "{custom_id} must plan a DeferUpdate through the real router"
         );
     }
 

@@ -390,6 +390,174 @@ fn staged_preview_stays_within_the_cap_and_flags_truncation() {
 }
 
 #[test]
+fn aborted_and_empty_headlines_render_with_an_empty_fence() {
+    let aborted = plain_report(
+        "poke",
+        &Outcome::Aborted,
+        &Footer::default(),
+        &done_context(1, true),
+    );
+    assert!(aborted.content.contains("⏹ Aborted — **poke**"));
+    assert!(
+        aborted.content.contains("```\n\n```"),
+        "an aborted run has no body to excerpt"
+    );
+    // Non-completed outcomes carry followup/park/discard (report.rs).
+    assert_eq!(aborted.components[2].custom_id, "v1:discard:1");
+
+    let empty = plain_report(
+        "poke",
+        &Outcome::Empty,
+        &Footer::default(),
+        &done_context(1, true),
+    );
+    assert!(empty.content.contains("⬜ Empty — **poke**"));
+    assert!(empty.content.contains("```\n\n```"));
+}
+
+#[test]
+fn footer_duration_scales_from_sub_second_to_hours() {
+    let render = |secs: f64| {
+        Footer {
+            duration_secs: Some(secs),
+            ..Footer::default()
+        }
+        .render()
+    };
+    assert_eq!(render(0.5), "Duration <1s");
+    assert_eq!(render(45.0), "Duration 45s");
+    assert_eq!(render(90.0), "Duration 1m 30s");
+    assert_eq!(render(120.0), "Duration 2m");
+    assert_eq!(render(3_725.0), "Duration 1h 2m");
+}
+
+#[test]
+fn footer_tokens_and_cost_render_in_both_scales() {
+    let render = |input: f64, output: f64, reasoning: f64| {
+        Footer {
+            tokens: Some(TokenCounts {
+                input,
+                output,
+                reasoning,
+            }),
+            ..Footer::default()
+        }
+        .render()
+    };
+    assert_eq!(render(120.0, 30.0, 0.0), "150 tok");
+    assert_eq!(render(1_500.0, 0.0, 0.0), "1.5k tok");
+    // A zero total contributes nothing rather than "0 tok".
+    assert_eq!(render(0.0, 0.0, 0.0), "Duration n/a");
+    let cost = Footer {
+        cost: Some(0.126),
+        ..Footer::default()
+    };
+    assert_eq!(cost.render(), "$0.13");
+}
+
+#[test]
+fn blank_or_unsummarizable_diff_stat_disappears_from_the_footer() {
+    let blank = Footer {
+        diff_stat: Some("   \n".to_owned()),
+        ..Footer::default()
+    };
+    assert_eq!(blank.render(), "Duration n/a");
+    // No summary line: the first line stands in, trimmed.
+    let no_summary = Footer {
+        diff_stat: Some("whatever.txt | 1 +\n".to_owned()),
+        ..Footer::default()
+    };
+    assert_eq!(no_summary.render(), "whatever.txt | 1 +");
+}
+
+#[test]
+fn project_centric_report_shows_names_but_never_the_diff_stat() {
+    let footer = Footer {
+        diff_stat: Some(" 2 files changed, 5 insertions(+), 1 deletion(-)".to_owned()),
+        duration_secs: Some(90.0),
+        tokens: Some(TokenCounts {
+            input: 100.0,
+            output: 50.0,
+            reasoning: 0.0,
+        }),
+        cost: Some(0.25),
+    };
+    let message = report(
+        "ship",
+        &Outcome::Completed {
+            report: "did the thing".to_owned(),
+        },
+        &footer,
+        &done_context(9, true),
+        &Redactor::default(),
+        Some("alpha"),
+        Some("login-rework"),
+    );
+    assert!(message.content.contains("**Project: alpha**"));
+    assert!(message.content.contains("**Plan: login-rework**"));
+    // The stats survive; the path-bearing diff stat does not (SPEC-005).
+    assert!(message.content.contains("Duration 1m 30s"));
+    assert!(message.content.contains("150 tok"));
+    assert!(message.content.contains("$0.25"));
+    assert!(
+        !message.content.contains("insertions"),
+        "no diff stat inline"
+    );
+    assert!(!message.content.contains("files changed"));
+}
+
+#[test]
+fn project_only_report_degrades_to_a_stats_only_footer() {
+    let footer = Footer {
+        diff_stat: Some(" 1 file changed, 1 insertion(+)".to_owned()),
+        ..Footer::default()
+    };
+    let message = report(
+        "poke",
+        &Outcome::Completed {
+            report: "ok".to_owned(),
+        },
+        &footer,
+        &done_context(3, true),
+        &Redactor::default(),
+        Some("beta"),
+        None,
+    );
+    assert!(message.content.contains("**Project: beta**"));
+    assert!(!message.content.contains("**Plan:"), "no plan was given");
+    // No duration/tokens/cost known: the stats-only footer still degrades.
+    assert!(message.content.contains("Duration n/a"));
+    assert!(!message.content.contains("file changed"));
+}
+
+#[test]
+fn project_preview_hides_the_prompt_and_names_the_project() {
+    let fresh = staged_preview(
+        "migrate",
+        "SECRET PROMPT TEXT",
+        44,
+        7,
+        "fresh",
+        Some("gamma"),
+    );
+    assert!(
+        !fresh.content.contains("SECRET PROMPT"),
+        "prompt stays hidden"
+    );
+    assert!(fresh.content.contains("**Ready to run: migrate**"));
+    assert!(fresh.content.contains("_Project: gamma_"));
+    assert!(fresh.content.contains("_Template: fresh_"));
+    assert_eq!(fresh.components[0].custom_id, "v1:send:44");
+    assert_eq!(fresh.components[1].custom_id, "v1:edit:44");
+    assert_eq!(fresh.components[2].label, "Use resume template");
+    assert_eq!(fresh.mention_allowlist, vec![7]);
+
+    let resume = staged_preview("migrate", "p", 44, 7, "resume", Some("gamma"));
+    assert!(resume.content.contains("_Template: resume_"));
+    assert_eq!(resume.components[2].label, "Use fresh template");
+}
+
+#[test]
 fn report_respects_the_cap_across_a_deterministic_corpus() {
     // Deterministic xorshift battery (the client's tolerant-serde house
     // style): adversarial sizes and shapes for label, body, footer, and

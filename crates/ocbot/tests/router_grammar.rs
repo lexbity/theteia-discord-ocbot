@@ -19,6 +19,7 @@ use ocbot::adapters::store::StoreHandle;
 use ocbot::app::context::AppContext;
 use ocbot::app::interaction::{AckPlan, InteractionSource, SourceKind, TextInput};
 use ocbot::app::router::{self, PlanOutcome};
+use ocbot_core::paths::{plan_action_token, project_action_token};
 
 const OPERATOR: u64 = 42;
 const CHANNEL: u64 = 7;
@@ -223,6 +224,34 @@ async fn phase_seven_component_families_plan_a_defer_or_modal() {
         router::guarded_plan(&ctx, &component("v1:send:not-a-number")).await,
         PlanOutcome::Failed(_)
     ));
+}
+
+#[tokio::test]
+async fn project_renderer_controls_are_acknowledged_as_deferred_updates() {
+    let store = StoreHandle::open_in_memory().expect("store");
+    let ctx = base_ctx(&store);
+    let project = project_action_token("user/project");
+    let plan = plan_action_token("user/project", "plan.md");
+
+    for id in [
+        "v1:projects".to_owned(),
+        "v1:projects:p:1".to_owned(),
+        format!("v1:project_select:{project}"),
+        format!("v1:project_page:{project}:1"),
+        format!("v1:readme_full:{project}"),
+        format!("v1:readme_page:{project}:1"),
+        format!("v1:plan_select:{project}:{plan}"),
+        format!("v1:load_plan:{project}:{plan}"),
+        format!("v1:run_noplan:{project}"),
+    ] {
+        assert!(
+            matches!(
+                router::guarded_plan(&ctx, &component(&id)).await,
+                PlanOutcome::Plan(AckPlan::DeferUpdate)
+            ),
+            "{id} defers"
+        );
+    }
 }
 
 #[tokio::test]

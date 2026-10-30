@@ -94,28 +94,45 @@ jobs:
       - run: ./scripts/coverage.sh
 
   mutants:
-    # Scoped mutation check for the diff (NFR-8); nightly runs the full core.
+    # Mutate only changed core production lines per PR/push. Nightly still
+    # mutates the complete core crate. Four round-robin shards run concurrently;
+    # their union tests every mutant in the diff.
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-mutants
-      - run: >-
-          cargo mutants
-          --file crates/ocbot-core/src/state.rs
-          --file crates/ocbot-core/src/render/mod.rs
-          --file crates/ocbot-core/src/render/report.rs
-          --file crates/ocbot-core/src/render/gate.rs
-          --file crates/ocbot-core/src/render/browser.rs
-          --file crates/ocbot-core/src/render/redact.rs
-          --file crates/ocbot-core/src/render/label.rs
-          --file crates/ocbot-core/src/history.rs
-          --file crates/ocbot-core/src/plan.rs
-          --file crates/ocbot-core/src/paths.rs
-          --test-package ocbot-core
-        continue-on-error: false
+      - name: Mutate changed core code
+        env:
+          MUTANT_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          MUTANT_HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          diff_file="$RUNNER_TEMP/core-mutants.diff"
+          if [[ "$MUTANT_BASE_SHA" =~ ^0+$ ]]; then
+            git diff-tree --root --no-commit-id -p --unified=0 "$MUTANT_HEAD_SHA" > "$diff_file"
+          else
+            git diff --no-ext-diff --unified=0 "$MUTANT_BASE_SHA" "$MUTANT_HEAD_SHA" > "$diff_file"
+          fi
+          if ! grep -qE '^diff --git a/crates/ocbot-core/src/[^ ]+\.rs b/crates/ocbot-core/src/[^ ]+\.rs$' "$diff_file"; then
+            echo "No ocbot-core production source changed; skipping scoped mutation run."
+            exit 0
+          fi
+          cargo mutants \
+            --in-diff "$diff_file" \
+            --shard ${{ matrix.shard }}/4 \
+            --sharding round-robin \
+            --file 'crates/ocbot-core/src/**/*.rs' \
+            --test-package ocbot-core
 
   typos:
     # Docs-side spelling check (Phase 7 exit criteria).

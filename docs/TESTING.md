@@ -28,7 +28,7 @@ flowchart TB
 | Chaos | SIGKILL at any crash point loses no accepted work | Every PR (snapshot) / nightly (real SIGKILL) |
 | Live | The real server and gateway contracts | Nightly, or manually with `--ignored` |
 | Fuzz | Hostile JSON never panics the client | Nightly |
-| Mutation | Tests would catch behavioral mutants | Scoped per PR, full core nightly |
+| Mutation | Tests would catch behavioral mutants | Changed core source per PR/push, full core nightly |
 
 ## Running the suites
 
@@ -109,10 +109,12 @@ cargo fuzz run surface_fuzz --sanitizer address -- -max_total_time=120
 ## Mutation testing
 
 `cargo-mutants` checks that tests would catch real behavior changes.
-Per PR, CI mutates the core decision modules (state, render, history, plan, paths); nightly mutates all of `ocbot-core`.
+Per PR/push, CI mutates every generated mutant in changed `ocbot-core/src` lines. It partitions that complete diff-scoped set across four round-robin jobs; the diff filter excludes unchanged source but does not cap or sample changed code. Nightly still mutates all of `ocbot-core`.
 
 ```sh
-cargo mutants --file crates/ocbot-core/src/state.rs --test-package ocbot-core
+git diff --no-ext-diff --unified=0 origin/main HEAD > /tmp/opencode/core-mutants.diff
+cargo mutants --in-diff /tmp/opencode/core-mutants.diff \
+  --file 'crates/ocbot-core/src/**/*.rs' --test-package ocbot-core
 ```
 
 Recent recorded results (2026-10-08, see [nfr](nfr.md)): `plan.rs` 52 mutants, 0 missed; `paths.rs` 95/100; `stall.rs` 10/10.

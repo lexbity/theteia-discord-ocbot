@@ -369,6 +369,56 @@ mod tests {
                 label: None
             }
         );
+        assert_eq!(
+            parse("park").unwrap(),
+            Intent::Decision {
+                verb: DecisionVerb::Park,
+                label: None
+            }
+        );
+        assert_eq!(
+            parse("discard").unwrap(),
+            Intent::Decision {
+                verb: DecisionVerb::Discard,
+                label: None
+            }
+        );
+    }
+
+    #[test]
+    fn decision_verbs_keep_their_text_and_component_spellings() {
+        let cases = [
+            (DecisionVerb::Accept, "accept", "v1:accept:"),
+            (DecisionVerb::Park, "park", "v1:park:"),
+            (DecisionVerb::FollowUp, "follow", "v1:followup:"),
+            (DecisionVerb::Discard, "discard", "v1:discard:"),
+        ];
+        for (verb, spelling, component_prefix) in cases {
+            assert_eq!(verb.as_str(), spelling);
+            assert_eq!(verb.custom_id_prefix(), component_prefix);
+            let intent = Intent::Decision { verb, label: None };
+            assert_eq!(intent.verb(), spelling);
+            assert_eq!(intent.to_string(), spelling);
+        }
+    }
+
+    #[test]
+    fn intent_and_grammar_errors_display_their_canonical_text() {
+        assert_eq!(Intent::Projects.to_string(), "projects");
+        assert_eq!(Intent::History { page: Some(2) }.to_string(), "history");
+        assert_eq!(GrammarError::Empty.to_string(), "no command given");
+        assert_eq!(
+            GrammarError::UnknownVerb("mystery".to_owned()).to_string(),
+            "unknown command \"mystery\" — send `help`"
+        );
+        assert_eq!(
+            GrammarError::MissingArgument {
+                verb: "pick",
+                argument: "a numeric step",
+            }
+            .to_string(),
+            "`pick` needs a numeric step"
+        );
     }
 
     #[test]
@@ -426,6 +476,26 @@ mod tests {
         assert_eq!(parse("projects").unwrap(), Intent::Projects);
         assert_eq!(parse("PROJECTS").unwrap(), Intent::Projects);
         assert_eq!(parse("  projects  ").unwrap(), Intent::Projects);
+    }
+
+    #[test]
+    fn history_page_parsing_preserves_zero_and_rejects_invalid_numbers() {
+        assert_eq!(parse("history").unwrap(), Intent::History { page: None });
+        assert_eq!(
+            parse("history 0").unwrap(),
+            Intent::History { page: Some(0) }
+        );
+        assert_eq!(
+            parse("history 7").unwrap(),
+            Intent::History { page: Some(7) }
+        );
+        assert_eq!(
+            parse("history nope").unwrap_err(),
+            GrammarError::MissingArgument {
+                verb: "history",
+                argument: "a numeric page"
+            }
+        );
     }
 
     #[test]

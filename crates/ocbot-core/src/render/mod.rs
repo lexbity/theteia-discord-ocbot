@@ -56,6 +56,29 @@ pub use label::truncate_chars;
 
 pub(crate) use label::collapse_whitespace;
 
+#[cfg(test)]
+mod mention_tests {
+    use super::{mention_allowlist, mentionable_id};
+
+    #[test]
+    fn mention_ids_are_limited_to_valid_discord_actors() {
+        assert_eq!(mention_allowlist("discord:42"), vec![42]);
+        assert_eq!(mentionable_id("discord:42"), 42);
+        assert!(mention_allowlist("signal:+15551234567").is_empty());
+        assert_eq!(mentionable_id("signal:+15551234567"), 0);
+        assert!(mention_allowlist("discord:not-a-number").is_empty());
+        assert_eq!(mentionable_id("discord:not-a-number"), 0);
+    }
+
+    #[test]
+    fn signal_actors_never_enter_the_discord_mention_allowlist() {
+        for actor in ["signal:+15551234567", "signal:operator", "unknown:42"] {
+            assert!(mention_allowlist(actor).is_empty(), "{actor}");
+            assert_eq!(mentionable_id(actor), 0, "{actor}");
+        }
+    }
+}
+
 /// The FR-3 mention allowlist for one actor: the Discord snowflake when the
 /// actor is a Discord identity, and empty on every other surface (which has no
 /// mention mechanism and ignores the field). The Discord adapter enforces the

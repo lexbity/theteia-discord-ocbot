@@ -143,7 +143,7 @@ impl PostReceipt {
 
 #[cfg(test)]
 mod tests {
-    use super::{ActorId, Destination, MsgId, PostReceipt, Surface};
+    use super::{ActorId, ChatRef, Destination, MsgId, PostReceipt, Surface};
 
     #[test]
     fn surface_round_trips() {
@@ -180,5 +180,16 @@ mod tests {
             msg_id: MsgId("456".to_owned()),
         };
         assert_eq!(receipt.to_receipt_string(), "discord:456");
+    }
+
+    #[test]
+    fn surface_identity_types_display_their_canonical_values() {
+        assert_eq!(Surface::Signal.to_string(), "signal");
+        assert_eq!(ChatRef("chat-123".to_owned()).to_string(), "chat-123");
+        assert_eq!(MsgId("message-456".to_owned()).to_string(), "message-456");
+        assert_eq!(
+            ActorId::from_parts(Surface::Discord, "42").to_string(),
+            "discord:42"
+        );
     }
 }

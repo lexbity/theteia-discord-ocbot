@@ -192,6 +192,8 @@ pub fn modal_ids() -> Vec<String> {
 /// The state-dependent button families (`v1:send:`, `v1:runany:`, `v1:accept:`,
 /// `v1:park:`, `v1:discard:`, `v1:gate:`) have their own preflight branches and
 /// are deliberately not plain deferrals.
+const EXACT_DEFERRED_IDS: &[&str] = &["v1:projects"];
+
 const DEFERRED_PREFIXES: &[&str] = &[
     "v1:reset:",
     "v1:resetgo:",
@@ -202,8 +204,11 @@ const DEFERRED_PREFIXES: &[&str] = &[
     "v1:planp:",
     "v1:planuse:",
     "v1:tpl:",
+    "v1:projects:p:",
     "v1:project_select:",
+    "v1:project_page:",
     "v1:readme_full:",
+    "v1:readme_page:",
     "v1:plan_select:",
     "v1:load_plan:",
     "v1:run_noplan:",
@@ -211,9 +216,10 @@ const DEFERRED_PREFIXES: &[&str] = &[
 
 /// Custom ids whose plan is a plain deferral (all work is in the execute pass).
 fn is_deferred_action(custom_id: &str) -> bool {
-    DEFERRED_PREFIXES
-        .iter()
-        .any(|prefix| custom_id.starts_with(prefix))
+    EXACT_DEFERRED_IDS.contains(&custom_id)
+        || DEFERRED_PREFIXES
+            .iter()
+            .any(|prefix| custom_id.starts_with(prefix))
         || custom_id.starts_with("v1:page:history:")
 }
 
@@ -254,7 +260,7 @@ pub async fn execute(
                 Ok(None)
             }
             "projects" => {
-                handlers::projects::list_projects(ctx, source).await?;
+                handlers::projects::list_projects(ctx, 0, source).await?;
                 Ok(None)
             }
             other => Err(AppError::UnknownCommand(other.to_owned())),
@@ -310,21 +316,32 @@ pub async fn execute(
                 // A Component `v1:planother` plans a modal and never executes.
                 Err(AppError::AlreadyHandled)
             } else if custom_id == "v1:projects" {
-                handlers::projects::list_projects(ctx, source).await?;
+                handlers::projects::list_projects(ctx, 0, source).await?;
+                Ok(None)
+            } else if let Some(page) = custom_id.strip_prefix("v1:projects:p:") {
+                handlers::projects::list_projects(ctx, parse_page(page)?, source).await?;
                 Ok(None)
             } else if let Some(project) = custom_id.strip_prefix("v1:project_select:") {
                 handlers::projects::select_project(ctx, project, source).await?;
                 Ok(None)
+            } else if let Some(rest) = custom_id.strip_prefix("v1:project_page:") {
+                let (project, page) = parse_project_page(rest)?;
+                handlers::projects::show_project_page(ctx, &project, page, source).await?;
+                Ok(None)
             } else if let Some(rest) = custom_id.strip_prefix("v1:readme_full:") {
-                let project = parse_project_name(rest)?;
-                handlers::projects::show_full_readme(ctx, &project, source).await?;
+                let project = parse_project_token(rest)?;
+                handlers::projects::show_full_readme(ctx, &project, 0, source).await?;
+                Ok(None)
+            } else if let Some(rest) = custom_id.strip_prefix("v1:readme_page:") {
+                let (project, page) = parse_project_page(rest)?;
+                handlers::projects::show_full_readme(ctx, &project, page, source).await?;
                 Ok(None)
             } else if let Some(rest) = custom_id.strip_prefix("v1:plan_select:") {
-                let (project, plan) = parse_project_and_plan(rest)?;
+                let (project, plan) = parse_project_and_plan_tokens(rest)?;
                 handlers::projects::select_plan(ctx, &project, &plan, source).await?;
                 Ok(None)
             } else if let Some(rest) = custom_id.strip_prefix("v1:load_plan:") {
-                let (project, plan) = parse_project_and_plan(rest)?;
+                let (project, plan) = parse_project_and_plan_tokens(rest)?;
                 handlers::projects::load_plan_and_run(ctx, &project, &plan, source).await
             } else if let Some(project) = custom_id.strip_prefix("v1:run_noplan:") {
                 handlers::projects::run_without_plan(ctx, project, source).await
@@ -418,28 +435,31 @@ fn parse_form_pick(raw: &str) -> Result<(i64, String), AppError> {
     Ok((parse_action_id(id)?, value.to_owned()))
 }
 
-/// Parse a project name from a `custom_id` segment (SPEC-005).
-/// The project name may contain path separators but not colons.
-fn parse_project_name(raw: &str) -> Result<String, AppError> {
-    if raw.is_empty() {
-        return Err(AppError::UnknownCustomId("empty project name".to_owned()));
+/// Parse an opaque project token from a `custom_id` segment (SPEC-005).
+fn parse_project_token(raw: &str) -> Result<String, AppError> {
+    if raw.len() != 16 || !raw.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(AppError::UnknownCustomId(
+            "invalid project token".to_owned(),
+        ));
     }
-    // Project names are opaque and may contain path separators
     Ok(raw.to_owned())
 }
 
-/// Parse project and plan names from a `custom_id` segment (SPEC-005).
-/// Format: `project_name:plan_name`.
-fn parse_project_and_plan(raw: &str) -> Result<(String, String), AppError> {
+/// Parse project and plan tokens from a `custom_id` segment (SPEC-005).
+/// Format: `project_token:plan_token`.
+fn parse_project_and_plan_tokens(raw: &str) -> Result<(String, String), AppError> {
     let (project, plan) = raw
         .split_once(':')
         .ok_or_else(|| AppError::UnknownCustomId(format!("bad project:plan pair {raw:?}")))?;
-    if project.is_empty() || plan.is_empty() {
-        return Err(AppError::UnknownCustomId(format!(
-            "empty project or plan name in {raw:?}"
-        )));
-    }
-    Ok((project.to_owned(), plan.to_owned()))
+    Ok((parse_project_token(project)?, parse_project_token(plan)?))
+}
+
+/// Parse `<project-token>:<page>` for project and README navigation.
+fn parse_project_page(raw: &str) -> Result<(String, usize), AppError> {
+    let (project, page) = raw
+        .split_once(':')
+        .ok_or_else(|| AppError::UnknownCustomId(format!("bad project page {raw:?}")))?;
+    Ok((parse_project_token(project)?, parse_page(page)?))
 }
 
 /// Load an action and assert it is in one of `allowed`; a state mismatch is a

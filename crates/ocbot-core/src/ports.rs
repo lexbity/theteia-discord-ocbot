@@ -301,6 +301,28 @@ pub fn default_readme_files() -> Vec<String> {
     ]
 }
 
+#[cfg(test)]
+mod project_default_tests {
+    use super::{default_plans_dirs, default_readme_files};
+
+    #[test]
+    fn default_readme_names_are_complete_and_ordered() {
+        assert_eq!(
+            default_readme_files(),
+            vec![
+                "README.md".to_owned(),
+                "README.txt".to_owned(),
+                "README".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn default_plan_directories_are_configured_in_order() {
+        assert_eq!(default_plans_dirs(), vec!["devdocs/plans".to_owned()]);
+    }
+}
+
 /// Per-project configuration loaded from `ocbot.toml` (SPEC-005 Q5).
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields, default)]
