@@ -101,32 +101,18 @@ pub trait Clock: Send + Sync {
     fn now(&self) -> i64;
 }
 
-/// One directory entry as shown by the `/ls` browser.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DirEntry {
-    /// The base name.
-    pub name: String,
-    /// The absolute path (realpath'd, contained).
-    pub path: String,
-    /// Whether the entry is a directory.
-    pub is_dir: bool,
-}
-
-/// The filesystem surface (spec P11/FR-34/FR-35/FR-36). The adapter owns
-/// `realpath`, the containment re-check at every use (TOCTOU), the browser
-/// readdir, and attachment persistence.
+/// The filesystem surface (spec P11/FR-34/FR-35/FR-36; the `/ls` browser was
+/// removed by SPEC-005). The adapter owns `realpath`, the containment re-check
+/// at every use (TOCTOU), and attachment persistence.
 #[async_trait]
 pub trait FsPort: Send + Sync {
-    /// `realpath` `path` and verify it is inside a configured browse root
+    /// `realpath` `path` and verify it is inside a configured containment root
     /// (unless freeform paths are enabled), re-checking containment at the
     /// moment of use.
     async fn resolve(&self, path: &Path) -> Result<std::path::PathBuf, FsError>;
     /// Read `path` as UTF-8 after a containment re-check (P12: the plan is read
     /// fresh each open).
     async fn read_text(&self, path: &Path) -> Result<String, FsError>;
-    /// List `path` (dirs first, then name), hiding dotfiles unless
-    /// `show_hidden`.
-    async fn list(&self, path: &Path, show_hidden: bool) -> Result<Vec<DirEntry>, FsError>;
     /// Persist an attachment under `INBOX_DIR/<yyyymmdd>/<tag8>-<sanitized>`
     /// and return its absolute path (FR-36).
     async fn save_attachment(
@@ -134,11 +120,6 @@ pub trait FsPort: Send + Sync {
         filename: &str,
         bytes: &[u8],
     ) -> Result<std::path::PathBuf, FsError>;
-    /// The configured browse roots (realpath'd).
-    fn roots(&self) -> Vec<std::path::PathBuf>;
-    /// Whether freeform typed paths bypass the browse-root containment check
-    /// (`ALLOW_FREEFORM_PATHS`, default false — P11).
-    fn allow_freeform(&self) -> bool;
 }
 
 /// One row of `git log`.

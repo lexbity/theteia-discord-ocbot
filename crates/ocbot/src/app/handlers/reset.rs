@@ -24,7 +24,7 @@ pub async fn confirm(
     let dir = crate::app::handlers::support::history_dir(ctx, &source.user_id).await?;
     let content = format!(
         "Reset `{}` to `{}`?\nThis creates `superseded/<ts>` first, then runs `git reset --hard` (FR-28). The tree must be clean.",
-        dir,
+        crate::app::handlers::support::display_name(&dir),
         short(sha)
     );
     let message = crate::app::handlers::support::with_button(

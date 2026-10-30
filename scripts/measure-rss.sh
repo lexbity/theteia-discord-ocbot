@@ -31,8 +31,10 @@ allowed_user_id = 42
 metrics_bind = "127.0.0.1:19464"
 permissions_file = "$ROOT/config/opencode.permissions.jsonc"
 browse_roots = ["$WORK"]
+projects_root = "$WORK/projects"
 inbox_dir = "$WORK/inbox"
 EOF
+mkdir -p "$WORK/projects"
 
 DISCORD_TOKEN=dummy-token \
 OPENCODE_PASSWORD=dummy-password \

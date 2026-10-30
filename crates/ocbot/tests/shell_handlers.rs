@@ -179,9 +179,15 @@ async fn release_lists_confirms_and_frees_the_lock() {
 
     release::list(&ctx, &slash("release")).await.expect("list");
     let listed = discord.last_post().expect("list posted").message;
+    // SPEC-005: locks are named by their opaque project name, never a path.
     assert!(
-        listed.content.contains("/tmp/release"),
+        listed.content.contains("`tmp/release`"),
         "{}",
+        listed.content
+    );
+    assert!(
+        !listed.content.contains("/tmp/release"),
+        "the absolute path leaked: {}",
         listed.content
     );
     assert_eq!(listed.components.len(), 1);

@@ -1,8 +1,8 @@
 //! Boot fault lines (SPEC-004 PH-3 coverage lift): the remaining *early-exit*
 //! families in `run.rs` that the boot matrix does not reach — an fs adapter
-//! that rejects its browse roots, a non-loopback opencode url refused by the
-//! client, and the FR-42 ruleset branch (on by config) that the default-off
-//! gate (G13) otherwise leaves dark.
+//! that rejects its containment roots, a non-loopback opencode url refused by
+//! the client, and the FR-42 ruleset branch (on by config) that the
+//! default-off gate (G13) otherwise leaves dark.
 
 #![allow(
     clippy::unwrap_used,

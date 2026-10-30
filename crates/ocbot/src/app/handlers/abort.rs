@@ -22,7 +22,12 @@ pub async fn execute(ctx: &Arc<AppContext>, source: &InteractionSource) -> Resul
         .store
         .running_action_for_dir(&dir)
         .await?
-        .ok_or_else(|| AppError::Other(format!("no running action in `{dir}`")))?;
+        .ok_or_else(|| {
+            AppError::Other(format!(
+                "no running action in `{}`",
+                crate::app::handlers::support::display_name(&dir)
+            ))
+        })?;
     let session_id = action.session_id.clone().ok_or_else(|| {
         AppError::Other("the running action has no session (invariant)".to_owned())
     })?;

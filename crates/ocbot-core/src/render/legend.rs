@@ -106,7 +106,7 @@ pub fn normalize_emoji(emoji: &str) -> String {
 /// Render the legend for a message's components.
 ///
 /// Fixed decision verbs map to their emoji; gate components map to keycaps by
-/// order. Every other component (paging, plan picker, browser rows, send/edit)
+/// order. Every other component (paging, plan picker, history rows, send/edit)
 /// has no reaction: it is listed as a text hint by the caller, never here. A
 /// disabled component is named in the line struck-through but is deliberately
 /// **absent** from the entries — reacting on it resolves to nothing (FR-15).

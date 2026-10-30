@@ -20,15 +20,15 @@ pub async fn list(ctx: &Arc<AppContext>, source: &InteractionSource) -> Result<(
         content.push_str("(none held)\n");
     }
     for project in &locks {
+        let display = crate::app::handlers::support::display_name(&project.dir);
         let _ = writeln!(
             content,
-            "• `{}` — holder {} since {}",
-            project.dir,
+            "• `{display}` — holder {} since {}",
             project.lock_holder.as_deref().unwrap_or("?"),
             project.lock_since.unwrap_or_default()
         );
         components.push(component_button(
-            format!("Release {}", short_dir(&project.dir)),
+            format!("Release {}", clamp_name(&display)),
             format!("v1:releaseq:{}", dir_hash(&project.dir)),
             ButtonKind::Danger,
         ));
@@ -52,7 +52,10 @@ pub async fn confirm(
     let dir = resolve(ctx, hash).await?;
     let holder = ctx.store.lock_holder(&dir).await?.unwrap_or_default();
     let message = crate::app::handlers::support::with_button(
-        format!("Release the lock on `{dir}` (holder {holder})?"),
+        format!(
+            "Release the lock on `{}` (holder {holder})?",
+            crate::app::handlers::support::display_name(&dir)
+        ),
         "Confirm release",
         format!("v1:release:{hash}"),
         ButtonKind::Danger,
@@ -81,7 +84,10 @@ pub async fn release(
     ctx.store
         .audit(&source.user_id, "release", None, &dir)
         .await?;
-    Ok(Some(format!("released `{dir}` (was {holder})")))
+    Ok(Some(format!(
+        "released `{}` (was {holder})",
+        crate::app::handlers::support::display_name(&dir)
+    )))
 }
 
 /// Resolve a `custom_id` directory hash against the current lock set.
@@ -96,11 +102,6 @@ async fn resolve(ctx: &Arc<AppContext>, hash: &str) -> Result<String, AppError> 
     ))
 }
 
-fn short_dir(dir: &str) -> String {
-    dir.rsplit('/')
-        .next()
-        .unwrap_or(dir)
-        .chars()
-        .take(24)
-        .collect()
+fn clamp_name(name: &str) -> String {
+    name.chars().take(24).collect()
 }

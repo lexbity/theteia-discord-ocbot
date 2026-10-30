@@ -55,7 +55,10 @@ async fn build_page(
     let path = Path::new(dir);
     if !crate::app::handlers::support::is_git_dir(ctx, path).await? {
         return Ok(crate::app::handlers::support::simple(
-            format!("`{dir}` is not a git repository"),
+            format!(
+                "`{}` is not a git repository",
+                crate::app::handlers::support::display_name(dir)
+            ),
             actor,
         ));
     }

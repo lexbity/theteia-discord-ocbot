@@ -1,5 +1,5 @@
-//! Pure path utilities used by the git-truth handlers (spec P7) and the Phase 6
-//! file browser.
+//! Pure path utilities used by the git-truth handlers (spec P7) and the
+//! SPEC-005 project surfaces.
 //!
 //! This module is deliberately I/O-free: the fs adapter owns `realpath` and the
 //! *real* containment re-check (Phase 6, FR-35). Here we define the pure,

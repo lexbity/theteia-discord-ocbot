@@ -28,6 +28,13 @@ pub(crate) fn dir_text(dir: &Path) -> String {
     dir.to_string_lossy().into_owned()
 }
 
+/// The opaque project name a user-facing message may show for `dir` (SPEC-005
+/// G-01): filesystem paths never reach an operator message — status pages,
+/// lock prompts and history headers all name the project through this helper.
+pub(crate) fn display_name(dir: impl AsRef<std::path::Path>) -> String {
+    ocbot_core::paths::project_display_name(dir.as_ref())
+}
+
 /// Whether `dir` is a git work tree (a real git probe; execute-phase only).
 pub(crate) async fn is_git_dir(ctx: &Arc<AppContext>, dir: &Path) -> Result<bool, AppError> {
     Ok(ctx.git.is_repo(dir).await?)

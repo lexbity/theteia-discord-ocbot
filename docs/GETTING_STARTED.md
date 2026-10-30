@@ -105,11 +105,11 @@ A `[signal]` section you are not using yet is fine — it is a **warning**, not 
 | `perm_reping_minutes` | no | `10` | Re-ping cadence for unanswered gates |
 | `abort_timeout_secs` | no | `30` | How long `/abort` waits for idle confirmation |
 | `stall_minutes` | no | `45` | Silence before the stall watchdog pings once |
-| `browse_roots` | no | `["/home"]` | Directories `/ls` and typed paths are confined to |
+| `browse_roots` | no | `["/home"]` | Containment roots for typed run/plan paths (`projects_root` is added automatically) |
 | `inbox_dir` | no | `"inbox"` | Where uploaded attachments are saved |
 | `allow_freeform_paths` | no | `false` | Allow typed paths outside `browse_roots` |
 | `plan_heading_min` / `plan_heading_max` | no | `2` / `3` | Plan picker heading depth range |
-| `ls_page_size` | no | `18` | Entries per `/ls` page |
+| `projects_root` | yes | — | The root directory of projects for `/projects` (SPEC-005) |
 | `per_session_ruleset` | no | `false` | Experimental; leave off |
 | `permissions_file` | no | `"config/opencode.permissions.jsonc"` | Baseline ruleset verified at startup |
 | `redact_patterns` | no | built-ins | Regexes scrubbed from inline reports and logs |
@@ -210,9 +210,8 @@ Messages that carry decision buttons also render a **legend** (`✅ accept · �
 | `/reset` | Reset the directory to a live commit (a `superseded/<ts>` branch is created first) |
 | `/release` | Release a held directory lock (requires confirmation) |
 | `/abort` | Interrupt the running action; confirmed only after the server reports idle |
+| `/projects` | Browse projects under `projects_root`, preview their README and plans, and stage a run (SPEC-005 — the old `/ls`/`/cd` browser is removed: no filesystem paths in user-facing messages) |
 | `/mute` | Toggle inbox reports for the current directory |
-| `/ls` | Browse directories under `browse_roots` |
-| `/cd` | Open a directory in the browser |
 
 Beyond slash commands: report messages carry decision buttons (**Accept**, **Follow up**, **Park & redo**, or **Discard**, depending on the outcome); gates carry **Once / Always / Reject** (or form buttons and a modal); replying to an inbox report adopts that session; attaching a file in the DM saves it under `inbox_dir` and offers its path to the agent.
 Reactions on the origin message are the quiet status light.

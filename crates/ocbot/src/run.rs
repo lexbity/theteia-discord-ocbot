@@ -224,7 +224,7 @@ pub async fn start() -> ExitCode {
         {
             // SPEC-005: a project-selected run re-resolves its directory
             // through the fs port (FR-35), so `projects_root` is a containment
-            // root alongside the legacy browse roots. Validation has already
+            // root alongside the typed-path roots. Validation has already
             // proven it exists (and it is empty-checked here defensively).
             let mut roots: Vec<std::path::PathBuf> = config
                 .browse_roots
@@ -243,7 +243,7 @@ pub async fn start() -> ExitCode {
     ) {
         Ok(adapter) => Arc::new(adapter),
         Err(error) => {
-            tracing::error!(error = %error, "filesystem adapter rejected the browse roots");
+            tracing::error!(error = %error, "filesystem adapter rejected the containment roots (browse_roots/projects_root)");
             return ExitCode::from(1);
         }
     };
@@ -397,7 +397,6 @@ pub async fn start() -> ExitCode {
         templates,
         plan_heading_min: config.plan_heading_min,
         plan_heading_max: config.plan_heading_max,
-        ls_page_size: config.ls_page_size,
         projects,
         project_config: project_config_adapter,
     });

@@ -90,7 +90,7 @@ export ALLOWED_USER_ID="<your Discord user id>"
 cargo test -p ocbot --test live_boot -- --ignored      # boot + SIGTERM drain
 ```
 
-A suggested manual pass with a scratch repository: force a permission prompt and answer it from Discord; Accept, Park & redo, and Reset; run a session in a terminal and adopt it from the inbox; `/ls` a plan and `/status`; scrape the metrics endpoint and check the logs carry no secrets.
+A suggested manual pass with a scratch repository: force a permission prompt and answer it from Discord; Accept, Park & redo, and Reset; run a session in a terminal and adopt it from the inbox; pick a project and plan via `/projects` and `/status`; scrape the metrics endpoint and check the logs carry no secrets.
 The nightly `contract` CI job runs the client spike against a real server with repository secrets.
 
 ## Fuzzing

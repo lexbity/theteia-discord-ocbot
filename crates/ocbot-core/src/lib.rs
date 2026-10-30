@@ -44,15 +44,15 @@ pub use plan::{
 pub use ports::HookFailure;
 pub use render::{
     AttachmentSpec, ButtonKind, ComponentSpec, DISCORD_MESSAGE_CAP, FLOW_MODAL, FLOW_NAMES,
-    FLOW_PROMPT, FLOW_RUN, FLOW_TTL_SECS, Footer, HISTORY_PAGE_SIZE, LABEL_MAX_CHARS, LS_PAGE_SIZE,
-    Legend, LegendEntry, LsEntry, OutgoingMessage, REDACTED, RUN_STEPS, RedactError, Redactor,
-    ReportContext, ReportExcerpt, SUPPRESSED_ATTACHMENT_HINT, SurfacePolicy, apply_surface_policy,
-    cancelled, component_button, component_button_state, decision_buttons, default_hint,
-    draft_echo, expired, fence_neutralize, field_prompt, first_step, flow_steps, form_header,
-    gate_message, headline, help_text, history_page, is_cancel, is_modal_id, ls_message,
-    mention_allowlist, mentionable_id, modal_family_samples, next_step, normalize_emoji,
-    plan_picker_message, render_legend, report, restart_notice, split_excerpt, staged_preview,
-    step_field, step_prompt, truncate_chars, unknown_flow, with_cancel_hint,
+    FLOW_PROMPT, FLOW_RUN, FLOW_TTL_SECS, Footer, HISTORY_PAGE_SIZE, LABEL_MAX_CHARS, Legend,
+    LegendEntry, OutgoingMessage, REDACTED, RUN_STEPS, RedactError, Redactor, ReportContext,
+    ReportExcerpt, SUPPRESSED_ATTACHMENT_HINT, SurfacePolicy, apply_surface_policy, cancelled,
+    component_button, component_button_state, decision_buttons, default_hint, draft_echo, expired,
+    fence_neutralize, field_prompt, first_step, flow_steps, form_header, gate_message, headline,
+    help_text, history_page, is_cancel, is_modal_id, mention_allowlist, mentionable_id,
+    modal_family_samples, next_step, normalize_emoji, plan_picker_message, render_legend, report,
+    restart_notice, split_excerpt, staged_preview, step_field, step_prompt, truncate_chars,
+    unknown_flow, with_cancel_hint,
 };
 pub use state::{ALL_STATES, CasIntent, Column, Event, State, WriteValue, transition};
 pub use surface::{ActorId, ChatRef, Destination, MsgId, PostReceipt, Surface};

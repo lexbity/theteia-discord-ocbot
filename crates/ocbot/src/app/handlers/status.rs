@@ -61,7 +61,7 @@ pub async fn execute(ctx: &Arc<AppContext>, source: &InteractionSource) -> Resul
         let _ = writeln!(
             content,
             "  · {} (holder {}, since {})",
-            lock.dir,
+            crate::app::handlers::support::display_name(&lock.dir),
             lock.lock_holder.as_deref().unwrap_or("?"),
             lock.lock_since.unwrap_or_default(),
         );

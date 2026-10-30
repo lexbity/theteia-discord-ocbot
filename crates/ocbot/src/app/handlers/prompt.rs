@@ -121,8 +121,8 @@ pub async fn execute_prompt(
         session
     };
 
-    // A draft path (browser selection or uploaded attachment, P11/FR-36) is
-    // referenced by absolute path and consumed once.
+    // A draft path (an uploaded attachment, P11/FR-36) is referenced by
+    // absolute path and consumed once.
     let mut prompt_text = prompt.to_owned();
     if let Some(draft) = ctx.store.draft_path(&source.user_id).await? {
         if std::path::Path::new(&draft).is_file() {

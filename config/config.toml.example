@@ -44,7 +44,8 @@ git_timeout_secs = 10
 # permissions_file = "config/opencode.permissions.jsonc"
 
 # Phase 6 files & plans -------------------------------------------------------
-# The roots the /ls browser and typed paths are confined to (P11/FR-34).
+# Containment roots for typed run/plan paths (P11/FR-34). SPEC-005 removed the
+# /ls browser; projects_root (above) is added to this set automatically.
 # browse_roots = ["/home"]
 
 # Where uploaded attachments are persisted (P11/FR-36).
@@ -56,9 +57,6 @@ git_timeout_secs = 10
 # Plan picker heading depth range (P12; default 2..=3).
 # plan_heading_min = 2
 # plan_heading_max = 3
-
-# /ls entries per page (P10).
-# ls_page_size = 18
 
 # Phase 7 ops -----------------------------------------------------------------
 # Minutes of silence before the stall watchdog posts one ping (P3/FR-39).

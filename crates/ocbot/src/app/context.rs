@@ -191,8 +191,6 @@ pub struct AppContext {
     pub plan_heading_min: u32,
     /// Plan-picker heading depth range (P12).
     pub plan_heading_max: u32,
-    /// Browser entries per page (P10).
-    pub ls_page_size: usize,
     /// The project port for project-centric operations (SPEC-005).
     pub projects: Arc<dyn ProjectPort>,
     /// The project config port for loading per-project configuration (SPEC-005).

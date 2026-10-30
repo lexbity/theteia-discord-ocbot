@@ -141,6 +141,18 @@ async fn a_stale_socket_file_is_refused_quickly() {
         std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))
             .expect("chmod 0600");
     }
+    // Kernel teardown of the dropped listener can lag under instrumented
+    // parallel load: a connect inside that window succeeds transiently (the
+    // connection is queued to the dying socket and RST later), which would
+    // send the doctor down the probe-failure path instead of the refusal this
+    // test pins. Settle it: poll until the kernel itself refuses connections
+    // — the state every real stale socket eventually reaches.
+    for _ in 0..200 {
+        match std::os::unix::net::UnixStream::connect(&socket) {
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => break,
+            _ => std::thread::sleep(Duration::from_millis(5)),
+        }
+    }
     let started = Instant::now();
     let errors = expect_err(&section(&socket)).await;
     assert!(

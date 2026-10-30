@@ -12,7 +12,8 @@ pub async fn execute(ctx: &Arc<AppContext>, source: &InteractionSource) -> Resul
     let muted = ctx.store.toggle_mute("dir", &dir).await?;
     ctx.store.audit(&source.user_id, "mute", None, &dir).await?;
     let content = format!(
-        "inbox reports for `{dir}` are now {}",
+        "inbox reports for `{}` are now {}",
+        crate::app::handlers::support::display_name(&dir),
         if muted { "muted" } else { "unmuted" }
     );
     ctx.chat

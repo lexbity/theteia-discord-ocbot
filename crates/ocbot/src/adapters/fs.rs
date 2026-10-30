@@ -1,7 +1,7 @@
 //! The filesystem adapter (spec P11, FR-34/FR-35/FR-36): the only code that
 //! turns a path into a real, canonical location. Every use re-runs `realpath`
-//! and the containment check (TOCTOU), so a symlink swapped between the browse
-//! and the send is caught at the moment of use, not just when it was listed.
+//! and the containment check (TOCTOU), so a symlink swapped between the check
+//! and the use is caught at the moment of use, never earlier.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -10,10 +10,10 @@ use async_trait::async_trait;
 
 use ocbot_core::FsError;
 use ocbot_core::paths::{content_tag8, is_inside, sanitize_name, yyyymmdd};
-use ocbot_core::ports::{Clock, DirEntry, FsPort};
+use ocbot_core::ports::{Clock, FsPort};
 
-/// A real filesystem adapter rooted at `roots` (browse) with an `inbox`
-/// directory for uploaded attachments.
+/// A real filesystem adapter whose containment `roots` gate every resolved
+/// path, with an `inbox` directory for uploaded attachments.
 pub struct FsAdapter {
     roots: Vec<PathBuf>,
     inbox: PathBuf,
@@ -72,34 +72,6 @@ impl FsPort for FsAdapter {
         std::fs::read_to_string(&resolved).map_err(|error| FsError::Io(error.to_string()))
     }
 
-    async fn list(&self, path: &Path, show_hidden: bool) -> Result<Vec<DirEntry>, FsError> {
-        let resolved = self.resolve(path).await?;
-        let read = std::fs::read_dir(&resolved).map_err(|error| FsError::Io(error.to_string()))?;
-        let mut entries = Vec::new();
-        for entry in read {
-            let entry = entry.map_err(|error| FsError::Io(error.to_string()))?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if !show_hidden && name.starts_with('.') {
-                continue;
-            }
-            let file_type = entry
-                .file_type()
-                .map_err(|error| FsError::Io(error.to_string()))?;
-            entries.push(DirEntry {
-                name,
-                path: entry.path().to_string_lossy().into_owned(),
-                is_dir: file_type.is_dir(),
-            });
-        }
-        // Directories first, then case-insensitive name (stable, deterministic).
-        entries.sort_by(|a, b| {
-            b.is_dir
-                .cmp(&a.is_dir)
-                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-        });
-        Ok(entries)
-    }
-
     async fn save_attachment(&self, filename: &str, bytes: &[u8]) -> Result<PathBuf, FsError> {
         let bucket = self.inbox.join(yyyymmdd(self.clock.now()));
         std::fs::create_dir_all(&bucket).map_err(|error| FsError::Io(error.to_string()))?;
@@ -107,14 +79,6 @@ impl FsPort for FsAdapter {
         let path = bucket.join(name);
         std::fs::write(&path, bytes).map_err(|error| FsError::Io(error.to_string()))?;
         Ok(path)
-    }
-
-    fn roots(&self) -> Vec<PathBuf> {
-        self.roots.clone()
-    }
-
-    fn allow_freeform(&self) -> bool {
-        self.allow_freeform
     }
 }
 
@@ -152,27 +116,6 @@ mod tests {
             .await
             .expect_err("outside");
         assert!(matches!(error, ocbot_core::FsError::OutsideRoots { .. }));
-    }
-
-    #[tokio::test]
-    async fn list_hides_dotfiles_and_orders_dirs_first() {
-        let root = tempfile::tempdir().expect("root");
-        std::fs::create_dir(root.path().join("dir")).expect("mkdir");
-        std::fs::write(root.path().join("b.txt"), "b").expect("write");
-        std::fs::write(root.path().join(".hidden"), "h").expect("write");
-        let adapter = FsAdapter::new(
-            vec![root.path().to_path_buf()],
-            root.path().join("inbox"),
-            false,
-            Arc::new(FixedClock(0)),
-        )
-        .expect("adapter");
-
-        let entries = adapter.list(root.path(), false).await.expect("list");
-        let names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
-        assert_eq!(names, vec!["dir", "b.txt"]);
-        let with_hidden = adapter.list(root.path(), true).await.expect("list");
-        assert!(with_hidden.iter().any(|entry| entry.name == ".hidden"));
     }
 
     #[tokio::test]

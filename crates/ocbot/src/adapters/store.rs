@@ -797,7 +797,7 @@ store_method! {
         }
     };
 
-    /// The last selected/uploaded path for a user (browser + attachment draft).
+    /// The last selected/uploaded path for a user (attachment draft).
     /// Keys are namespaced `ActorId`s (SPEC-004 D-03).
     DraftPath as draft_path(user_id: &str => String) -> Option<String> {
         |connection: &mut Connection| -> rusqlite::Result<Option<String>> {
@@ -1941,7 +1941,7 @@ ALTER TABLE gate ADD COLUMN channel_id INTEGER;
 
 /// v4 — Phase 6 files/plans: the staged action remembers which template
 /// envelope it is rendered from (fresh/resume toggle at review), and `ui_state`
-/// carries the last selected/uploaded path (the browser and attachment draft).
+/// carries the last uploaded/selected path (the attachment draft).
 const MIGRATION_V4: &str = "
 ALTER TABLE action ADD COLUMN template TEXT NOT NULL DEFAULT 'fresh';
 ALTER TABLE ui_state ADD COLUMN draft_path TEXT;

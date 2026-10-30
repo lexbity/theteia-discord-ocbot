@@ -22,7 +22,8 @@ pub const ENV_ALLOWED_USER_ID: &str = "ALLOWED_USER_ID";
 pub const ENV_ALLOW_NON_LOOPBACK: &str = "ALLOW_NON_LOOPBACK";
 /// Env variable overriding the per-session ruleset default (FR-42).
 pub const ENV_PER_SESSION_RULESET: &str = "PER_SESSION_RULESET";
-/// Env variable enabling freeform typed paths beyond the browse roots (P11).
+/// Env variable enabling freeform typed paths beyond the containment roots
+/// (P11).
 pub const ENV_ALLOW_FREEFORM_PATHS: &str = "ALLOW_FREEFORM_PATHS";
 /// The default permission-baseline path, unless `permissions_file` is set.
 pub const DEFAULT_PERMISSIONS_FILE: &str = "config/opencode.permissions.jsonc";
@@ -84,7 +85,12 @@ pub struct Config {
     /// Per-command git timeout (spec R-9).
     #[serde(default = "default_git_timeout")]
     pub git_timeout_secs: u64,
-    /// The roots the `/ls` browser and typed paths are confined to (P11/FR-34).
+    /// Containment roots for typed run/plan paths (P11/FR-34). SPEC-005
+    /// removed the `/ls` browser, but the fs port still gates every typed
+    /// path against these roots; `projects_root` is added to the set at boot.
+    /// The key name is kept for deployed configs — new deployments usually
+    /// only need `projects_root` here (plus freeform, deliberately, for
+    /// outside-work runs).
     #[serde(default = "default_browse_roots")]
     pub browse_roots: Vec<String>,
     /// Where uploaded attachments are persisted (P11/FR-36).
@@ -109,9 +115,6 @@ pub struct Config {
     /// Maximum heading depth for the plan picker (P12; default 3).
     #[serde(default = "default_plan_depth_max")]
     pub plan_heading_max: u32,
-    /// `/ls` entries per page (P10: stays under the component cap).
-    #[serde(default = "default_ls_page_size")]
-    pub ls_page_size: usize,
     /// Minutes of silence before the stall watchdog pings (P3/FR-39).
     #[serde(default = "default_stall_minutes")]
     pub stall_minutes: u64,
@@ -408,10 +411,6 @@ fn default_plan_depth_max() -> u32 {
     ocbot_core::plan::DEFAULT_HEADING_MAX
 }
 
-fn default_ls_page_size() -> usize {
-    ocbot_core::render::LS_PAGE_SIZE
-}
-
 fn default_stall_minutes() -> u64 {
     45
 }
@@ -583,12 +582,6 @@ impl Config {
             errors.push(format!(
                 "plan_heading_min ({}) must not exceed plan_heading_max ({})",
                 self.plan_heading_min, self.plan_heading_max
-            ));
-        }
-        if self.ls_page_size < 1 {
-            errors.push(format!(
-                "ls_page_size must be >= 1, got {}",
-                self.ls_page_size
             ));
         }
         if self.stall_minutes < 1 {
@@ -1024,7 +1017,6 @@ typo_key = 1
             default_readme_files: vec![],
             plan_heading_min: 2,
             plan_heading_max: 3,
-            ls_page_size: 18,
             stall_minutes: 45,
             ops_poll_interval_ms: 30_000,
             redact_patterns: default_redact_patterns(),

@@ -163,9 +163,11 @@ if grep -rnE 'Command::new\("(sh|bash|zsh|dash|fish)"\)' crates/ 2>/dev/null; th
 fi
 probe "G15" 'Command::new\("sh"\)' 'let c = Command::new("sh");'
 
-# G16: the fs adapter is the only place a path becomes real — the browser and
-# plan handlers must go through the port, never `std::fs` directly.
-if grep -rn "std::fs::" crates/ocbot/src/app/handlers/ls.rs crates/ocbot/src/app/handlers/run.rs 2>/dev/null; then
+# G16: the fs adapter is the only place a path becomes real — the plan and
+# project handlers must go through the port, never `std::fs` directly.
+# (SPEC-005 deleted the `/ls` browser handler that this gate originally named;
+# its containment rule moved with it.)
+if grep -rn "std::fs::" crates/ocbot/src/app/handlers/projects.rs crates/ocbot/src/app/handlers/run.rs 2>/dev/null; then
   fail "G16: handlers must use the fs port, not std::fs directly (FR-35)"
 fi
 probe "G16" "std::fs::" 'let x = std::fs::read_to_string(p);'
@@ -238,8 +240,10 @@ fi
 probe "SPEC002-numeric-row" 'row\.get\(0\)' 'let id = row.get(0)?;'
 
 # The render god module stayed decomposed (Phase 3): every concern file exists
-# and none may grow back to the 500-line ceiling.
-for render_file in mod report gate browser redact label legend flow; do
+# and none may grow back to the 500-line ceiling. (SPEC-005: `browser` — the
+# `/ls` surface — is gone; the picker and history concerns it shared a file
+# with now stand alone.)
+for render_file in mod report gate picker history redact label legend flow; do
   path="crates/ocbot-core/src/render/$render_file.rs"
   if [ ! -f "$path" ]; then
     fail "SPEC-002: missing render submodule $path"

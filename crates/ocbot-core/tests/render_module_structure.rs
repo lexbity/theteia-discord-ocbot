@@ -19,7 +19,8 @@ const SUBMODULES: &[&str] = &[
     "mod.rs",
     "report.rs",
     "gate.rs",
-    "browser.rs",
+    "picker.rs",
+    "history.rs",
     "redact.rs",
     "label.rs",
 ];

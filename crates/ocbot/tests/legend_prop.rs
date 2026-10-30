@@ -22,7 +22,7 @@ fn custom_id() -> impl Strategy<Value = String> {
         (1_usize..12).prop_map(|n| format!("v1:gate:9:{n}")),
         // Unmappable navigation families.
         (0_usize..3).prop_map(|n| format!("v1:page:history:{n}")),
-        Just("v1:ls:up".to_owned()),
+        Just("v1:projects:p:1".to_owned()),
         Just("v1:plan:3:1".to_owned()),
     ]
 }
