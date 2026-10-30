@@ -221,12 +221,22 @@ pub async fn start() -> ExitCode {
         Duration::from_secs(config.git_timeout_secs),
     ));
     let fs: Arc<dyn FsPort> = match FsAdapter::new(
-        config
-            .browse_roots
-            .iter()
-            .map(Path::new)
-            .map(Path::to_path_buf)
-            .collect(),
+        {
+            // SPEC-005: a project-selected run re-resolves its directory
+            // through the fs port (FR-35), so `projects_root` is a containment
+            // root alongside the legacy browse roots. Validation has already
+            // proven it exists (and it is empty-checked here defensively).
+            let mut roots: Vec<std::path::PathBuf> = config
+                .browse_roots
+                .iter()
+                .map(Path::new)
+                .map(Path::to_path_buf)
+                .collect();
+            if !config.projects_root.is_empty() {
+                roots.push(Path::new(&config.projects_root).to_path_buf());
+            }
+            roots
+        },
         Path::new(&config.inbox_dir).to_path_buf(),
         config.freeform_paths(),
         clock.clone(),

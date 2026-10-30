@@ -126,6 +126,13 @@ async fn plan(ctx: &Arc<AppContext>, source: &InteractionSource) -> Result<AckPl
                 Ok(AckPlan::Modal(handlers::run::plan_other_modal(
                     parse_action_id(id)?,
                 )))
+            } else if let Some(project) = custom_id.strip_prefix("v1:run_noplan:") {
+                // Run Without Plan needs a label the component cannot carry
+                // (SPEC-005 flow 7): the plan is the label modal. The token is
+                // checked for shape only, so the plan phase stays I/O-free.
+                Ok(AckPlan::Modal(handlers::projects::run_noplan_modal(
+                    project,
+                )?))
             } else if is_deferred_action(custom_id) {
                 Ok(AckPlan::DeferUpdate)
             } else {
@@ -156,6 +163,7 @@ const PREFIXED_MODALS: &[&str] = &[
     "v1:formgo:",
     "v1:followupgo:",
     handlers::run::PLAN_OTHER_MODAL,
+    handlers::projects::RUN_NOPLAN_MODAL,
 ];
 
 /// Whether a `custom_id` belongs to one of the prefixed modal families.
@@ -211,7 +219,6 @@ const DEFERRED_PREFIXES: &[&str] = &[
     "v1:readme_page:",
     "v1:plan_select:",
     "v1:load_plan:",
-    "v1:run_noplan:",
 ];
 
 /// Custom ids whose plan is a plain deferral (all work is in the execute pass).
@@ -343,8 +350,10 @@ pub async fn execute(
             } else if let Some(rest) = custom_id.strip_prefix("v1:load_plan:") {
                 let (project, plan) = parse_project_and_plan_tokens(rest)?;
                 handlers::projects::load_plan_and_run(ctx, &project, &plan, source).await
-            } else if let Some(project) = custom_id.strip_prefix("v1:run_noplan:") {
-                handlers::projects::run_without_plan(ctx, project, source).await
+            } else if custom_id.starts_with("v1:run_noplan:") {
+                // A Component `v1:run_noplan:` plans the label modal and never
+                // executes; a stale press is a no-op (SPEC-005 flow 7).
+                Err(AppError::AlreadyHandled)
             } else {
                 Err(AppError::UnknownCustomId(custom_id.to_owned()))
             }
@@ -380,6 +389,10 @@ pub async fn execute(
                     &source.user_id,
                 )
                 .await
+            } else if let Some(rest) = custom_id.strip_prefix(handlers::projects::RUN_NOPLAN_MODAL)
+            {
+                let project = parse_project_token(rest)?;
+                handlers::projects::run_without_plan(ctx, &project, source).await
             } else {
                 Err(AppError::UnknownCustomId(custom_id.to_owned()))
             }

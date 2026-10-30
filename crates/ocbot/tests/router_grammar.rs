@@ -242,7 +242,6 @@ async fn project_renderer_controls_are_acknowledged_as_deferred_updates() {
         format!("v1:readme_page:{project}:1"),
         format!("v1:plan_select:{project}:{plan}"),
         format!("v1:load_plan:{project}:{plan}"),
-        format!("v1:run_noplan:{project}"),
     ] {
         assert!(
             matches!(
@@ -252,12 +251,36 @@ async fn project_renderer_controls_are_acknowledged_as_deferred_updates() {
             "{id} defers"
         );
     }
+    // Run Without Plan collects its label in a modal (SPEC-005 flow 7): the
+    // button plans the modal, and the plan stays I/O-free (AC-1) — a token of
+    // the right shape against an unreachable `/tmp/projects` root still gets a
+    // modal, never a deferral into a path-based failure.
+    assert!(
+        matches!(
+            router::guarded_plan(&ctx, &component(&format!("v1:run_noplan:{project}"))).await,
+            PlanOutcome::Plan(AckPlan::Modal(_))
+        ),
+        "run_noplan plans the label modal"
+    );
+    assert!(
+        matches!(
+            router::guarded_plan(&ctx, &component("v1:run_noplan:not-a-token")).await,
+            PlanOutcome::Failed(_)
+        ),
+        "a malformed project token is rejected, not silently deferred"
+    );
+    // And the button is never executed: the work runs on the modal submit.
+    assert!(matches!(
+        router::execute(&ctx, &component(&format!("v1:run_noplan:{project}"))).await,
+        Err(ocbot::app::error::AppError::AlreadyHandled)
+    ));
 }
 
 #[tokio::test]
 async fn modal_submits_route_to_their_execute_acks() {
     let store = StoreHandle::open_in_memory().expect("store");
     let ctx = base_ctx(&store);
+    let project = project_action_token("user/project");
 
     for id in ["v1:newrun", "v1:prompt"] {
         assert!(
@@ -269,14 +292,15 @@ async fn modal_submits_route_to_their_execute_acks() {
         );
     }
     for id in [
-        "v1:editgo:1",
-        "v1:acceptgo:1",
-        "v1:followupgo:1",
-        "v1:planothergo:1",
+        "v1:editgo:1".to_owned(),
+        "v1:acceptgo:1".to_owned(),
+        "v1:followupgo:1".to_owned(),
+        "v1:planothergo:1".to_owned(),
+        format!("v1:run_noplan_go:{project}"),
     ] {
         assert!(
             matches!(
-                router::guarded_plan(&ctx, &modal(id)).await,
+                router::guarded_plan(&ctx, &modal(&id)).await,
                 PlanOutcome::Plan(AckPlan::DeferUpdate)
             ),
             "{id} defers update"

@@ -276,7 +276,7 @@ fn truncate(text: &str, max: usize) -> String {
 /// This is the *coverage claim*, not the router: `router::modal_ids()` is the
 /// router's own list, and `tests/signal_flows.rs` asserts every router id is
 /// covered here. Adding a modal to the router without adding it here fails CI.
-pub const MODAL_FAMILIES: [&str; 7] = [
+pub const MODAL_FAMILIES: [&str; 8] = [
     "v1:newrun",
     "v1:prompt",
     "v1:editgo:",
@@ -284,6 +284,7 @@ pub const MODAL_FAMILIES: [&str; 7] = [
     "v1:formgo:",
     "v1:followupgo:",
     "v1:planothergo:",
+    "v1:run_noplan_go:",
 ];
 
 /// Whether a `custom_id` belongs to one of the modal families (an exact id for
@@ -459,7 +460,7 @@ mod tests {
     fn prefixed_families_do_not_match_bare_ids() {
         assert!(!is_modal_id("v1:newrunx"), "an unknown id must not pass");
         assert!(is_modal_id("v1:editgo:7"));
-        assert_eq!(MODAL_FAMILIES.len(), 7);
+        assert_eq!(MODAL_FAMILIES.len(), 8);
     }
 
     #[test]

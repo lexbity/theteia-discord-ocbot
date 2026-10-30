@@ -7,14 +7,65 @@
 use std::sync::Arc;
 
 use ocbot_core::error::ProjectError;
-use ocbot_core::paths::{plan_action_token, project_action_token};
+use ocbot_core::paths::{is_action_token, plan_action_token, project_action_token};
 use ocbot_core::render::projects::{
     full_readme_message, plan_preview_message, project_details_message, project_list_message,
 };
 
 use crate::app::context::AppContext;
 use crate::app::error::AppError;
-use crate::app::interaction::InteractionSource;
+use crate::app::interaction::{InputStyle, InteractionSource, ModalInputSpec, ModalSpec};
+
+/// The `custom_id` prefix of the label modal the **Run Without Plan** button
+/// plans (SPEC-005 flow 7). Components carry no text inputs, so the required
+/// label has to be collected in a modal; the `custom_id` carries the opaque
+/// project token and never a path.
+pub const RUN_NOPLAN_MODAL: &str = "v1:run_noplan_go:";
+
+/// Plan phase for **Run Without Plan**: the label modal, shaped for one
+/// project token.
+///
+/// Deliberately I/O-free (ack discipline): the token is checked for shape here
+/// and resolved against the live project set in [`run_without_plan`].
+pub fn run_noplan_modal(project_token: &str) -> Result<ModalSpec, AppError> {
+    if !is_action_token(project_token) {
+        return Err(AppError::UnknownCustomId(
+            "invalid project token".to_owned(),
+        ));
+    }
+    Ok(ModalSpec {
+        custom_id: format!("{RUN_NOPLAN_MODAL}{project_token}"),
+        title: "Run without plan".to_owned(),
+        inputs: vec![ModalInputSpec {
+            id: "label".to_owned(),
+            label: "Label".to_owned(),
+            style: InputStyle::Short,
+            value: None,
+            required: true,
+        }],
+    })
+}
+
+/// Shape a [`ProjectError`] for the operator (SPEC-005 G-01).
+///
+/// Execute failures are surfaced verbatim as ephemeral text, and three
+/// [`ProjectError`] variants carry an absolute path in their first field —
+/// which would put a path in front of the operator. The path still goes to the
+/// log; the operator gets the failure *class* only.
+fn operator_error(scope: &str, error: &ProjectError) -> AppError {
+    tracing::warn!(scope, error = %error, "project operation failed");
+    let detail = match error {
+        ProjectError::NotConfigured => "projects_root is not configured".to_owned(),
+        // A display name, never a path: the operator sees these anyway.
+        ProjectError::NotFound(name) => format!("not found: {name}"),
+        ProjectError::NoProjects(_) => "no projects are available".to_owned(),
+        ProjectError::NoPlans(name) => format!("no plans in {name}"),
+        // Field 1 is a bare OS/TOML error string; the adapter never puts a
+        // path in it (the path is field 0, which stays log-only).
+        ProjectError::IoError(_, message) | ProjectError::ReadError(_, message) => message.clone(),
+    };
+    AppError::Other(format!("failed to {scope}: {detail}"))
+}
 
 /// Handle /projects command.
 ///
@@ -27,7 +78,7 @@ pub async fn list_projects(
     let projects = match ctx.projects.list_projects() {
         Ok(projects) => projects,
         Err(ProjectError::NoProjects(_)) => Vec::new(),
-        Err(error) => return Err(AppError::Other(format!("Failed to list projects: {error}"))),
+        Err(error) => return Err(operator_error("list projects", &error)),
     };
 
     let message =
@@ -49,9 +100,12 @@ pub async fn select_project(
     let details = ctx
         .projects
         .get_project_info(&project_name)
-        .map_err(|e| AppError::Other(format!("Failed to get project info: {e}")))?;
+        .map_err(|error| operator_error("read project details", &error))?;
 
-    let project_dir = ctx.projects.get_project_dir(&project_name)?;
+    let project_dir = ctx
+        .projects
+        .get_project_dir(&project_name)
+        .map_err(|error| operator_error("resolve project", &error))?;
 
     // `project_state` is keyed by `ui_state.user_id`, so establish the user's
     // persistent row before saving this selection. The selected project also
@@ -81,7 +135,10 @@ pub async fn show_project_page(
     source: &InteractionSource,
 ) -> Result<(), AppError> {
     let project_name = resolve_project_name(ctx, project_token)?;
-    let details = ctx.projects.get_project_info(&project_name)?;
+    let details = ctx
+        .projects
+        .get_project_info(&project_name)
+        .map_err(|error| operator_error("read project details", &error))?;
     let message =
         project_details_message(&details, page, ocbot_core::mentionable_id(&source.user_id));
     ctx.chat.post(&source.destination, &message).await?;
@@ -101,7 +158,7 @@ pub async fn show_full_readme(
     let readme = ctx
         .projects
         .get_readme(&project_name)
-        .map_err(|e| AppError::Other(format!("Failed to get README: {e}")))?;
+        .map_err(|error| operator_error("read README", &error))?;
 
     let message = full_readme_message(
         &project_name,
@@ -128,10 +185,16 @@ pub async fn select_plan(
     let content = ctx
         .projects
         .get_plan_content(&project_name, &plan_name)
-        .map_err(|e| AppError::Other(format!("Failed to get plan content: {e}")))?;
+        .map_err(|error| operator_error("read plan", &error))?;
 
-    let plan_path = ctx.projects.get_plan_path(&project_name, &plan_name)?;
-    let project_dir = ctx.projects.get_project_dir(&project_name)?;
+    let plan_path = ctx
+        .projects
+        .get_plan_path(&project_name, &plan_name)
+        .map_err(|error| operator_error("resolve plan", &error))?;
+    let project_dir = ctx
+        .projects
+        .get_project_dir(&project_name)
+        .map_err(|error| operator_error("resolve project", &error))?;
 
     // Keep project and plan state paired even when a stale component is clicked.
     ctx.store
@@ -181,8 +244,14 @@ pub async fn load_plan_and_run(
     }
     let stored_plan_path = selected_plan_path
         .ok_or_else(|| AppError::Other("Selected plan path is missing".to_owned()))?;
-    let current_project_dir = ctx.projects.get_project_dir(&project_name)?;
-    let current_plan_path = ctx.projects.get_plan_path(&project_name, &selected_plan)?;
+    let current_project_dir = ctx
+        .projects
+        .get_project_dir(&project_name)
+        .map_err(|error| operator_error("resolve project", &error))?;
+    let current_plan_path = ctx
+        .projects
+        .get_plan_path(&project_name, &selected_plan)
+        .map_err(|error| operator_error("resolve plan", &error))?;
     if current_project_dir.to_string_lossy() != project_dir
         || current_plan_path.to_string_lossy() != stored_plan_path
     {
@@ -201,14 +270,21 @@ pub async fn load_plan_and_run(
     .await
 }
 
-/// Handle run without plan.
+/// Handle the submitted **Run Without Plan** label modal (SPEC-005 flow 7).
 ///
-/// Stages a new run for the selected project without a plan.
+/// Runs on the modal submit, not the button: components carry no text inputs,
+/// so the label the flow requires is collected in [`run_noplan_modal`] and
+/// arrives here. The project comes from the stored selection, and the modal's
+/// token must match it — a stale page's submit is a replay, not a run.
 pub async fn run_without_plan(
     ctx: &Arc<AppContext>,
     project_token: &str,
     source: &InteractionSource,
 ) -> Result<Option<String>, AppError> {
+    let label = source.input("label").map(str::trim).unwrap_or_default();
+    if label.is_empty() {
+        return Err(AppError::Other("a label is required".to_owned()));
+    }
     let (project_name, project_dir, ..) = ctx
         .store
         .get_selected_project_and_plan(&source.user_id)
@@ -217,12 +293,25 @@ pub async fn run_without_plan(
     if project_action_token(&project_name) != project_token {
         return Err(AppError::AlreadyHandled);
     }
+    // Re-resolve the token against the live project set: a project removed
+    // from disk since selection must not stage a run against a stale path.
+    let current_project_dir = ctx
+        .projects
+        .get_project_dir(&project_name)
+        .map_err(|error| operator_error("resolve project", &error))?;
+    if current_project_dir.to_string_lossy() != project_dir {
+        return Err(AppError::AlreadyHandled);
+    }
 
-    super::run::execute_newrun_with_presets(ctx, source, &project_dir, None, None).await
+    super::run::execute_newrun_with_presets(ctx, source, &project_dir, None, Some(label.to_owned()))
+        .await
 }
 
 fn resolve_project_name(ctx: &AppContext, token: &str) -> Result<String, AppError> {
-    let projects = ctx.projects.list_projects()?;
+    let projects = ctx
+        .projects
+        .list_projects()
+        .map_err(|error| operator_error("list projects", &error))?;
     let mut matches = projects
         .into_iter()
         .filter(|project| project_action_token(&project.name) == token);
@@ -240,7 +329,10 @@ fn resolve_plan_name(
     project_name: &str,
     token: &str,
 ) -> Result<String, AppError> {
-    let details = ctx.projects.get_project_info(project_name)?;
+    let details = ctx
+        .projects
+        .get_project_info(project_name)
+        .map_err(|error| operator_error("read project details", &error))?;
     let mut matches = details
         .plans
         .into_iter()

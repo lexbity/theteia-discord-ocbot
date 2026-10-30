@@ -68,6 +68,17 @@ pub fn project_action_token(project_name: &str) -> String {
     dir_hash(&format!("project\0{project_name}"))
 }
 
+/// Whether `raw` has the shape of a token minted by [`dir_hash`]: exactly 16
+/// ASCII hex characters.
+///
+/// This is a cheap grammar check for `custom_id` segments, not authorization —
+/// the handler that consumes the token still resolves it against the current
+/// project set before acting (SPEC-005).
+#[must_use]
+pub fn is_action_token(raw: &str) -> bool {
+    raw.len() == 16 && raw.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 /// Build a short opaque identifier for a plan scoped to one project.
 ///
 /// Scoping the token to both names prevents two projects with an identically
@@ -217,8 +228,8 @@ pub fn project_display_name(dir: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        SLUG_MAX, dir_hash, plan_action_token, project_action_token, project_display_name, slug,
-        yyyymmdd,
+        SLUG_MAX, dir_hash, is_action_token, plan_action_token, project_action_token,
+        project_display_name, slug, yyyymmdd,
     };
 
     #[test]
@@ -284,6 +295,25 @@ mod tests {
         assert_eq!(plan.len(), 16);
         assert_ne!(plan, plan_action_token("user/other", "roadmap.md"));
         assert_ne!(plan, plan_action_token("user/project", "other.md"));
+
+        // Both tokens are exactly what the grammar check accepts.
+        assert!(is_action_token(&project));
+        assert!(is_action_token(&plan));
+    }
+
+    #[test]
+    fn the_action_token_grammar_accepts_only_hash_shaped_ids() {
+        assert!(is_action_token("0123456789abcdef"));
+        assert!(is_action_token("ABCDEF0123456789"));
+        // Wrong length, non-hex bytes, and non-ASCII are all rejected. These
+        // checks are grammar-only; handlers still resolve tokens against the
+        // live project set before acting.
+        assert!(!is_action_token(""));
+        assert!(!is_action_token("0123456789abcde"));
+        assert!(!is_action_token("0123456789abcdef0"));
+        assert!(!is_action_token("0123456789abcdeg"));
+        assert!(!is_action_token("/home/lex/project"));
+        assert!(!is_action_token("０１２３４５６７８９ａｂｃｄｅｆ"));
     }
 
     #[test]
