@@ -17,6 +17,15 @@ use ocbot_core::ports::{
 /// Adapter for loading per-project `ocbot.toml` configuration.
 pub struct TomlProjectConfigAdapter;
 
+/// The on-disk document shape (SPEC-005 §Per-Project Configuration): every
+/// key lives under the `[ocbot]` table; an absent table means all defaults.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectConfigFile {
+    #[serde(default)]
+    ocbot: ProjectConfig,
+}
+
 impl ProjectConfigPort for TomlProjectConfigAdapter {
     fn load_config(&self, dir: &Path) -> Result<Option<ProjectConfig>, ProjectConfigError> {
         let config_path = dir.join("ocbot.toml");
@@ -29,11 +38,11 @@ impl ProjectConfigPort for TomlProjectConfigAdapter {
             ProjectConfigError::IoError(config_path.display().to_string(), e.to_string())
         })?;
 
-        let config: ProjectConfig = toml::from_str(&content).map_err(|e| {
+        let file: ProjectConfigFile = toml::from_str(&content).map_err(|e| {
             ProjectConfigError::ParseError(config_path.display().to_string(), e.to_string())
         })?;
 
-        Ok(Some(config))
+        Ok(Some(file.ocbot))
     }
 }
 

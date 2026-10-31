@@ -274,6 +274,11 @@ mod tests {
         // 1900 is not a leap year, while 2000 is divisible by 400.
         assert_eq!(yyyymmdd(-2_208_988_800), "19000101");
         assert_eq!(yyyymmdd(951_782_400), "20000229");
+        // The proleptic range pins the era-crossing branches of the civil
+        // algorithm: the year_of_era correction terms (the leap-hundred and
+        // leap-40000 day counts) only bite below year 0, and an off-by-sign
+        // there is otherwise invisible to every modern date.
+        assert_eq!(yyyymmdd(-62_193_571_200), "-0010302");
     }
 
     #[test]

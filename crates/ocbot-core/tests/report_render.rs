@@ -11,8 +11,8 @@
 
 use ocbot_core::outcome::{Outcome, TokenCounts};
 use ocbot_core::render::{
-    DISCORD_MESSAGE_CAP, Footer, OutgoingMessage, REDACTED, Redactor, ReportContext,
-    decision_buttons, fence_neutralize, report, split_excerpt, staged_preview,
+    DISCORD_MESSAGE_CAP, EXCERPT_TARGET, Footer, OutgoingMessage, REDACTED, Redactor,
+    ReportContext, decision_buttons, fence_neutralize, report, split_excerpt, staged_preview,
 };
 
 fn done_context(action_id: i64, is_git: bool) -> ReportContext {
@@ -702,4 +702,103 @@ fn blank_header_names_render_no_line_at_all() {
         "no stray blank line above the headline: {}",
         message.content
     );
+}
+
+#[test]
+fn footer_boundaries_are_exclusive_at_the_right_edges() {
+    // The one-second edge: "<1s" is strictly-below, not at-or-below.
+    let render = |secs: f64| {
+        Footer {
+            duration_secs: Some(secs),
+            ..Footer::default()
+        }
+        .render()
+    };
+    assert_eq!(render(0.999), "Duration <1s");
+    assert_eq!(render(1.0), "Duration 1s");
+}
+
+#[test]
+fn token_sum_includes_reasoning_and_the_k_boundary_is_inclusive() {
+    // Non-zero reasoning on every term: a sum that drops a term must change
+    // the total. And exactly 1_000 tokens is "k" scale (>=, not >).
+    let render = |input: f64, output: f64, reasoning: f64| {
+        Footer {
+            tokens: Some(TokenCounts {
+                input,
+                output,
+                reasoning,
+            }),
+            ..Footer::default()
+        }
+        .render()
+    };
+    assert_eq!(render(10.0, 5.0, 4.0), "19 tok");
+    assert_eq!(render(1_000.0, 0.0, 0.0), "1.0k tok");
+    assert_eq!(render(999.0, 0.0, 0.0), "999 tok");
+}
+
+#[test]
+fn a_budget_over_oversized_body_with_only_a_leading_newline_is_hard_cut() {
+    // The newline-at-index-0 case must fall through to the hard cut, not cut
+    // the excerpt empty: the guard exists precisely to reject a zero cut.
+    let (kept, truncated) = split_excerpt(&format!("\n{}", "x".repeat(50)), 10);
+    assert!(truncated);
+    assert_eq!(kept, format!("\n{}", "x".repeat(9)));
+}
+
+#[test]
+fn inline_excerpt_budget_is_the_cap_minus_everything_else_exactly() {
+    // The contract of report_excerpt's overhead math, pinned at the boundary:
+    // a body up to (cap - assembly - 10 bytes of fences/allowance) renders
+    // inline, one byte more moves the full text to the attachment. A padded
+    // configuration keeps the budget under EXCERPT_TARGET so the clamp can
+    // never mask a mis-counted overhead.
+    let redactor = Redactor::new(&[]).expect("empty pattern list");
+    let context = ReportContext {
+        action_id: 1,
+        is_git: false,
+        operator_id: 42,
+        followups: 3,
+    };
+    let label = "l".repeat(200);
+    let project = "p".repeat(160);
+    let plan = "q".repeat(160);
+    let body = |text: String| Outcome::Completed { report: text };
+    let build = |text: String| {
+        report(
+            &label,
+            &body(text),
+            &Footer::default(),
+            &context,
+            &redactor,
+            Some(&project),
+            Some(&plan),
+        )
+    };
+
+    let skeleton = build(String::new());
+    assert!(skeleton.attachment.is_none(), "empty body fits");
+    // Everything the excerpt does not pay for: the skeleton minus the closing
+    // fence's 5 bytes is exactly head+footer+tail in the budget's accounting,
+    // which then spends 8 more on fence overhead and 2 on the ellipsis.
+    let assembly = skeleton.content.len() - 5;
+    let budget = (DISCORD_MESSAGE_CAP - 10 - assembly).min(EXCERPT_TARGET);
+    assert!(
+        budget < EXCERPT_TARGET,
+        "test configuration must leave the clamp inert: budget {budget}"
+    );
+
+    let fits = build("z".repeat(budget));
+    assert!(
+        fits.attachment.is_none(),
+        "a body of exactly the budget must render inline"
+    );
+    assert!(fits.content.len() <= DISCORD_MESSAGE_CAP);
+    let over = build("z".repeat(budget + 1));
+    assert!(
+        over.attachment.is_some(),
+        "one byte past the budget must move to the attachment"
+    );
+    assert!(over.content.len() <= DISCORD_MESSAGE_CAP);
 }

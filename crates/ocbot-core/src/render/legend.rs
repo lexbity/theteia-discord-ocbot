@@ -248,6 +248,39 @@ mod tests {
     }
 
     #[test]
+    fn keycaps_are_the_literal_emoji_sequence() {
+        // The existing gate test compares entries against keycap()'s own
+        // output — circular, so it cannot notice a broken table. Pin the
+        // digits to the literal keycap sequence (digit + VS16 + combining
+        // enclosing keycap) and the tenth slot to None.
+        assert_eq!(keycap(0), Some("1\u{FE0F}\u{20E3}"));
+        assert_eq!(keycap(4), Some("5\u{FE0F}\u{20E3}"));
+        assert_eq!(keycap(8), Some("9\u{FE0F}\u{20E3}"));
+        assert_eq!(keycap(9), None);
+    }
+
+    #[test]
+    fn legend_emptiness_needs_both_parts_empty() {
+        // A struck-through disabled verb renders a line but no entries: the
+        // && vs || distinction is exactly this case, and it must not be
+        // reported as an empty legend (the caller skips empty ones).
+        let mut button = component_button("Accept", "v1:accept:7", ButtonKind::Success);
+        button.disabled = true;
+        let struck = render_legend(&[button]);
+        assert!(!struck.line.is_empty() && struck.entries.is_empty());
+        assert!(!struck.is_empty(), "a struck-through line is still a line");
+        assert!(
+            !render_legend(&[component_button(
+                "Accept",
+                "v1:accept:7",
+                ButtonKind::Success
+            )])
+            .is_empty()
+        );
+        assert!(render_legend(&[]).is_empty());
+    }
+
+    #[test]
     fn variation_selectors_are_normalized() {
         assert_eq!(normalize_emoji("🅿️"), "🅿");
         assert_eq!(normalize_emoji("🅿"), "🅿");
