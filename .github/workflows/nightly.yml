@@ -39,6 +39,9 @@ jobs:
           - job: sigkill
             timeout_minutes: 30
     steps:
+      # checkout first: a local action cannot be a job's first step (the
+      # runner reads its action.yml from the workspace)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-rust
         with:
           nightly: ${{ matrix.job == 'fuzz' && 'true' || 'false' }}

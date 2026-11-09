@@ -29,7 +29,10 @@ jobs:
       contents: write
       id-token: write # OIDC for crates.io (P8)
     steps:
-      - uses: ./.github/actions/setup-rust
+      # checkout first: a local action cannot be a job's first step (the
+      # runner reads its action.yml from the workspace)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: "0"
+      - uses: ./.github/actions/setup-rust
       - run: echo "release lane placeholder — implemented in P8"

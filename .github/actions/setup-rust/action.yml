@@ -1,18 +1,19 @@
-# Composite setup used by every CI job (SPEC-CI-001 §3.1): checkout + the
-# pinned toolchain + the cargo cache. Dedupes the per-job checkout+setup block.
+# Composite setup used by every CI job (SPEC-CI-001 §3.1): the pinned Rust
+# toolchain + the cargo cache. Every job runs `actions/checkout` BEFORE this —
+# a local action cannot be a job's first step, because the runner reads the
+# action's action.yml from the checked-out workspace (observed live on runner
+# 2.338.2: "Can't find 'action.yml' ... Did you forget to run actions/checkout
+# before running your local action?").
+#
 # External action references are full commit SHAs with the tag in a trailing
 # comment (D-4); Dependabot (github-actions ecosystem) proposes SHA bumps.
 name: setup-rust
-description: checkout + pinned Rust toolchain + cargo cache (SPEC-CI-001)
+description: pinned Rust toolchain + cargo cache (SPEC-CI-001) — use after actions/checkout
 inputs:
   nightly:
     description: install the nightly toolchain (fuzz only)
     required: false
     default: "false"
-  fetch-depth:
-    description: git fetch depth (0 = full history, e.g. the mutants diff)
-    required: false
-    default: "1"
   cache:
     description: enable the cargo cache (keyed on Cargo.lock, restore-only)
     required: false
@@ -20,9 +21,6 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      with:
-        fetch-depth: ${{ inputs.fetch-depth }}
     - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
       with:
         # empty toolchain input = the action reads rust-toolchain.toml (1.98.1)
