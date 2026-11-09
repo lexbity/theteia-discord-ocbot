@@ -68,7 +68,7 @@ Run as root; adjust if your distro differs.
    useradd -r -s /usr/sbin/nologin opencode
    ```
    `signal-cli.service` runs as **`ocbot`**, the same account as the bot: the socket's owner must be the uid that connects to it (FR-116), and the identity keys must be readable by the backup unit.
-2. Build and install the binary:
+2. Build and install the binary. Prefer the attested release tarball from the tag's GitHub Release (`ocbot-v*.tar.gz`, provenance-attested by the release lane — see [OPERATIONS](OPERATIONS.md#release-lane-v-tags)); building from source is the fallback:
 
    ```sh
    cargo build --release

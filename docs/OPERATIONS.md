@@ -158,3 +158,20 @@ Restore is [RESTORE](RESTORE.md)'s job.
 
 Single operator, single host: that is the design envelope, not a limitation to grow out of — see [scaling notes](ARCHITECTURE.md#scaling-notes).
 Memory steady state is ~20 MB against a 200 MB ceiling; the backup set is single-digit MB; request volume is bounded by one SSE stream and roughly one Discord message per event.
+
+## Release lane (v* tags)
+
+Pushing a tag `v<major>.<minor>.<patch>` runs `.github/workflows/release.yml`. It builds `--locked --release` from the exact tagged commit, packages `ocbot-<tag>.tar.gz`, attests the binary and tarball (`actions/attest-build-provenance` over OIDC), uploads the tarball as a run artifact, creates the GitHub Release with the tarball attached, and publishes `opencode-v2-client` to crates.io via OIDC trusted publishing — no stored registry token. `workflow_dispatch` is dry-run: build + attest only, never a Release, never a publish. Re-running on the same tag is safe (Release upsert, publish is atomic per crate version).
+
+One-time crates.io setup (per published crate): crates.io → crate → Settings → Trusted publishing → add this repository and `release.yml` (plus an environment, if you use one). Until that exists, `cargo publish` stays manual.
+
+First real tag:
+
+1. Confirm `main` is green and protected (the ruleset requires a green `ci`; tags are pushed only from a green `main`).
+2. `git tag v0.1.0 <green-main-sha> && git push origin v0.1.0`
+3. Watch it: `gh run list --workflow release.yml --limit 3 --json databaseId,conclusion`
+4. Verify the R-9 invariant — Release exists ⇔ tag exists ⇔ ci green on that SHA:
+   - `gh release list` shows the tag with `ocbot-<tag>.tar.gz` attached;
+   - verify provenance: the Release page shows the attestation, or `gh attestation verify --repo <owner>/<repo> ocbot-<tag>.tar.gz` on a gh CLI that has it;
+   - `cargo search opencode-v2-client` shows the published version.
+5. The manual deploy then consumes the attested tarball — see [DEPLOYMENT](DEPLOYMENT.md#install).

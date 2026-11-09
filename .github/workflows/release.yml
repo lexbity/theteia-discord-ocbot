@@ -1,6 +1,11 @@
-# Release lane (SPEC-CI-001 FR-7) — skeleton in P2, fleshed out in P8.
-# A `v*` tag builds the `--locked --release` artifact of the exact tagged
-# commit; workflow_dispatch is dry-run only (no publish).
+# Release lane (SPEC-CI-001 FR-7/D-8): a `v*` tag builds the --locked release
+# artifact of the exact tagged commit, attests it (build provenance via OIDC),
+# attaches the tarball to a GitHub Release, and publishes opencode-v2-client
+# to crates.io via OIDC trusted publishing — no long-lived token anywhere.
+#
+# workflow_dispatch is dry-run: build + attest only, never a Release, never a
+# publish. The runbook (first real tag, crates.io OIDC setup) is in
+# docs/OPERATIONS.md#release-lane-v-tags.
 
 name: release
 
@@ -10,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: publish to crates.io (real v* tags publish; dispatch is dry-run)
+        description: informational only — publish runs on real v* tag pushes, never on dispatch
         type: boolean
         default: false
 
@@ -21,13 +26,16 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false # never cancel a release
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   release:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
-      contents: write
-      id-token: write # OIDC for crates.io (P8)
+      contents: write # GitHub Release + tarball upload
+      id-token: write # OIDC: build-provenance attestation + crates.io trusted publishing
     steps:
       # checkout first: a local action cannot be a job's first step (the
       # runner reads its action.yml from the workspace)
@@ -35,4 +43,42 @@ jobs:
         with:
           fetch-depth: "0"
       - uses: ./.github/actions/setup-rust
-      - run: echo "release lane placeholder — implemented in P8"
+      - name: Dry-run notice (dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "workflow_dispatch dry-run (publish=${{ inputs.publish }}): build + attest only — no Release, no crates.io publish"
+      # the tested artifact is the shipped artifact: same commit, --locked
+      - run: cargo build --locked --release --workspace
+      - name: Package the release tarball
+        env:
+          TAG: ${{ github.ref_name }}
+        run: tar czf "ocbot-${TAG}.tar.gz" -C target/release ocbot
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            target/release/ocbot
+            ocbot-${{ github.ref_name }}.tar.gz
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ocbot-${{ github.ref_name }}
+          path: ocbot-${{ github.ref_name }}.tar.gz
+          retention-days: 30
+      - name: Create GitHub Release (v* tag pushes only)
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # idempotent re-run on the same tag: upsert the asset, don't fail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "ocbot-${TAG}.tar.gz" --clobber
+          else
+            gh release create "$TAG" "ocbot-${TAG}.tar.gz" \
+              --title "$TAG" \
+              --notes "Built from commit $SHA by the release lane (SPEC-CI-001 D-8). Provenance attestation attached; ci is required green on that SHA (main ruleset)."
+          fi
+      - name: Publish opencode-v2-client to crates.io (OIDC trusted publishing)
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        run: cargo publish --locked -p opencode-v2-client
