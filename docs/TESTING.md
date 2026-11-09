@@ -26,7 +26,7 @@ flowchart TB
 | Client contract | The client speaks the pinned server API, tolerantly | Every PR |
 | Shell integration | Handlers, store, router, loops work end-to-end with fakes | Every PR |
 | Chaos | SIGKILL at any crash point loses no accepted work | Every PR (snapshot) / nightly (real SIGKILL) |
-| Live | The real server and gateway contracts | Nightly, or manually with `--ignored` |
+| Live | The real server and gateway contracts | Manually with `--ignored` — never in CI (SPEC-CI-001 NG-1) |
 | Fuzz | Hostile JSON never panics the client | Nightly |
 | Mutation | Tests would catch behavioral mutants | Changed core source per PR/push, full core nightly |
 
@@ -63,7 +63,7 @@ Gates are per crate, measured on each crate's own tests — a crate's floor is n
 |---|---|---|
 | `ocbot-core` | ≥ 90% lines | 94.7% |
 | `opencode-v2-client` | ≥ 90% lines | 93.7% |
-| `ocbot` (shell) | ≥ 70% lines | 77.8% |
+| `ocbot` (shell) | ≥ 80% lines | 77.8% |
 
 Check locally:
 
@@ -91,7 +91,7 @@ cargo test -p ocbot --test live_boot -- --ignored      # boot + SIGTERM drain
 ```
 
 A suggested manual pass with a scratch repository: force a permission prompt and answer it from Discord; Accept, Park & redo, and Reset; run a session in a terminal and adopt it from the inbox; pick a project and plan via `/projects` and `/status`; scrape the metrics endpoint and check the logs carry no secrets.
-The nightly `contract` CI job runs the client spike against a real server with repository secrets.
+CI never runs these against a live server (SPEC-CI-001 NG-1: no secrets in a public repo's workflows) — the offline `drift`/`version_gate` suites are the every-PR drift net; run the live suites manually as above.
 
 ## Fuzzing
 
@@ -133,7 +133,7 @@ The chat surfaces are chaos-tested too (SPEC-004 PH-8, `chaos_signal`): the sign
 Three surfaces stay live-only, on purpose:
 
 1. The serenity gateway loop — interaction ingestion, ack discipline, reconnect. Only the pure payload builder is unit-tested.
-2. The real opencode contract — covered by the live suites and the nightly contract job, never by fixtures that could go stale silently.
+2. The real opencode contract — covered by the manual live suites (`--ignored`) and, on every PR, by the offline drift and version-gate suites; never by fixtures that could go stale silently.
 3. Discord realities — rate limits, rendered message behavior on real clients.
 
 If your change touches these, say so in the PR and expect a manual pass against a real server.

@@ -104,10 +104,11 @@ No strict Conventional Commits prefix scheme — the summary sentence is the con
 
 ## CI and the PR checklist
 
-CI runs on every push to `main` and every pull request.
+CI runs on every push to `main` and every pull request. The required gate lives in `ci.yml`; `nightly.yml` is the deep-verification lane (schedule/dispatch); `release.yml` ships `v*` tags.
 
 | Job | Runs |
 |---|---|
+| `lint-workflows` | `actionlint` on the workflow files |
 | `fmt` | `cargo fmt --all -- --check` |
 | `lint` | `cargo clippy --workspace --all-targets -- -D warnings` |
 | `test` | `cargo nextest run --workspace` + doc tests |
@@ -120,7 +121,7 @@ CI runs on every push to `main` and every pull request.
 | `typos` | `typos docs README.md` |
 | `client-publish-dry-run` | `cargo publish --dry-run -p opencode-v2-client` |
 
-A nightly job (schedule or manual dispatch) runs fuzzing, the live contract suite against a real opencode server, the full core mutation run, and the real-SIGKILL chaos half.
+The nightly workflow (schedule or manual dispatch) runs fuzzing, the full core mutation run, and the real-SIGKILL chaos half. Live-service suites are manual-only (`--ignored`, see [TESTING](TESTING.md#live-tests)) — CI carries no secrets.
 
 Before you open a PR, check locally: fmt, clippy, nextest, gates, and coverage for the crates you touched.
 Keep PRs small; one behavior per PR.

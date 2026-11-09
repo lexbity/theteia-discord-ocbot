@@ -21,9 +21,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
-cargo llvm-cov --workspace --fail-under-lines 85 --summary-only
-cargo llvm-cov -p ocbot-core --fail-under-lines 90 --summary-only
-cargo llvm-cov -p opencode-v2-client --fail-under-lines 90 --summary-only
-cargo llvm-cov -p ocbot --fail-under-lines 80 --summary-only
+cargo llvm-cov --workspace --locked --fail-under-lines 85 --summary-only
+cargo llvm-cov -p ocbot-core --locked --fail-under-lines 90 --summary-only
+cargo llvm-cov -p opencode-v2-client --locked --fail-under-lines 90 --summary-only
+cargo llvm-cov -p ocbot --locked --fail-under-lines 80 --summary-only
 
 echo "coverage gates: OK"

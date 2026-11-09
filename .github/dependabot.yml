@@ -1,0 +1,15 @@
+# Dependabot (SPEC-CI-001 D-4/D-5, R-5): weekly bumps for SHA-pinned actions
+# (it rewrites the commit SHA and the `# <tag>` comment) and for Cargo.toml /
+# Cargo.lock. Review with CODEOWNERS; gate G25 keeps any unpinned ref red.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday

@@ -197,7 +197,7 @@ Rollback: keep the previous binary (for example as `/usr/local/bin/ocbot.prev`),
 Before downgrading, check [CHANGELOG](../CHANGELOG.md) for schema migrations — if a release migrated the database, rehearse the downgrade on a copy of `ocbot.db` first.
 [TODO: a release-by-release note if/when a migration ships]
 
-Upgrading the opencode server is a deliberate act: bump the pin in [client COMPAT](../crates/opencode-client/COMPAT.md), re-record fixtures, and let the nightly contract job confirm.
+Upgrading the opencode server is a deliberate act: bump the pin in [client COMPAT](../crates/opencode-client/COMPAT.md), re-record fixtures — the offline drift and version-gate suites run on every PR, and the manual live suites (`--ignored`, [TESTING](TESTING.md#live-tests)) confirm against a real server.
 
 Upgrade signal-cli:
 

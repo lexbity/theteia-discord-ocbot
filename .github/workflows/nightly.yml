@@ -1,0 +1,71 @@
+# Nightly deep verification (SPEC-CI-001 FR-6): fuzz, full-core mutation run,
+# real-SIGKILL chaos. The live-server lane is deleted (NG-1/D-3): no
+# live-service job, no secrets, no repo variables anywhere in CI; the live
+# suites stay manual `--ignored` tests (docs/TESTING.md).
+#
+# Supply chain (D-4/D-5): every `uses:` is a full commit SHA + `# <tag>`;
+# taiki-e tool versions pinned 2026-11-08. Gate G25 keeps floating refs red.
+
+name: nightly
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  nightly:
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ matrix.timeout_minutes }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - job: fuzz
+            timeout_minutes: 120
+          - job: mutants-full
+            timeout_minutes: 240
+          - job: sigkill
+            timeout_minutes: 30
+    steps:
+      - uses: ./.github/actions/setup-rust
+        with:
+          nightly: ${{ matrix.job == 'fuzz' && 'true' || 'false' }}
+      - if: matrix.job == 'fuzz'
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-fuzz@0.13.2
+      - if: matrix.job == 'fuzz'
+        run: cargo fuzz run serde_fuzz --sanitizer address -- -max_total_time=120
+        working-directory: fuzz
+      - if: matrix.job == 'mutants-full'
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-mutants@27.1.0
+      - if: matrix.job == 'mutants-full'
+        run: cargo mutants -p ocbot-core --test-package ocbot-core --cargo-arg=--locked
+      - if: matrix.job == 'sigkill'
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-nextest@0.9.151
+      - if: matrix.job == 'sigkill'
+        # The real-SIGKILL half of AC-6: spawn the harness, kill it at each
+        # labelled point, and prove boot reconcile recovers. The store-actor
+        # chaos test kills between typed-store commits and proves WAL recovery.
+        run: >-
+          cargo nextest run -p ocbot
+          --test chaos_sigkill
+          --test store_actor_chaos
+          --retries 2
+          --locked

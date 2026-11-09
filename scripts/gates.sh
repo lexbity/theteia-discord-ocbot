@@ -5,6 +5,11 @@
 # to fail is decoration.** Every detector registers a `probe()` — a snippet
 # that must trigger it — so pattern rot turns CI red instead of silently
 # passing.
+#
+# SPEC-CI-001 CI-structural gates: G24 hermetic git spawns in tests, G25
+# SHA-pinned actions, G26 per-job timeout-minutes, G27 workflow hygiene
+# (no continue-on-error / || true / pull_request_target / secrets /
+# github.event-in-run), G28 dated deny.toml ignores.
 set -euo pipefail
 
 fail() { echo "GATE FAILED: $1" >&2; exit 1; }
@@ -326,3 +331,69 @@ if grep -rn 'Command::new("git")' crates/ --include='*.rs' --exclude-dir=src 2>/
   fail "G24: raw git spawn outside the hermetic helper (crates/ocbot/tests/common/mod.rs)"
 fi
 probe "G24" 'Command::new\("git"\)' 'let c = std::process::Command::new("git");'
+
+# --- SPEC-CI-001 P3 appended gates -------------------------------------------
+# Supply-chain and workflow-structure gates (D-4, D-5, FR-3, FR-4, FR-12, §Q12).
+
+# G25: every external `uses:` is a full 40-char commit SHA with a `# <tag>`
+# comment (D-4). Local composite refs (`./...`) are exempt.
+if grep -rnE 'uses:[[:space:]]+' .github/workflows .github/actions 2>/dev/null \
+     | grep -vE 'uses:[[:space:]]+[^[:space:]#]+@[0-9a-f]{40}([[:space:]]|$)' \
+     | grep -vE 'uses:[[:space:]]+\./'; then
+  fail "G25: floating action ref — pin to a full 40-char SHA with a '# <tag>' comment (D-4)"
+fi
+probe "G25" 'uses:[[:space:]]+[^[:space:]#]+@v[0-9]' 'uses: actions/checkout@v4'
+
+# G26: every job in every workflow declares timeout-minutes (FR-4) — without
+# it a job can hang to the 360-minute default (NFR-5). Dependency-free
+# (awk+grep): count 2-space-indented job keys under `jobs:` vs timeout lines.
+g26_check() { # g26_check <workflow-file>...
+  local f jobs tm
+  for f in "$@"; do
+    jobs=$(awk '/^jobs:/{j=1;next} /^[^[:space:]]/{j=0} j && /^  [A-Za-z0-9_-]+:/{c++} END{print c+0}' "$f")
+    tm=$(grep -c 'timeout-minutes' "$f" || true)
+    if [ "$jobs" -ne "$tm" ]; then
+      echo "G26: $f has $jobs job(s) but $tm timeout-minutes line(s)" >&2
+      return 1
+    fi
+  done
+}
+if ! g26_check .github/workflows/*.yml; then
+  fail "G26: a workflow job is missing timeout-minutes (FR-4)"
+fi
+# probe: a synthetic job without timeout-minutes must be flagged
+g26_tmp="$(mktemp --suffix=.yml)"
+printf 'name: probe\non: [push]\njobs:\n  a:\n    timeout-minutes: 15\n  b:\n    runs-on: ubuntu-24.04\n' > "$g26_tmp"
+if g26_check "$g26_tmp" 2>/dev/null; then
+  fail "selftest: detector 'G26' never fires (pattern rot)"
+fi
+rm -f "$g26_tmp"
+
+# G27: no failure-masking, untrusted-trigger, secret, or script-injection
+# patterns in the gate workflows (§Q12, FR-12, D-3).
+if grep -rnE 'continue-on-error|\|\|[[:space:]]*true|pull_request_target' \
+     .github/workflows/ci.yml .github/workflows/nightly.yml 2>/dev/null; then
+  fail "G27: continue-on-error / '|| true' / pull_request_target in a gate workflow"
+fi
+if grep -rn 'secrets\.' .github/workflows/ci.yml .github/workflows/nightly.yml 2>/dev/null; then
+  fail "G27: a gate workflow references a secret (D-3: CI uses no secrets)"
+fi
+# github.event.* must never reach a run: block (script injection). It is safe
+# in if:/env:/concurrency:/matrix:/with: contexts, so scan run blocks only.
+if awk '
+    /^[[:space:]]*run:/ {
+      if ($0 ~ /\$\{\{[[:space:]]*github\.event\./) { print FILENAME":"FNR": "$0; found=1 }
+      inrun = ($0 ~ /\|/ || $0 ~ />/) ? 1 : 0
+      next
+    }
+    inrun && /^[^[:space:]]/ { inrun = 0 }
+    inrun && /\$\{\{[[:space:]]*github\.event\./ { print FILENAME":"FNR": "$0; found=1 }
+    END { exit found ? 0 : 1 }
+  ' .github/workflows/*.yml; then
+  fail "G27: github.event.* interpolated into a run: block (script injection, §Q12)"
+fi
+probe "G27-coe" 'continue-on-error' 'continue-on-error: true'
+probe "G27-pipe" '\|\|[[:space:]]*true' 'run: make all || true'
+probe "G27-prt" 'pull_request_target' 'on: pull_request_target'
+probe "G27-secrets" 'secrets\.' 'env: { T: ${{ secrets.T }} }'
+probe "G27-run-event" 'run:.*github\.event\.' 'run: echo ${{ github.event.issue.title }}'

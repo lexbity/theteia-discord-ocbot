@@ -1,0 +1,35 @@
+# Release lane (SPEC-CI-001 FR-7) — skeleton in P2, fleshed out in P8.
+# A `v*` tag builds the `--locked --release` artifact of the exact tagged
+# commit; workflow_dispatch is dry-run only (no publish).
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: publish to crates.io (real v* tags publish; dispatch is dry-run)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false # never cancel a release
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      id-token: write # OIDC for crates.io (P8)
+    steps:
+      - uses: ./.github/actions/setup-rust
+        with:
+          fetch-depth: "0"
+      - run: echo "release lane placeholder — implemented in P8"

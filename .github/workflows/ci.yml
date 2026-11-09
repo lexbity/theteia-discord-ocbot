@@ -1,9 +1,16 @@
-# CI for ocbot — job matrix (spec Part 2 §D4).
+# CI gate for ocbot (SPEC-CI-001 FR-2) — required on `main` via the ruleset
+# applied by scripts/apply-governance.sh (P9).
 #
-# Coverage gates are per crate (`scripts/coverage.sh`): core ≥ 90, client ≥ 90,
-# shell ≥ 70. Mutation testing is scoped per PR and full-core nightly. The
-# nightly job also runs cargo-fuzz serde targets, the live contract suite, and
-# the real-SIGKILL chaos half.
+# Coverage gates are per crate (`scripts/coverage.sh`, the enforcement):
+# workspace >= 85, core >= 90, client >= 90, shell >= 80. Mutation testing is
+# scoped to the PR/push diff (4 shards) here; the full-core run lives in
+# nightly.yml. No path filters on this gate (D-6): a required check must always
+# report, so docs-only PRs run the full suite on purpose.
+#
+# Supply chain (D-4/D-5): every `uses:` is a full 40-char commit SHA with the
+# tag in a trailing comment; taiki-e tool versions pinned 2026-11-08.
+# Dependabot (github-actions + cargo, weekly) proposes the bumps; gate G25
+# keeps any floating ref red.
 
 name: ci
 
@@ -11,106 +18,108 @@ on:
   push:
     branches: [main]
   pull_request:
-  schedule:
-    # Nightly: fuzz + live contract against the pinned opencode version.
-    - cron: "17 3 * * *"
-  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
 
 jobs:
-  fmt:
-    runs-on: ubuntu-latest
+  lint-workflows:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: actionlint@1.7.12
+      # Local composite actions under .github/actions/ are validated
+      # transitively via the `uses: ./...` references in these workflows
+      # (passing an action.yml explicitly makes actionlint parse it as a
+      # workflow and fail spuriously).
+      - run: actionlint .github/workflows/*.yml
+
+  fmt:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: ./.github/actions/setup-rust
       - run: cargo fmt --all -- --check
 
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - uses: ./.github/actions/setup-rust
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - uses: taiki-e/install-action@v2
+      - uses: ./.github/actions/setup-rust
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
-          tool: cargo-nextest
-      - run: cargo nextest run --workspace
-      - run: cargo test --doc --workspace
-
-  deny:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-deny
-      - run: cargo deny check
-
-  machete:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-machete
-      - run: cargo machete
-
-  doc:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+          tool: cargo-nextest@0.9.151
+      - run: cargo nextest run --workspace --locked
+      - run: cargo test --doc --workspace --locked
       - env:
           RUSTDOCFLAGS: "-D warnings"
-        run: cargo doc --no-deps
+        run: cargo doc --no-deps --locked
+
+  deny:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: ./.github/actions/setup-rust
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-deny@0.20.2
+      # --locked is a global cargo-deny flag: it goes before the subcommand
+      - run: cargo deny --locked check
 
   gates:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: ./.github/actions/setup-rust
       - run: ./scripts/gates.sh
 
   coverage:
-    # Per-crate line-coverage gates (NFR-8): core ≥ 90, client ≥ 90, shell ≥ 70.
-    runs-on: ubuntu-latest
+    # Per-crate line-coverage gates (NFR-4): workspace >= 85, core >= 90,
+    # client >= 90, shell >= 80 — enforced by scripts/coverage.sh.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - uses: taiki-e/install-action@v2
+      - uses: ./.github/actions/setup-rust
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
-          tool: cargo-llvm-cov
+          tool: cargo-llvm-cov@0.9.1
       - run: ./scripts/coverage.sh
 
   mutants:
-    # Mutate only changed core production lines per PR/push. Nightly still
-    # mutates the complete core crate. Four round-robin shards run concurrently;
-    # their union tests every mutant in the diff.
+    # Mutate only changed core production lines per PR/push. Four round-robin
+    # shards run concurrently; their union tests every mutant in the diff.
     if: github.event_name == 'pull_request' || github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         shard: [0, 1, 2, 3]
     steps:
-      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
         with:
-          fetch-depth: 0
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - uses: taiki-e/install-action@v2
+          fetch-depth: "0"
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
-          tool: cargo-mutants
+          tool: cargo-mutants@27.1.0
       - name: Mutate changed core code
         env:
           MUTANT_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
@@ -132,82 +141,34 @@ jobs:
             --shard ${{ matrix.shard }}/4 \
             --sharding round-robin \
             --file 'crates/ocbot-core/src/**/*.rs' \
-            --test-package ocbot-core
+            --test-package ocbot-core \
+            --cargo-arg=--locked
+
+  machete:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: ./.github/actions/setup-rust
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-machete@0.9.2
+      - run: cargo machete
 
   typos:
-    # Docs-side spelling check (Phase 7 exit criteria).
-    runs-on: ubuntu-latest
+    # Docs-side spelling check. `devdocs/` is gitignored (local spec/phase
+    # notes); check the committed docs tree only.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: taiki-e/install-action@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
-          tool: typos-cli
-      # `devdocs/` is gitignored (local spec/phase notes); check the committed
-      # docs tree only.
+          tool: typos-cli@1.52.0
       - run: typos docs README.md
 
   client-publish-dry-run:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - run: cargo publish --dry-run -p opencode-v2-client
-
-  nightly:
-    # Fuzz serde targets + live contract suite against the pinned opencode
-    # version (R-1 detection) + the full mutation run + real-SIGKILL chaos.
-    # Only runs on schedule / manual dispatch.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - job: fuzz
-          - job: contract
-          - job: mutants-full
-          - job: sigkill
-    steps:
-      - uses: actions/checkout@v4
-      - if: matrix.job == 'fuzz'
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: nightly
-      - if: matrix.job != 'fuzz'
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-      - if: matrix.job == 'fuzz'
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-fuzz
-      - if: matrix.job == 'fuzz'
-        run: cargo fuzz run serde_fuzz --sanitizer address -- -max_total_time=120
-        working-directory: fuzz
-      - if: matrix.job == 'contract'
-        env:
-          OPENCODE_URL: ${{ vars.OPENCODE_URL }}
-          OPENCODE_PASSWORD: ${{ secrets.OPENCODE_PASSWORD }}
-          SPIKE_DIR: /tmp/opencode/ci-contract
-        run: |
-          if [ -z "$OPENCODE_URL" ] || [ -z "$OPENCODE_PASSWORD" ]; then
-            echo "nightly contract: OPENCODE_URL/OPENCODE_PASSWORD not configured; skipping"
-            exit 0
-          fi
-          cargo run -q -p opencode-v2-client --example spike
-      - if: matrix.job == 'mutants-full'
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-mutants
-      - if: matrix.job == 'mutants-full'
-        run: cargo mutants -p ocbot-core --test-package ocbot-core
-      - if: matrix.job == 'sigkill'
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest
-      - if: matrix.job == 'sigkill'
-        # The real-SIGKILL half of AC-6: spawn the harness, kill it at each
-        # labelled point, and prove boot reconcile recovers. The store-actor
-        # chaos test kills between typed-store commits and proves WAL recovery.
-        run: >-
-          cargo nextest run -p ocbot
-          --test chaos_sigkill
-          --test store_actor_chaos
-          --retries 2
+      - uses: ./.github/actions/setup-rust
+      - run: cargo publish --dry-run --locked -p opencode-v2-client

@@ -1,0 +1,5 @@
+# SPEC-CI-001 D-2: every change is reviewed by the repo owner. The .github/
+# rule makes workflow/ruleset-relevant changes explicitly owned (Dependabot
+# PRs touching CI land here for review; gate G25/G27 keep the pins honest).
+* @lexbity
+.github/ @lexbity
