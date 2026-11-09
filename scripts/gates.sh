@@ -314,3 +314,15 @@ for doc in docs/ARCHITECTURE.md docs/DEPLOYMENT.md docs/OPERATIONS.md \
   fi
 done
 probe "G23" "signal" 'channel = ["discord", "signal"]'
+
+# --- SPEC-CI-001 P1 appended gates -------------------------------------------
+# G24: tests must drive git only through the hermetic `common::git()` helper
+# (D-1/FR-1). A raw `Command::new("git")` in test code bypasses the injected
+# identity/config and reintroduces the C2 "Author identity unknown" failure on
+# hosted runners. Production src is already governed by G5/G11 (spawn confined
+# to adapters/git.rs), so this gate scans test code only.
+if grep -rn 'Command::new("git")' crates/ --include='*.rs' --exclude-dir=src 2>/dev/null \
+     | grep -v 'crates/ocbot/tests/common/mod.rs'; then
+  fail "G24: raw git spawn outside the hermetic helper (crates/ocbot/tests/common/mod.rs)"
+fi
+probe "G24" 'Command::new\("git"\)' 'let c = std::process::Command::new("git");'
