@@ -1,0 +1,7 @@
+# SPEC-CI-001 P7: the `ci` nextest profile writes a JUnit report that the
+# ci.yml `test` job uploads on every run (`if: always()`) for failure
+# analysis. `path` is relative to the profile's store dir, so the file lands
+# at target/nextest/ci/junit.xml.
+[profile.ci.junit]
+enabled = true
+path = "junit.xml"

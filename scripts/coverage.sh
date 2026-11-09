@@ -21,9 +21,19 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
-cargo llvm-cov --workspace --locked --fail-under-lines 85 --summary-only
-cargo llvm-cov -p ocbot-core --locked --fail-under-lines 90 --summary-only
-cargo llvm-cov -p opencode-v2-client --locked --fail-under-lines 90 --summary-only
-cargo llvm-cov -p ocbot --locked --fail-under-lines 80 --summary-only
+# SPEC-CI-001 P7: failures emit a ::error workflow command so the failed run's
+# job summary is annotated (NFR-6). The workspace gate also exports lcov.info,
+# which the ci.yml `coverage` job uploads with `if: always()`.
+cov_gate() { # cov_gate <llvm-cov args...>
+  if ! cargo llvm-cov "$@"; then
+    echo "::error::coverage gate failed: cargo llvm-cov $*" >&2
+    exit 1
+  fi
+}
+
+cov_gate --workspace --locked --fail-under-lines 85 --summary-only --lcov --output-path lcov.info
+cov_gate -p ocbot-core --locked --fail-under-lines 90 --summary-only
+cov_gate -p opencode-v2-client --locked --fail-under-lines 90 --summary-only
+cov_gate -p ocbot --locked --fail-under-lines 80 --summary-only
 
 echo "coverage gates: OK"

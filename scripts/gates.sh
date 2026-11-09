@@ -12,7 +12,9 @@
 # github.event-in-run), G28 dated deny.toml ignores.
 set -euo pipefail
 
-fail() { echo "GATE FAILED: $1" >&2; exit 1; }
+# SPEC-CI-001 P7: failures also emit a ::error workflow command so the failed
+# run's job summary is annotated (NFR-6).
+fail() { echo "::error::$1" >&2; echo "GATE FAILED: $1" >&2; exit 1; }
 
 # --- detector self-test harness -------------------------------------------
 # Asserts each grep pattern actually fires on its target. Catches pattern rot.

@@ -85,11 +85,20 @@ jobs:
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-nextest@0.9.151
-      - run: cargo nextest run --workspace --locked
+      # --profile ci writes target/nextest/ci/junit.xml (.config/nextest.toml)
+      - run: cargo nextest run --workspace --locked --profile ci
       - run: cargo test --doc --workspace --locked
       - env:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --no-deps --locked
+      # FR-10/NFR-6: upload the JUnit report on EVERY run (if: always() is the
+      # one legitimate use — a failed run is exactly when it is needed)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: junit-${{ github.run_id }}
+          path: target/nextest/ci/junit.xml
+          retention-days: 30
 
   deny:
     runs-on: ubuntu-24.04
@@ -122,7 +131,14 @@ jobs:
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-llvm-cov@0.9.1
+      # scripts/coverage.sh exports lcov.info on the workspace gate
       - run: ./scripts/coverage.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: lcov-${{ github.run_id }}
+          path: lcov.info
+          retention-days: 30
 
   mutants:
     # Mutate only changed core production lines per PR/push. Four round-robin
@@ -196,3 +212,49 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-rust
       - run: cargo publish --dry-run --locked -p opencode-v2-client
+
+  notify:
+    # D-9/FR-10/NFR-6: a red `main` opens exactly one `ci-failure` issue; a
+    # green `main` run closes it. Runs on main only — never on PRs. `always()`
+    # is required so the job still runs when a needed gate failed; the step
+    # conditions pick open-vs-close.
+    needs: [lint-workflows, fmt, lint, test, deny, gates, coverage, mutants, machete, typos, client-publish-dry-run]
+    if: always() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        if: failure()
+        with:
+          script: |
+            const label = 'ci-failure';
+            const { owner, repo } = context.repo;
+            // issues.create 422s on an unknown label — ensure it exists first
+            try { await github.rest.issues.getLabel({ owner, repo, name: label }); }
+            catch { await github.rest.issues.createLabel({ owner, repo, name: label, color: 'd73a4a', description: 'CI red on main (SPEC-CI-001 D-9); auto-closed on green' }); }
+            // search-before-create: exactly one open ci-failure issue at a time
+            const open = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: label, per_page: 10 });
+            if (open.data.length === 0) {
+              await github.rest.issues.create({
+                owner, repo,
+                title: `CI red on main — run ${context.runId}`,
+                body: `ci run ${context.runId} failed on main: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}\n\nOne open issue is kept at a time; it closes automatically when a later main run goes green.`,
+                labels: [label],
+              });
+              console.log('opened ci-failure issue');
+            } else {
+              console.log(`ci-failure issue already open (#${open.data[0].number}); not duplicating`);
+            }
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        if: success()
+        with:
+          script: |
+            const label = 'ci-failure';
+            const { owner, repo } = context.repo;
+            const open = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: label, per_page: 100 });
+            for (const issue of open.data) {
+              await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: 'closed' });
+            }
+            console.log(`closed ${open.data.length} ci-failure issue(s)`);

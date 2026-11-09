@@ -6,6 +6,7 @@ fuzz/Cargo.lock
 /fuzz/artifacts
 /fuzz/corpus
 *.profraw
+/lcov.info
 /mutants.out*/
 /devdocs
 config/*.toml
