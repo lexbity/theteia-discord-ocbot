@@ -1,16 +1,9 @@
 # Theteia - the ocbot
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.98.1_pinned-blue)](rust-toolchain.toml)
-[![CI](https://img.shields.io/badge/CI-TODO-lightgrey)]()
+[![Rust](https://img.shields.io/badge/rust-1.98.1_pinned-%23dea584?logo=rust)](rust-toolchain.toml)
+[![CI](https://github.com/lexbity/theteia-discord-ocbot/actions/workflows/ci.yml/badge.svg)](https://github.com/lexbity/theteia-discord-ocbot/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/badge/crates.io-TODO-lightgrey)]()
-
-<!-- [TODO: repo URL] Point the CI badge at the hosted repository once it exists. -->
-<!-- [TODO: crates.io] Point at the published opencode-v2-client crate. -->
-
-**Audience:** anyone evaluating, running, or contributing to ocbot.
-**Purpose:** explain what ocbot is and get you to a running bot.
-**Prerequisites:** none — this page links to everything you need.
 
 ## What is ocbot?
 
