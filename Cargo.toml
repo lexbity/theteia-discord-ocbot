@@ -47,7 +47,7 @@ pulldown-cmark = { version = "0.13", default-features = false }
 regex = "1"
 
 # --- shell crate (Phase 2+) --------------------------------------------------
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 crossbeam-channel = "0.5"
 serenity = { version = "0.12", default-features = false, features = [
     "client",
