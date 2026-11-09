@@ -91,7 +91,7 @@ cargo test -p ocbot --test live_boot -- --ignored      # boot + SIGTERM drain
 ```
 
 A suggested manual pass with a scratch repository: force a permission prompt and answer it from Discord; Accept, Park & redo, and Reset; run a session in a terminal and adopt it from the inbox; pick a project and plan via `/projects` and `/status`; scrape the metrics endpoint and check the logs carry no secrets.
-CI never runs these against a live server (SPEC-CI-001 NG-1: no secrets in a public repo's workflows) — the offline `drift`/`version_gate` suites are the every-PR drift net; run the live suites manually as above.
+CI never runs these against a live server, on purpose (SPEC-CI-001 NG-1): a public repo's workflows must not carry live credentials, so no CI job holds `OPENCODE_URL`/`OPENCODE_PASSWORD`/a bot token, and a check that cannot fail (a "not configured; skipping" exit-0 lane) is decoration, not a gate. The every-PR drift net is the offline `contract_spec`/`drift`/`version_gate` suites in `crates/opencode-client/tests/`; the live suites above stay manual `--ignored` tests — run them yourself after any opencode upgrade or daemon change.
 
 ## Fuzzing
 

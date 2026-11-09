@@ -8,15 +8,29 @@ yanked = "warn"
 # advisories are accepted only for that unfixable transitive version. Re-run
 # cargo-deny after any Serenity bump and remove exceptions once the dependency
 # moves to patched rustls-webpki (COMPAT.md).
+#
+# Dating policy (SPEC-CI-001 D-7): every ignore entry must carry a
+# `# review-by: YYYY-MM-DD` comment (enforced by gate G28) so an accepted risk
+# expires into review instead of rotting. Default policy is UPGRADE — add an
+# ignore only when no patched release exists, and always with a review-by date.
 ignore = [
+    # review-by: 2027-05-08 — remove once the dependency moves to patched rustls-webpki (COMPAT.md)
     { id = "RUSTSEC-2026-0049", reason = "webpki 0.102 line unfixable; forced by serenity 0.12 S-9 pin; loopback bot" },
+    # review-by: 2027-05-08 — remove once the dependency moves to patched rustls-webpki (COMPAT.md)
     { id = "RUSTSEC-2026-0098", reason = "webpki 0.102 line unfixable; forced by serenity 0.12 S-9 pin; loopback bot" },
+    # review-by: 2027-05-08 — remove once the dependency moves to patched rustls-webpki (COMPAT.md)
     { id = "RUSTSEC-2026-0099", reason = "webpki 0.102 line unfixable; forced by serenity 0.12 S-9 pin; loopback bot" },
+    # review-by: 2027-05-08 — remove once the dependency moves to patched rustls-webpki (COMPAT.md)
     { id = "RUSTSEC-2026-0104", reason = "webpki 0.102 line unfixable; forced by serenity 0.12 S-9 pin; loopback bot" },
+    # review-by: 2027-05-08 — remove once the dependency moves to patched rustls-webpki (COMPAT.md)
     { id = "RUSTSEC-2026-0346", reason = "rustls/webpki 0.102 line unfixable; forced by serenity 0.12 S-9 pin; loopback bot" },
+    # review-by: 2027-05-08 — remove once the dependency moves to patched rustls-webpki (COMPAT.md)
     { id = "RUSTSEC-2026-0347", reason = "rustls/webpki 0.102 line unfixable; forced by serenity 0.12 S-9 pin; loopback bot" },
+    # review-by: 2027-05-08 — remove once the dependency moves to patched rustls-webpki (COMPAT.md)
     { id = "RUSTSEC-2026-0348", reason = "rustls/webpki 0.102 line unfixable; forced by serenity 0.12 S-9 pin; loopback bot" },
+    # review-by: 2027-05-08 — remove once the dependency moves to patched rustls-webpki (COMPAT.md)
     { id = "RUSTSEC-2026-0349", reason = "rustls/webpki 0.102 line unfixable; forced by serenity 0.12 S-9 pin; loopback bot" },
+    # review-by: 2027-05-08 — remove once the dependency moves to patched rustls-webpki (COMPAT.md)
     { id = "RUSTSEC-2026-0382", reason = "rustls-webpki 0.102.8 has no patched 0.102 release; forced by serenity 0.12.x via tokio-tungstenite 0.21; remove after dependency upgrade" },
 ]
 

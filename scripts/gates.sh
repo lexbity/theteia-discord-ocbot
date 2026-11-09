@@ -397,3 +397,40 @@ probe "G27-pipe" '\|\|[[:space:]]*true' 'run: make all || true'
 probe "G27-prt" 'pull_request_target' 'on: pull_request_target'
 probe "G27-secrets" 'secrets\.' 'env: { T: ${{ secrets.T }} }'
 probe "G27-run-event" 'run:.*github\.event\.' 'run: echo ${{ github.event.issue.title }}'
+
+# --- SPEC-CI-001 P4 appended gates -------------------------------------------
+# G28: every deny.toml advisory ignore carries a `# review-by: YYYY-MM-DD`
+# comment (D-7) so accepted risks expire into review instead of rotting.
+# Dependency-free: python3 stdlib only. An ignore entry may carry the date in
+# a comment on the line above it or trailing on its own line.
+g28_check() { # g28_check <file>
+  python3 - "$1" <<'PYEOF'
+import re, sys
+lines = open(sys.argv[1]).read().splitlines()
+bad = []
+for i, line in enumerate(lines):
+    if re.search(r'\bid\s*=\s*"RUSTSEC-[^"]+"', line):
+        above = lines[i - 1] if i else ''
+        dated = re.search(r'review-by:\s*\d{4}-\d{2}-\d{2}', above) or \
+            re.search(r'#.*review-by:\s*\d{4}-\d{2}-\d{2}', line)
+        if not dated:
+            bad.append(f'{sys.argv[1]}:{i + 1}: {line.strip()}')
+if bad:
+    print('undated advisory ignore(s):', *bad, sep='\n  ', file=sys.stderr)
+    sys.exit(1)
+PYEOF
+}
+if ! g28_check deny.toml; then
+  fail "G28: a deny.toml advisory ignore lacks a '# review-by: YYYY-MM-DD' comment (D-7)"
+fi
+# probes: an undated synthetic ignore must be flagged; a dated one must pass
+g28_tmp="$(mktemp)"
+printf '[advisories]\nignore = [\n    { id = "RUSTSEC-0000-0000", reason = "probe" },\n]\n' > "$g28_tmp"
+if g28_check "$g28_tmp" 2>/dev/null; then
+  fail "selftest: detector 'G28' never fires on an undated ignore (pattern rot)"
+fi
+printf '[advisories]\nignore = [\n    # review-by: 2027-05-08\n    { id = "RUSTSEC-0000-0000", reason = "probe" },\n]\n' > "$g28_tmp"
+if ! g28_check "$g28_tmp" 2>/dev/null; then
+  fail "selftest: detector 'G28' rejects a properly dated ignore (pattern rot)"
+fi
+rm -f "$g28_tmp"
