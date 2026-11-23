@@ -46,20 +46,20 @@ jobs:
         with:
           nightly: ${{ matrix.job == 'fuzz' && 'true' || 'false' }}
       - if: matrix.job == 'fuzz'
-        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
           tool: cargo-fuzz@0.13.2
       - if: matrix.job == 'fuzz'
         run: cargo fuzz run serde_fuzz --sanitizer address -- -max_total_time=120
         working-directory: fuzz
       - if: matrix.job == 'mutants-full'
-        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
           tool: cargo-mutants@27.1.0
       - if: matrix.job == 'mutants-full'
         run: cargo mutants -p ocbot-core --test-package ocbot-core --cargo-arg=--locked
       - if: matrix.job == 'sigkill'
-        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
           tool: cargo-nextest@0.9.151
       - if: matrix.job == 'sigkill'
